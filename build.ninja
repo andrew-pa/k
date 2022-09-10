@@ -1,0 +1,21 @@
+gprefix = aarch64-linux-gnu-
+uboot = ./u-boot/.build/
+b = ./.build
+s = ./src
+
+rule cc
+    command = ${gprefix}gcc -nostdlib -c $in -o $out
+
+rule ld
+    command = ${gprefix}ld -T link.ld $in -o $out
+
+rule objcopy
+    command = ${gprefix}objcopy -O binary $in $out
+
+rule mkimage
+    command = ${uboot}tools/mkimage -A arm64 -O linux -T kernel -C none -a 0 -e 0 -n "k" -d $in $out
+
+build $b/test.o: cc $s/test.c
+build $b/kernel.elf: ld $b/test.o
+build $b/kernel.bin: objcopy $b/kernel.elf
+build $b/kernel.img: mkimage $b/kernel.bin
