@@ -1,4 +1,5 @@
 #!/bin/bash
+set -e
 cd kernel
 cargo build --verbose --target=aarch64-unknown-none
 cd ..

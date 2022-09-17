@@ -1,6 +1,12 @@
 SECTIONS {
     . = 0x44004400;
-    .text : { *(.text) }
-    .data : { *(.data) }
-    .bss : { *(.bss) }
+    .text : { *(.text .text.*) }
+    .data : { *(.data .data.*) }
+    .rodata : { *(.rodata .rodata.*) }
+    .bss : {
+        __bss_start = . ;
+        *(.bss .bss.*)
+        __bss_end = . ;
+    }
 }
+ENTRY(kmain)

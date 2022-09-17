@@ -32,12 +32,13 @@ impl log::Log for DebugUartLogger {
     fn log(&self, record: &log::Record) {
         //WARN: this is currently NOT thread safe!
         let mut uart = DebugUart { base: 0x09000000 as *mut u8 };
-        writeln!(uart, "[{} {}] {} ({} ln {})",
+        writeln!(uart, "[{:<5} {}] ({}:{}) {}",
             record.level(),
             record.module_path().unwrap_or("unknown module"),
-            record.args(),
             record.file().unwrap_or("unknown file"),
-            record.line().unwrap_or(0)).unwrap();
+            record.line().unwrap_or(0),
+            record.args()
+        ).unwrap();
     }
 
     fn flush(&self) { }
@@ -52,26 +53,24 @@ pub fn halt() -> ! {
     }
 }
 
-#[inline(never)]
-pub extern fn do_something_else() {
-    let uart = 0x09000000 as *mut u8;
-    unsafe { uart.write_volatile(b'x'); }
+extern "C" {
+    pub static mut __bss_start: u8;
+    pub static mut __bss_end: u8;
 }
 
 #[no_mangle]
 pub extern fn kmain() {
-    // log::set_logger(&DebugUartLogger).unwrap();
-    /*log::info!("starting kernel");
-    loop {
-        log::trace!("...");
-    }*/
-    let mut uart = DebugUart { base: 0x09000000 as *mut u8 };
-    uart.write_fmt(format_args!("hello, fmt!\n")).unwrap();
-    // writeln!(&mut uart, "Hello, world!").unwrap();
-    // do_something_else();
-    let uart = 0x09000000 as *mut u8;
-    for _ in 0..10 {
-        unsafe { uart.write_volatile(b'K'); }
+    unsafe {
+        let bss_start = &mut __bss_start as *mut u8;
+        let bss_end   = &mut __bss_end as *mut u8;
+        let bss_size = bss_end.offset_from(bss_start) as usize;
+        core::ptr::write_bytes(bss_start, 0, bss_size);
+    }
+    log::set_logger(&DebugUartLogger).expect("set logger");
+    log::set_max_level(log::LevelFilter::Trace);
+    log::info!("starting kernel");
+    for i in 0..10 {
+        log::trace!("... {i}");
     }
     halt();
 }
@@ -79,7 +78,6 @@ pub extern fn kmain() {
 #[panic_handler]
 fn panic_handler(info: &PanicInfo) -> ! {
     let mut uart = DebugUart { base: 0x09000000 as *mut u8 };
-    uart.write_str("panic!\n");
-    // log::error!("panic: {info}");
+    let _ = uart.write_fmt(format_args!("panic! {info}"));
     halt();
 }
