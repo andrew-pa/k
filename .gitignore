@@ -1,3 +1,4 @@
 .build/
 .ninja_log
+kernel/target
 

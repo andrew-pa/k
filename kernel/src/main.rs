@@ -66,8 +66,9 @@ pub extern fn kmain() {
         log::trace!("...");
     }*/
     let mut uart = DebugUart { base: 0x09000000 as *mut u8 };
-    writeln!(&mut uart, "Hello, world!").unwrap();
-    do_something_else();
+    uart.write_fmt(format_args!("hello, fmt!\n")).unwrap();
+    // writeln!(&mut uart, "Hello, world!").unwrap();
+    // do_something_else();
     let uart = 0x09000000 as *mut u8;
     for _ in 0..10 {
         unsafe { uart.write_volatile(b'K'); }
@@ -77,6 +78,8 @@ pub extern fn kmain() {
 
 #[panic_handler]
 fn panic_handler(info: &PanicInfo) -> ! {
+    let mut uart = DebugUart { base: 0x09000000 as *mut u8 };
+    uart.write_str("panic!\n");
     // log::error!("panic: {info}");
     halt();
 }
