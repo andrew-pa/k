@@ -1,3 +1,5 @@
+use core::fmt::Debug;
+
 use byteorder::{BigEndian, ByteOrder};
 
 const EXPECTED_MAGIC: u32 = 0xd00d_feed;
@@ -25,12 +27,31 @@ impl<'a> BlobHeader<'a> {
     fn size_dt_structs(&self) -> u32 { BigEndian::read_u32(&self.buf[36..]) }
 }
 
+impl<'a> Debug for BlobHeader<'a> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("BlobHeader")
+            .field("magic", &self.magic())
+            .field("total_size", &self.total_size())
+            .field("off_dt_struct", &self.off_dt_struct())
+            .field("off_dt_strings", &self.off_dt_strings())
+            .field("off_mem_rsvmap", &self.off_mem_rsvmap())
+            .field("version", &self.version())
+            .field("last_comp_version", &self.last_comp_version())
+            .field("boot_cpuid_phys", &self.boot_cpuid_phys())
+            .field("size_dt_strings", &self.size_dt_strings())
+            .field("size_dt_structs", &self.size_dt_structs())
+            .finish()
+    }
+}
+
 pub struct DeviceTree {
     buf: &'static [u8],
     strings: &'static [u8],
-    structure: &'static [u8]
+    structure: &'static [u8],
+    mem_map: &'static [u8]
 }
 
+#[derive(Debug)]
 pub enum StructureItem<'dt> {
     StartNode(&'dt str),
     EndNode,
@@ -45,23 +66,34 @@ pub struct Cursor<'dt> {
     current_offset: usize
 }
 
+pub struct MemRegionIter<'dt> {
+    dt: &'dt DeviceTree,
+    current_offset: usize
+}
+
 impl DeviceTree {
     pub unsafe fn at_address(addr: *mut u8) -> DeviceTree {
         let header = BlobHeader { buf: core::slice::from_raw_parts(addr, 64) };
         if header.magic() != EXPECTED_MAGIC {
-            // panic!("unexpected magic value for {addr}, got {}", header.magic())
+            log::error!("unexpected magic value for {addr:x?}, got {}", header.magic())
         }
         let buf = core::slice::from_raw_parts(addr, header.total_size() as usize);
         let header = BlobHeader { buf };
+        log::debug!("device tree at {:x}, header={:?}", addr as usize, header);
         DeviceTree {
             strings: core::slice::from_raw_parts(addr.offset(header.off_dt_strings() as isize), header.size_dt_strings() as usize),
             structure: core::slice::from_raw_parts(addr.offset(header.off_dt_struct() as isize), header.size_dt_structs() as usize),
+            mem_map: core::slice::from_raw_parts(addr.offset(header.off_mem_rsvmap() as isize), header.size_dt_structs() as usize),
             buf,
         }
     }
 
-    pub fn iter(&self) -> Cursor {
+    pub fn iter_structure(&self) -> Cursor {
         Cursor { current_offset: 0, dt: self }
+    }
+
+    pub fn iter_reserved_memory_regions(&self) -> MemRegionIter {
+        MemRegionIter { dt: self, current_offset: 0 }
     }
 }
 
@@ -83,7 +115,7 @@ impl<'dt> Iterator for Cursor<'dt> {
                     }
                     let name = core::str::from_utf8(&self.dt.structure[self.current_offset..name_end])
                         .expect("device tree node name is utf8");
-                    self.current_offset += pad_end_4b(name_end + 1);
+                    self.current_offset = pad_end_4b(name_end + 1);
                     return Some(StructureItem::StartNode(name))
                 },
                 2 => return Some(StructureItem::EndNode),
@@ -104,8 +136,24 @@ impl<'dt> Iterator for Cursor<'dt> {
                 },
                 4 => continue,
                 9 => return None,
-                _ => panic!()
+                x => panic!("unknown device tree token: {x}")
             }
+        }
+    }
+}
+
+impl<'dt> Iterator for MemRegionIter<'dt> {
+    type Item = (u64, u64);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let addr = BigEndian::read_u64(&self.dt.mem_map[self.current_offset..]);
+        self.current_offset += 8;
+        let size = BigEndian::read_u64(&self.dt.mem_map[self.current_offset..]);
+        self.current_offset += 8;
+        if addr == 0 && size == 0 {
+            None
+        } else {
+            Some((addr, size))
         }
     }
 }
