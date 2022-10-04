@@ -1,0 +1,6 @@
+- main crash is because we're jumping to the address of `write_str` without the correct offset (0xe18 vs 0x440052xx)
+    we probably aren't correctly setting something up so that we know where we have been relocated
+    perhaps we're not correctly relocating a vtable?
+    the jump is at +0x1820 `blr x8`
+
+- if you patch that during execution, we wind up writing garbage to the UART rather than the correct string. Perhaps this constant is also incorrectly relocated? Maybe we can build with PIE enabled?

@@ -8,5 +8,6 @@ SECTIONS {
         *(.bss .bss.*)
         __bss_end = . ;
     }
+    __kernel_end = . ;
 }
 ENTRY(kmain)
