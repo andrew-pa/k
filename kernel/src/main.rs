@@ -69,8 +69,13 @@ pub extern fn kmain() {
     //     log::info!("device tree item: {item:?}");
     // }
 
-    let phys_mem_al = memory::PhysicalMemoryAllocator::init(&dt);
-    
+    let mut phys_mem_al = memory::PhysicalMemoryAllocator::init(&dt);
+
+    let addr = phys_mem_al.alloc_contig(3).unwrap();
+    log::info!("allocated 3 pages at {}", addr);
+    phys_mem_al.free_pages(addr, 3);
+    log::info!("freed 3 pages at {}", addr);
+
     halt();
 }
 

@@ -1,3 +1,4 @@
+use derive_more::Display;
 
 // these are defined by the linker script so we know where the BSS section is
 extern "C" {
@@ -16,8 +17,22 @@ pub unsafe fn zero_bss_section() {
 
 pub const PAGE_SIZE: usize = 4 * 1024;
 
+#[derive(Copy,Clone,Debug,Display)]
+#[display(fmt = "p:0x{:x}", _0)]
 pub struct PhysicalAddress(pub usize);
+
+#[derive(Copy,Clone,Debug,Display)]
+#[display(fmt = "v:0x{:x}", _0)]
 pub struct VirtualAddress(pub usize);
+
+#[derive(Debug, Display)]
+pub enum MemoryError {
+    #[display(fmt = "out of memory")]
+    OutOfMemory,
+    #[display(fmt = "insufficent memory for allocation of {} bytes", size)]
+    InsufficentForAllocation { size: usize }
+}
 
 mod physical_memory_allocator;
 pub use physical_memory_allocator::PhysicalMemoryAllocator;
+
