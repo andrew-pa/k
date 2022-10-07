@@ -1,25 +1,32 @@
-use crate::{dtb::{StructureItem, DeviceTree}, memory::{PAGE_SIZE, __kernel_end}};
-use byteorder::{ByteOrder, BigEndian};
-use bitvec::{prelude::*, index::BitIdx};
+use crate::{
+    dtb::{DeviceTree, StructureItem},
+    memory::{__kernel_end, PAGE_SIZE},
+};
+use bitvec::{index::BitIdx, prelude::*};
+use byteorder::{BigEndian, ByteOrder};
 
-use super::{PhysicalAddress, MemoryError};
+use super::{MemoryError, PhysicalAddress};
 
 pub struct PhysicalMemoryAllocator {
     allocated_pages: &'static mut BitSlice,
     memory_start: usize,
-    memory_length: usize
+    memory_length: usize,
 }
 
 impl PhysicalMemoryAllocator {
     pub fn init(device_tree: &DeviceTree) -> PhysicalMemoryAllocator {
         // for now, find the first memory node and use it to determine how big RAM is
-        let memory_props = device_tree.iter_structure().skip_while(|i| match i {
-            StructureItem::StartNode(name) if name.starts_with("memory") => false,
-            _ => true
-        }).find_map(|i| match i {
-            StructureItem::Property { name, data } if name == "reg" => Some(data),
-            _ => None
-        }).expect("RAM properties in device tree");
+        let memory_props = device_tree
+            .iter_structure()
+            .skip_while(|i| match i {
+                StructureItem::StartNode(name) if name.starts_with("memory") => false,
+                _ => true,
+            })
+            .find_map(|i| match i {
+                StructureItem::Property { name, data } if name == "reg" => Some(data),
+                _ => None,
+            })
+            .expect("RAM properties in device tree");
         let memory_start = BigEndian::read_u64(&memory_props) as usize;
         let memory_length = BigEndian::read_u64(&memory_props[8..]) as usize;
         log::info!("RAM starts at 0x{memory_start:x} and is 0x{memory_length:x} bytes long");
@@ -31,13 +38,14 @@ impl PhysicalMemoryAllocator {
             log::info!("reserved memory region at 0x{addr:x}, size={size}");
         }
 
-        let mem_ptr = memory_start as *mut usize;
+        // FIX: need to put this after the kernel probably?? probably best to not overwrite the device tree/kernel source
+        let alloc_bitmap_addr = memory_start as *mut usize;
 
         let allocated_pages = unsafe {
             bitvec::slice::from_raw_parts_unchecked_mut(
-                BitPtr::new((&mut *mem_ptr).into(), BitIdx::new(0).unwrap()).unwrap(),
-                memory_length / PAGE_SIZE)
-                // StaticBitmap::new(&mut __kernel_end as *mut u64, memory_length / PAGE_SIZE)
+                BitPtr::new((&mut *alloc_bitmap_addr).into(), BitIdx::new(0).unwrap()).unwrap(),
+                memory_length / PAGE_SIZE,
+            )
         };
 
         allocated_pages.fill(false);
@@ -46,10 +54,17 @@ impl PhysicalMemoryAllocator {
         // TODO: right now this also allocates the space taken up by the device tree,
         // but in the future we should probably take care of that specifically
         let kernel_end = unsafe { (&__kernel_end as *const u64) as usize };
-        log::info!("allocating pages for kernel image ending at p:0x{:x}", kernel_end);
-        allocated_pages[0..(kernel_end / PAGE_SIZE)].fill(true);
+        log::info!(
+            "allocating pages for kernel image ending at p:0x{:x}",
+            kernel_end
+        );
+        allocated_pages[0..(kernel_end - memory_start).div_ceil(PAGE_SIZE)].fill(true);
 
-        PhysicalMemoryAllocator { allocated_pages, memory_start, memory_length }
+        PhysicalMemoryAllocator {
+            allocated_pages,
+            memory_start,
+            memory_length,
+        }
     }
 
     pub fn alloc(&mut self) -> Result<PhysicalAddress, MemoryError> {
@@ -61,8 +76,8 @@ impl PhysicalMemoryAllocator {
     }
 
     pub fn free_pages(&mut self, base_address: PhysicalAddress, page_count: usize) {
-        let page_index = (base_address.0 - self.memory_start) / PAGE_SIZE;
-        if self.allocated_pages[page_index .. (page_index + page_count)].not_all() {
+        let page_index = (base_address.0 - self.memory_start).div_ceil(PAGE_SIZE);
+        if self.allocated_pages[page_index..(page_index + page_count)].not_all() {
             log::warn!("double free at {}, {} pages", base_address, page_count);
         }
         self.allocated_pages[page_index..(page_index + page_count)].fill(false);
@@ -76,17 +91,19 @@ impl PhysicalMemoryAllocator {
             let start_index;
             loop {
                 match pi.next() {
-                    Some((i, allocated)) => if *allocated {
-                        continue
-                    } else {
-                        start_index = Some(i);
-                        break
+                    Some((i, allocated)) => {
+                        if *allocated {
+                            continue;
+                        } else {
+                            start_index = Some(i);
+                            break;
+                        }
                     }
-                    None => return Err(MemoryError::OutOfMemory)
+                    None => return Err(MemoryError::OutOfMemory),
                 }
             }
             // check to see if there are enough pages here
-            for _ in 0..(page_count-1) {
+            for _ in 0..(page_count - 1) {
                 match pi.next() {
                     Some((i, allocated)) => {
                         if *allocated {
@@ -94,15 +111,19 @@ impl PhysicalMemoryAllocator {
                             continue 'top;
                         }
                     }
-                    None => return Err(MemoryError::InsufficentForAllocation { size: page_count * PAGE_SIZE })
+                    None => {
+                        return Err(MemoryError::InsufficentForAllocation {
+                            size: page_count * PAGE_SIZE,
+                        })
+                    }
                 }
             }
             // we found enough pages, mark them as allocated and return
             let start_index = start_index.unwrap();
-            self.allocated_pages[start_index .. (start_index + page_count)].fill(true);
+            self.allocated_pages[start_index..(start_index + page_count)].fill(true);
             let addr = PhysicalAddress(self.memory_start + start_index * PAGE_SIZE);
             log::trace!("allocated {page_count} pages at {addr}");
-            return Ok(addr)
+            return Ok(addr);
         }
     }
 }

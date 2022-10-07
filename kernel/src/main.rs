@@ -1,15 +1,16 @@
 #![feature(lang_items)]
 #![no_std]
 #![no_main]
+#![feature(int_roundings)]
 
-use core::{panic::PanicInfo, fmt::Write};
+use core::{fmt::Write, panic::PanicInfo};
 
 mod dtb;
-mod uart;
 mod memory;
+mod uart;
 
 struct DebugUart {
-    base: *mut u8
+    base: *mut u8,
 }
 
 impl Write for DebugUart {
@@ -32,32 +33,37 @@ impl log::Log for DebugUartLogger {
 
     fn log(&self, record: &log::Record) {
         //WARN: this is currently NOT thread safe!
-        let mut uart = DebugUart { base: 0x09000000 as *mut u8 };
-        writeln!(uart, "[{:<5} ({}:{}) {}] {}",
+        let mut uart = DebugUart {
+            base: 0x09000000 as *mut u8,
+        };
+        writeln!(
+            uart,
+            "[{:<5} ({}:{}) {}] {}",
             record.level(),
             record.file().unwrap_or("unknown file"),
             record.line().unwrap_or(0),
             record.module_path().unwrap_or("unknown module"),
             record.args()
-        ).unwrap();
+        )
+        .unwrap();
     }
 
-    fn flush(&self) { }
+    fn flush(&self) {}
 }
 
 #[inline]
 pub fn halt() -> ! {
     loop {
-        unsafe {
-            core::arch::asm!("wfi", options(nomem, nostack))
-        }
+        unsafe { core::arch::asm!("wfi", options(nomem, nostack)) }
     }
 }
 
 #[no_mangle]
-pub extern fn kmain() {
+pub extern "C" fn kmain() {
     // make sure the BSS section is zeroed
-    unsafe { memory::zero_bss_section(); }
+    unsafe {
+        memory::zero_bss_section();
+    }
 
     log::set_logger(&DebugUartLogger).expect("set logger");
     log::set_max_level(log::LevelFilter::Trace);
@@ -81,7 +87,9 @@ pub extern fn kmain() {
 
 #[panic_handler]
 fn panic_handler(info: &PanicInfo) -> ! {
-    let mut uart = DebugUart { base: 0x09000000 as *mut u8 };
+    let mut uart = DebugUart {
+        base: 0x09000000 as *mut u8,
+    };
     let _ = uart.write_fmt(format_args!("panic! {info}"));
     halt();
 }
