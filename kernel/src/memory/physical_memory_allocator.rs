@@ -1,6 +1,6 @@
 use crate::{
     dtb::{DeviceTree, StructureItem},
-    memory::{__kernel_end, PAGE_SIZE},
+    memory::{__kernel_end, PAGE_SIZE, __kernel_start},
 };
 use bitvec::{index::BitIdx, prelude::*};
 use byteorder::{BigEndian, ByteOrder};
@@ -38,8 +38,15 @@ impl PhysicalMemoryAllocator {
             log::info!("reserved memory region at 0x{addr:x}, size={size}");
         }
 
-        // FIX: need to put this after the kernel probably?? probably best to not overwrite the device tree/kernel source
-        let alloc_bitmap_addr = memory_start as *mut usize;
+        let kernel_start = unsafe { (&__kernel_start as *const u8) as usize };
+        let kernel_end = unsafe { (&__kernel_end as *const u8) as usize };
+        log::info!("kernel_start = p:0x{kernel_start:x}, kernel_end = p:0x{kernel_end:x}");
+
+        // assumes 64bit alignment/8bpb
+        let padding = if kernel_end % 8 == 0 { 0 } else { 8 - kernel_end % 8 };
+
+        // make sure the bitmap starts on a word boundary
+        let alloc_bitmap_addr = (kernel_end + padding) as *mut usize;
 
         let allocated_pages = unsafe {
             bitvec::slice::from_raw_parts_unchecked_mut(
@@ -50,15 +57,17 @@ impl PhysicalMemoryAllocator {
 
         allocated_pages.fill(false);
 
+        // allocate the space taken up by the device tree blob
+        let dtb_len_pages = device_tree.header().total_size() as usize / PAGE_SIZE;
+        log::debug!("device tree takes {dtb_len_pages} pages");
+        allocated_pages[0..dtb_len_pages].fill(true);
         // allocate the space taken up by the kernel image
-        // TODO: right now this also allocates the space taken up by the device tree,
-        // but in the future we should probably take care of that specifically
-        let kernel_end = unsafe { (&__kernel_end as *const u64) as usize };
-        log::info!(
-            "allocating pages for kernel image ending at p:0x{:x}",
-            kernel_end
-        );
-        allocated_pages[0..(kernel_end - memory_start).div_ceil(PAGE_SIZE)].fill(true);
+        let kernel_start_pages = (kernel_start - memory_start).div_ceil(PAGE_SIZE);
+        let kernel_end_pages = (kernel_end - memory_start).div_ceil(PAGE_SIZE);
+        log::debug!("kernel image takes {} pages", kernel_end_pages - kernel_start_pages);
+        allocated_pages[kernel_start_pages..kernel_end_pages].fill(true);
+        // allocate the space taken up by the page allocation bitmap
+        allocated_pages[kernel_end_pages..(kernel_end_pages + (memory_length/PAGE_SIZE/8 + padding).div_ceil(PAGE_SIZE))].fill(true);
 
         PhysicalMemoryAllocator {
             allocated_pages,
@@ -102,6 +111,7 @@ impl PhysicalMemoryAllocator {
                     None => return Err(MemoryError::OutOfMemory),
                 }
             }
+
             // check to see if there are enough pages here
             for _ in 0..(page_count - 1) {
                 match pi.next() {
@@ -118,6 +128,7 @@ impl PhysicalMemoryAllocator {
                     }
                 }
             }
+            
             // we found enough pages, mark them as allocated and return
             let start_index = start_index.unwrap();
             self.allocated_pages[start_index..(start_index + page_count)].fill(true);

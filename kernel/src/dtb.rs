@@ -10,39 +10,39 @@ const FDT_PROP: u8 = 0x03;
 const FDT_NOP: u8 = 0x04;
 const FDT_END: u8 = 0x09;
 
-struct BlobHeader<'a> {
+pub struct BlobHeader<'a> {
     buf: &'a [u8],
 }
 
 impl<'a> BlobHeader<'a> {
-    fn magic(&self) -> u32 {
+    pub fn magic(&self) -> u32 {
         BigEndian::read_u32(&self.buf[0..])
     }
-    fn total_size(&self) -> u32 {
+    pub fn total_size(&self) -> u32 {
         BigEndian::read_u32(&self.buf[4..])
     }
-    fn off_dt_struct(&self) -> u32 {
+    pub fn off_dt_struct(&self) -> u32 {
         BigEndian::read_u32(&self.buf[8..])
     }
-    fn off_dt_strings(&self) -> u32 {
+    pub fn off_dt_strings(&self) -> u32 {
         BigEndian::read_u32(&self.buf[12..])
     }
-    fn off_mem_rsvmap(&self) -> u32 {
+    pub fn off_mem_rsvmap(&self) -> u32 {
         BigEndian::read_u32(&self.buf[16..])
     }
-    fn version(&self) -> u32 {
+    pub fn version(&self) -> u32 {
         BigEndian::read_u32(&self.buf[20..])
     }
-    fn last_comp_version(&self) -> u32 {
+    pub fn last_comp_version(&self) -> u32 {
         BigEndian::read_u32(&self.buf[24..])
     }
-    fn boot_cpuid_phys(&self) -> u32 {
+    pub fn boot_cpuid_phys(&self) -> u32 {
         BigEndian::read_u32(&self.buf[28..])
     }
-    fn size_dt_strings(&self) -> u32 {
+    pub fn size_dt_strings(&self) -> u32 {
         BigEndian::read_u32(&self.buf[32..])
     }
-    fn size_dt_structs(&self) -> u32 {
+    pub fn size_dt_structs(&self) -> u32 {
         BigEndian::read_u32(&self.buf[36..])
     }
 }
@@ -117,6 +117,10 @@ impl DeviceTree {
             ),
             buf,
         }
+    }
+
+    pub fn header(&self) -> BlobHeader {
+        BlobHeader { buf: self.buf }
     }
 
     pub fn iter_structure(&self) -> Cursor {

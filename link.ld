@@ -1,5 +1,6 @@
 SECTIONS {
     . = 0x44004400;
+    __kernel_start = . ;
     .text : { *(.text .text.*) }
     .data : { *(.data .data.*) }
     .rodata : { *(.rodata .rodata.*) }

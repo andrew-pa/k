@@ -1,10 +1,12 @@
 use derive_more::Display;
 
 // these are defined by the linker script so we know where the BSS section is
+// notably not the value but the *address* of these symbols is what is relevant
 extern "C" {
     static mut __bss_start: u8;
     static mut __bss_end: u8;
-    static mut __kernel_end: u64;
+    static mut __kernel_start: u8;
+    static mut __kernel_end: u8;
 }
 
 /// Zero the BSS section of the kernel as is expected by the ELF
