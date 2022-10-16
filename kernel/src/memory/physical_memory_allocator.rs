@@ -1,6 +1,6 @@
 use crate::{
     dtb::{DeviceTree, StructureItem},
-    memory::{__kernel_end, PAGE_SIZE, __kernel_start},
+    memory::{__kernel_end, __kernel_start, PAGE_SIZE},
 };
 use bitvec::{index::BitIdx, prelude::*};
 use byteorder::{BigEndian, ByteOrder};
@@ -43,7 +43,11 @@ impl PhysicalMemoryAllocator {
         log::info!("kernel_start = p:0x{kernel_start:x}, kernel_end = p:0x{kernel_end:x}");
 
         // assumes 64bit alignment/8bpb
-        let padding = if kernel_end % 8 == 0 { 0 } else { 8 - kernel_end % 8 };
+        let padding = if kernel_end % 8 == 0 {
+            0
+        } else {
+            8 - kernel_end % 8
+        };
 
         // make sure the bitmap starts on a word boundary
         let alloc_bitmap_addr = (kernel_end + padding) as *mut usize;
@@ -64,10 +68,15 @@ impl PhysicalMemoryAllocator {
         // allocate the space taken up by the kernel image
         let kernel_start_pages = (kernel_start - memory_start).div_ceil(PAGE_SIZE);
         let kernel_end_pages = (kernel_end - memory_start).div_ceil(PAGE_SIZE);
-        log::debug!("kernel image takes {} pages", kernel_end_pages - kernel_start_pages);
+        log::debug!(
+            "kernel image takes {} pages",
+            kernel_end_pages - kernel_start_pages
+        );
         allocated_pages[kernel_start_pages..kernel_end_pages].fill(true);
         // allocate the space taken up by the page allocation bitmap
-        allocated_pages[kernel_end_pages..(kernel_end_pages + (memory_length/PAGE_SIZE/8 + padding).div_ceil(PAGE_SIZE))].fill(true);
+        allocated_pages[kernel_end_pages
+            ..(kernel_end_pages + (memory_length / PAGE_SIZE / 8 + padding).div_ceil(PAGE_SIZE))]
+            .fill(true);
 
         PhysicalMemoryAllocator {
             allocated_pages,
@@ -128,7 +137,7 @@ impl PhysicalMemoryAllocator {
                     }
                 }
             }
-            
+
             // we found enough pages, mark them as allocated and return
             let start_index = start_index.unwrap();
             self.allocated_pages[start_index..(start_index + page_count)].fill(true);

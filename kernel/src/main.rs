@@ -1,7 +1,10 @@
-#![feature(lang_items)]
 #![no_std]
 #![no_main]
 #![feature(int_roundings)]
+#![feature(lang_items)]
+#![feature(allocator_api)]
+
+extern crate alloc;
 
 use core::{fmt::Write, panic::PanicInfo};
 
@@ -27,7 +30,7 @@ impl Write for DebugUart {
 struct DebugUartLogger;
 
 impl log::Log for DebugUartLogger {
-    fn enabled(&self, metadata: &log::Metadata) -> bool {
+    fn enabled(&self, _metadata: &log::Metadata) -> bool {
         true
     }
 
@@ -96,6 +99,8 @@ fn panic_handler(info: &PanicInfo) -> ! {
 
 /* TODO:
  *  - initialize MMU & provide API for page allocation and changing page tables. also make sure reserved regions on memory are correctly mapped
+ *      - you can identity map the page the instruction ptr is in and then jump elsewhere safely
+ *  - kernel heap/GlobalAlloc impl
  *  - set up interrupt handlers
  *  - start timer interrupt
  *  - switching between user/kernel space
