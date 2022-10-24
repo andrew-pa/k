@@ -18,6 +18,9 @@ pub unsafe fn zero_bss_section() {
 }
 
 // TODO: large pages are most likely better
+// however, for now we are assuming 4kB pages throughout the kernel
+// Linus apparently prefers 4kB, although that may be because it makes his life easier
+// M1 Macs use 16kB pages though I think?? Switching is probably not that hard for a from-scratch project
 pub const PAGE_SIZE: usize = 4 * 1024;
 
 #[derive(Copy, Clone, Debug, Display)]
@@ -27,6 +30,20 @@ pub struct PhysicalAddress(pub usize);
 #[derive(Copy, Clone, Debug, Display)]
 #[display(fmt = "v:0x{:x}", _0)]
 pub struct VirtualAddress(pub usize);
+
+impl VirtualAddress {
+    #[inline]
+    pub fn to_parts(&self) -> (usize, usize, usize, usize, usize, usize) {
+        let tag = 0xffff_0000_0000_0000_0000 & self.0;
+        let lv0_index = ((0x1ff << 39) & self.0) >> 39;
+        let lv1_index = ((0x1ff << 30) & self.0) >> 30;
+        let lv2_index = ((0x1ff << 21) & self.0) >> 21;
+        let lv3_index = ((0x1ff << 12) & self.0) >> 12;
+        let page_offset = self.0 & 0x3ff;
+
+        (tag, lv0_index, lv1_index, lv2_index, lv3_index, page_offset)
+    }
+}
 
 #[derive(Debug, Display)]
 pub enum MemoryError {
