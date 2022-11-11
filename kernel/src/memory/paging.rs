@@ -3,7 +3,7 @@ use core::{alloc::Allocator, ops::Range};
 
 use alloc::vec::Vec;
 
-use super::{PhysicalAddress, VirtualAddress};
+use super::{PhysicalAddress, VirtualAddress, PAGE_SIZE};
 
 struct PageTableEntry {}
 
@@ -20,6 +20,18 @@ impl PageTableEntry {
     }
 
     fn base_address(&self) -> Option<usize> {
+        todo!()
+    }
+
+    fn allocated(&self) -> bool {
+        todo!()
+    }
+
+    fn table_desc(table_ptr: PhysicalAddress) -> PageTableEntry {
+        todo!()
+    }
+
+    fn block_desc(page_size: PhysicalAddress) -> PageTableEntry {
         todo!()
     }
 }
@@ -43,11 +55,19 @@ pub struct PageTable<A: Allocator> {
 }
 
 pub enum MapError {
-    RangeAlreadyMapped,
+    RangeAlreadyMapped {
+        virt_start: VirtualAddress,
+        page_count: usize,
+        collision: VirtualAddress,
+    },
     MapRangeBadVirtualBase {
         reason: &'static str,
         virt_start: VirtualAddress,
-    }
+    },
+    InsufficentMapSpace {
+        page_count: usize,
+        virt_start: VirtualAddress,
+    },
 }
 
 impl<A: Allocator> PageTable<A> {
@@ -67,6 +87,7 @@ impl<A: Allocator> PageTable<A> {
         phy_start: PhysicalAddress,
         virt_start: VirtualAddress,
         page_count: usize,
+        overwrite: bool,
     ) -> Result<(), MapError> {
         // determine how big page_count is relative to the size of the higher level page table blocks and figure out how many new tables we'll need, if any
         let num_l3_tables = page_count.div_ceil(512);
@@ -78,59 +99,110 @@ impl<A: Allocator> PageTable<A> {
         if page_offset != 0 {
             return Err(MapError::MapRangeBadVirtualBase {
                 reason: "starting virtual address for mapping range must be at a page boundary",
-                virt_start
+                virt_start,
             });
         }
         match (self.high_addresses, tag) {
-            (true, 0xffff_0000_0000_0000_0000) | (false, 0x0) => {}
-            _ => return Err(MapError::MapRangeBadVirtualBase {
-                reason: "starting virtual address for mapping range must match tag for page table",
-                virt_start
-            })
+            (true, 0xffff) | (false, 0x0) => {}
+            _ => {
+                return Err(MapError::MapRangeBadVirtualBase {
+                    reason:
+                        "starting virtual address for mapping range must match tag for page table",
+                    virt_start,
+                })
+            }
         }
 
-        // check to make sure there is enough space
-        for lv0_index in lv0_start..(lv0_start + num_l1_tables) {
-            match self.level_tables[0][lv0_index].table_ref() {
-                Some(lv1_table) => for lv1_index in lv1_start..(lv1_start + num_l2_tables) {
-                    match lv1_table[lv1_index].table_ref() {
-                        Some(lv2_table) => for lv2_index in lv2_start..(lv2_start + num_l3_tables) {
-                            match lv2_table[lv2_index].table_ref() {
-                                Some(lv3_table) => {
-                                    // if there is a table, then does it have enough space?
-                                },
-                                None => {
-                                    // if there's no table there, that's fine, we'll allocate one
-                                },
-                            }
-                        },
-                        None => {
-                            // there's not even a L2 table allocated for this address range, so we're good
-                        }
+        if !overwrite {
+            // TODO: this always takes linear time in the number of pages although the actual allocation
+            // doesn't. They could probably both have the same runtime though with some cleverness.
+            let mut page_index = 0;
+            'top: while page_index < page_count {
+                let page_start = VirtualAddress(virt_start.0 + page_index * PAGE_SIZE);
+                let (tag, i0, i1, i2, i3, po) = page_start.to_parts();
+                let mut table = &self.level_tables[0];
+                for i in [i0, i1, i2, i3] {
+                    if let Some(existing_table) = table[i].table_ref() {
+                        table = existing_table;
+                    } else if table[i].allocated() {
+                        return Err(MapError::RangeAlreadyMapped {
+                            virt_start,
+                            page_count,
+                            collision: page_start,
+                        });
                     }
-                },
-                None => {
-                    // there's not even a L1 table allocated for this address range, so we're good
                 }
+                page_index += 1;
             }
         }
 
         // allocate new page tables and add required entries
-        todo!()
+        let mut page_index = 0;
+        'top: while page_index < page_count {
+            let page_start = VirtualAddress(virt_start.0 + page_index * PAGE_SIZE);
+            let (tag, i0, i1, i2, i3, po) = page_start.to_parts();
+            let mut table = &self.level_tables[0];
+            // TODO: surely there is a clean way to generate this slice with iterators?
+            for (i, can_allocate_large_block, large_block_size) in [
+                (i0, false, 0),
+                (i1, i2 == 0 && i3 == 0, 512 * 512), // 1GiB in pages
+                (i2, i3 == 0, 512),                  // 2MiB in pages
+            ] {
+                if let Some(existing_table) = table[i].table_ref() {
+                    table = existing_table;
+                } else {
+                    assert!(!table[i].allocated());
+                    if can_allocate_large_block && (page_count - page_index) >= large_block_size {
+                        table[i] = PageTableEntry::block_desc(PhysicalAddress(
+                            phy_start.0 + page_index * PAGE_SIZE,
+                        ));
+                        page_index += large_block_size;
+                        continue 'top;
+                    } else {
+                        table[i] = PageTableEntry::table_desc(self.allocate_table());
+                    }
+                }
+            }
+            table[i2][i3] =
+                PageTableEntry::entry(PhysicalAddress(phy_start.0 + page_index * PAGE_SIZE));
+            page_index += 1;
+        }
+
+        Ok(())
     }
 
     pub fn unmap_range(&mut self, virt_start: VirtualAddress, page_count: usize) {
+        let mut page_index = 0;
+        'top: while page_index < page_count {
+            let page_start = VirtualAddress(virt_start.0 + page_index * PAGE_SIZE);
+            let (tag, i0, i1, i2, i3, po) = page_start.to_parts();
+            let mut table = &self.level_tables[0];
+            // TODO: surely there is a clean way to generate this slice with iterators?
+            for (i, block_size) in [
+                (i0, 0),
+                (i1, 512 * 512), // 1GiB in pages
+                (i2, 512),                  // 2MiB in pages
+                (i3, 1)
+            ] {
+                if let Some(existing_table) = table[i].table_ref() {
+                    table = existing_table;
+                } else {
+                    assert_ne!(block_size, 0); // no blocks in Level 0 table
+                    //?
+                    page_index += block_size;
+                }
+            }
+        }
         todo!()
     }
 
     /// Compute the physical address of a virtual address the same way the MMU would. If accessing
     /// the virtual address would result in a page fault, `None` is returned
     pub fn physical_address_of(&self, virt: VirtualAddress) -> Option<PhysicalAddress> {
-        let (tag, lv0_index, lv1_index, lv2_index, lv3_index, page_offset) =
-            virt.to_parts();
+        let (tag, lv0_index, lv1_index, lv2_index, lv3_index, page_offset) = virt.to_parts();
 
         match (self.high_addresses, tag) {
-            (true, 0xffff_0000_0000_0000_0000) | (false, 0x0) => {}
+            (true, 0xffff) | (false, 0x0) => {}
             _ => return None,
         }
 
@@ -148,6 +220,10 @@ impl<A: Allocator> PageTable<A> {
     }
 
     pub fn virtual_address_of(&self, phy: PhysicalAddress) -> Option<VirtualAddress> {
+        todo!()
+    }
+
+    fn allocate_table(&self) -> PhysicalAddress {
         todo!()
     }
 }
