@@ -3,17 +3,33 @@ use core::{alloc::Allocator, ops::Range};
 
 use alloc::vec::Vec;
 
-use super::{PhysicalAddress, VirtualAddress, PAGE_SIZE};
+use super::{PhysicalAddress, VirtualAddress, PAGE_SIZE, PhysicalMemoryAllocator, MemoryError};
 
 struct PageTableEntry {}
 
 impl PageTableEntry {
+    fn table_desc(table_ptr: PhysicalAddress) -> PageTableEntry {
+        todo!()
+    }
+
+    fn block_entry(base_address: PhysicalAddress) -> PageTableEntry {
+        todo!()
+    }
+
+    fn entry(base_address: PhysicalAddress) -> PageTableEntry {
+        todo!()
+    }
+
+    fn invalid() -> PageTableEntry {
+        todo!()
+    }
+
     /// Return a reference to the next level table that this entry refers to, or None if the entry
     /// is un-allocated or otherwise does not refer to a level table
-    fn table_ref(&self) -> Option<&LevelTable> {
+    fn table_ref(&self) -> Option<&mut LevelTable> {
         // TODO: this function is quite complex, because we need to figure out the address of the
         // table in the current VIRTUAL memory space but we only have the PHYSICAL base address.
-        // One potential solution is to identity map (ostensibly in the kernel's low address range)
+        // One potential solution is to identity map (by necessity in the kernel's low address range)
         // all page tables, so that the physical and virtual addresses are always the same. Perhaps
         // that is jank, but it is *really* convenient. Potentially not so great for the TLB though?
         todo!()
@@ -27,11 +43,7 @@ impl PageTableEntry {
         todo!()
     }
 
-    fn table_desc(table_ptr: PhysicalAddress) -> PageTableEntry {
-        todo!()
-    }
-
-    fn block_desc(page_size: PhysicalAddress) -> PageTableEntry {
+    pub fn table_phy_addr(&self) -> PhysicalAddress {
         todo!()
     }
 }
@@ -48,10 +60,19 @@ impl core::ops::Index<usize> for LevelTable {
     }
 }
 
-pub struct PageTable<A: Allocator> {
+impl core::ops::IndexMut<usize> for LevelTable {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        &mut self.entries[index]
+    }
+}
+
+// WARN: Currently assumes that physical memory is identity mapped in the 0x0000 prefix!
+pub struct PageTable<'a> {
     /// true => this page table is for virtual addresses of prefix 0xffff, false => prefix must be 0x0000
     high_addresses: bool,
-    level_tables: Vec<LevelTable, A>,
+    phys_page_alloc: &'a mut PhysicalMemoryAllocator,
+    level0_table: &'a mut LevelTable,
+    level0_phy_addr: PhysicalAddress
 }
 
 pub enum MapError {
@@ -68,18 +89,44 @@ pub enum MapError {
         page_count: usize,
         virt_start: VirtualAddress,
     },
+    Memory(MemoryError)
 }
 
-impl<A: Allocator> PageTable<A> {
-    pub fn empty(alloc: A) -> PageTable<A> {
-        todo!()
+impl<'a> PageTable<'a> {
+    pub fn empty(phys_page_alloc: &'a mut PhysicalMemoryAllocator, high_addresses: bool) -> Result<PageTable<'a>, MemoryError> {
+        let level0_phy_addr = phys_page_alloc.alloc()?;
+        let l0_ref = unsafe {
+            // WARN: Assume that memory is identity mapped!
+            let table_ptr: *mut LevelTable = VirtualAddress(level0_phy_addr.0).as_ptr();
+            core::ptr::write_bytes(table_ptr, 0, core::mem::size_of::<LevelTable>());
+            &mut *table_ptr
+        };
+        Ok(PageTable {
+            high_addresses,
+            phys_page_alloc,
+            level0_table: l0_ref,
+            level0_phy_addr
+        })
     }
-    pub fn identity(alloc: A) -> PageTable<A> {
-        todo!()
+
+    pub fn identity(phys_page_alloc: &'a mut PhysicalMemoryAllocator, high_addresses: bool, start_addr: PhysicalAddress, page_count: usize) -> Result<PageTable<'a>, MapError> {
+        let mut p = PageTable::empty(phys_page_alloc, high_addresses).map_err(MapError::Memory)?;
+        p.map_range(start_addr, VirtualAddress(start_addr.0), page_count, true)?;
+        Ok(p)
     }
 
     pub unsafe fn activate(&self) {
         todo!()
+    }
+
+    fn allocate_table(&self) -> Result<PhysicalAddress, MemoryError> {
+        let new_page_phy_addr = self.phys_page_alloc.alloc()?;
+        unsafe {
+            // WARN: Assume that memory is identity mapped!
+            let table_ptr: *mut LevelTable = VirtualAddress(new_page_phy_addr.0).as_ptr();
+            core::ptr::write_bytes(table_ptr, 0, core::mem::size_of::<LevelTable>());
+        }
+        Ok(new_page_phy_addr)
     }
 
     pub fn map_range(
@@ -120,7 +167,7 @@ impl<A: Allocator> PageTable<A> {
             'top: while page_index < page_count {
                 let page_start = VirtualAddress(virt_start.0 + page_index * PAGE_SIZE);
                 let (tag, i0, i1, i2, i3, po) = page_start.to_parts();
-                let mut table = &self.level_tables[0];
+                let mut table = self.level0_table;
                 for i in [i0, i1, i2, i3] {
                     if let Some(existing_table) = table[i].table_ref() {
                         table = existing_table;
@@ -141,7 +188,7 @@ impl<A: Allocator> PageTable<A> {
         'top: while page_index < page_count {
             let page_start = VirtualAddress(virt_start.0 + page_index * PAGE_SIZE);
             let (tag, i0, i1, i2, i3, po) = page_start.to_parts();
-            let mut table = &self.level_tables[0];
+            let mut table = self.level0_table;
             // TODO: surely there is a clean way to generate this slice with iterators?
             for (i, can_allocate_large_block, large_block_size) in [
                 (i0, false, 0),
@@ -153,17 +200,19 @@ impl<A: Allocator> PageTable<A> {
                 } else {
                     assert!(!table[i].allocated());
                     if can_allocate_large_block && (page_count - page_index) >= large_block_size {
-                        table[i] = PageTableEntry::block_desc(PhysicalAddress(
+                        table[i] = PageTableEntry::block_entry(PhysicalAddress(
                             phy_start.0 + page_index * PAGE_SIZE,
                         ));
                         page_index += large_block_size;
                         continue 'top;
                     } else {
-                        table[i] = PageTableEntry::table_desc(self.allocate_table());
+                        table[i] = PageTableEntry::table_desc(self.allocate_table().map_err(MapError::Memory)?);
+                        table = table[i].table_ref().unwrap();
                     }
                 }
             }
-            table[i2][i3] =
+
+            table[i3] =
                 PageTableEntry::entry(PhysicalAddress(phy_start.0 + page_index * PAGE_SIZE));
             page_index += 1;
         }
@@ -174,9 +223,9 @@ impl<A: Allocator> PageTable<A> {
     pub fn unmap_range(&mut self, virt_start: VirtualAddress, page_count: usize) {
         let mut page_index = 0;
         'top: while page_index < page_count {
-            let page_start = VirtualAddress(virt_start.0 + page_index * PAGE_SIZE);
-            let (tag, i0, i1, i2, i3, po) = page_start.to_parts();
-            let mut table = &self.level_tables[0];
+            let page_addr = VirtualAddress(virt_start.0 + page_index * PAGE_SIZE);
+            let (tag, i0, i1, i2, i3, po) = page_addr.to_parts();
+            let mut table = self.level0_table;
             // TODO: surely there is a clean way to generate this slice with iterators?
             for (i, block_size) in [
                 (i0, 0),
@@ -187,9 +236,10 @@ impl<A: Allocator> PageTable<A> {
                 if let Some(existing_table) = table[i].table_ref() {
                     table = existing_table;
                 } else {
-                    assert_ne!(block_size, 0); // no blocks in Level 0 table
-                    //?
+                    assert_ne!(block_size, 0);
+                    table[i] = PageTableEntry::invalid();
                     page_index += block_size;
+                    break;
                 }
             }
         }
@@ -206,7 +256,7 @@ impl<A: Allocator> PageTable<A> {
             _ => return None,
         }
 
-        self.level_tables[0][lv0_index]
+        self.level0_table[lv0_index]
             .table_ref()
             .and_then(|lv1_table| {
                 lv1_table[lv1_index].table_ref().and_then(|lv2_table| {
@@ -222,8 +272,19 @@ impl<A: Allocator> PageTable<A> {
     pub fn virtual_address_of(&self, phy: PhysicalAddress) -> Option<VirtualAddress> {
         todo!()
     }
+}
 
-    fn allocate_table(&self) -> PhysicalAddress {
-        todo!()
+impl Drop for PageTable<'_> {
+    fn drop(&mut self) {
+        // Does not drop actual pages!
+        fn drop_table(table: &mut LevelTable, table_phy_addr: PhysicalAddress, src_alloc: &mut PhysicalMemoryAllocator) {
+            for entry in table.entries {
+                if let Some(table) = entry.table_ref() {
+                    drop_table(table, entry.table_phy_addr(), src_alloc);
+                }
+            }
+            src_alloc.free(table_phy_addr)
+        }
+        drop_table(self.level0_table, self.level0_phy_addr, self.phys_page_alloc);
     }
 }

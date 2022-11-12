@@ -60,6 +60,10 @@ impl VirtualAddress {
         assert!(offset <= 0x3ff);
         VirtualAddress((tag << 48) | (l0 << 39) | (l1 << 30) | (l2 << 21) | (l3 << 12) | offset)
     }
+
+    pub fn as_ptr<T>(&self) -> *mut T {
+        self.0 as *mut T
+    }
 }
 
 #[derive(Debug, Display)]
