@@ -1,50 +1,85 @@
 #![allow(unused)]
-use core::{alloc::Allocator, ops::Range};
+use core::ops::Range;
 
-use alloc::vec::Vec;
+use bitfield::bitfield;
 
 use super::{PhysicalAddress, VirtualAddress, PAGE_SIZE, PhysicalMemoryAllocator, MemoryError};
 
-struct PageTableEntry {}
+bitfield!{
+    struct PageTableEntry(u64);
+    impl Debug;
+    u8;
+    valid, set_valid: 0;
+    get_type, set_type: 1;
+    u16, low_attrb, set_low_attrb: 11, 2;
+    //get_res0, set_res0: 12, 12; -- only needed for >4KB pages
+    u64, address, set_address: 47, 12;
+    res0, set_res0: 49, 48;
+    high_attrb, set_high_attrb: 63, 50;
+}
 
 impl PageTableEntry {
+    /// Create a PageTableEntry pointing to a table in the next level in the page tree
     fn table_desc(table_ptr: PhysicalAddress) -> PageTableEntry {
-        todo!()
+        let mut e = PageTableEntry(0);
+        e.set_valid(true);
+        e.set_type(true);
+        e.set_address(table_ptr.0 as u64);
+        e
     }
 
-    fn block_entry(base_address: PhysicalAddress) -> PageTableEntry {
-        todo!()
+    /// Create a PageTableEntry describing a block output address
+    fn block_entry(base_address: PhysicalAddress, level: u8) -> PageTableEntry {
+        let mut e = PageTableEntry(0);
+        e.set_valid(true);
+        e.set_type(false);
+        e.set_address((base_address.0 as u64) << (match level {
+            1 => 30,
+            2 => 21,
+            _ => panic!("invalid page level {}", level)
+        } - 12));
+        e
     }
 
-    fn entry(base_address: PhysicalAddress) -> PageTableEntry {
-        todo!()
+    /// Create a PageTableEntry describing a page output address
+    fn page_entry(base_address: PhysicalAddress) -> PageTableEntry {
+        let mut e = PageTableEntry(0);
+        e.set_valid(true);
+        e.set_type(true);
+        e.set_address(base_address.0 as u64);
+        e
     }
 
     fn invalid() -> PageTableEntry {
-        todo!()
+        PageTableEntry(0)
     }
 
     /// Return a reference to the next level table that this entry refers to, or None if the entry
     /// is un-allocated or otherwise does not refer to a level table
-    fn table_ref(&self) -> Option<&mut LevelTable> {
+    /// TODO: may still return a Some(...) if the entry is actually a page descriptor!
+    unsafe fn table_ref(&self) -> Option<&mut LevelTable> {
         // TODO: this function is quite complex, because we need to figure out the address of the
         // table in the current VIRTUAL memory space but we only have the PHYSICAL base address.
         // One potential solution is to identity map (by necessity in the kernel's low address range)
         // all page tables, so that the physical and virtual addresses are always the same. Perhaps
         // that is jank, but it is *really* convenient. Potentially not so great for the TLB though?
-        todo!()
+        self.table_phy_addr().map(|PhysicalAddress(a)| &mut *(a as *mut LevelTable))
     }
 
-    fn base_address(&self) -> Option<usize> {
-        todo!()
+    /// TODO: may still return a Some(...) if the entry is actually a page descriptor!
+    fn table_phy_addr(&self) -> Option<PhysicalAddress> {
+        if !self.valid() || !self.get_type() {
+            return None; // invalid or block entry
+        }
+        Some(PhysicalAddress(self.address() as usize))
     }
 
-    fn allocated(&self) -> bool {
-        todo!()
-    }
-
-    pub fn table_phy_addr(&self) -> PhysicalAddress {
-        todo!()
+    /// TODO: may still return a Some(...) if the entry is actually a table descriptor!
+    fn base_address(&self) -> Option<PhysicalAddress> {
+        if !self.valid() {
+            return None; // invalid or table entry
+        }
+        Some(PhysicalAddress(self.address() as usize))
     }
 }
 
@@ -171,7 +206,7 @@ impl<'a> PageTable<'a> {
                 for i in [i0, i1, i2, i3] {
                     if let Some(existing_table) = table[i].table_ref() {
                         table = existing_table;
-                    } else if table[i].allocated() {
+                    } else if table[i].valid() {
                         return Err(MapError::RangeAlreadyMapped {
                             virt_start,
                             page_count,
@@ -198,7 +233,7 @@ impl<'a> PageTable<'a> {
                 if let Some(existing_table) = table[i].table_ref() {
                     table = existing_table;
                 } else {
-                    assert!(!table[i].allocated());
+                    assert!(!table[i].valid());
                     if can_allocate_large_block && (page_count - page_index) >= large_block_size {
                         table[i] = PageTableEntry::block_entry(PhysicalAddress(
                             phy_start.0 + page_index * PAGE_SIZE,
@@ -213,7 +248,7 @@ impl<'a> PageTable<'a> {
             }
 
             table[i3] =
-                PageTableEntry::entry(PhysicalAddress(phy_start.0 + page_index * PAGE_SIZE));
+                PageTableEntry::block_entry(PhysicalAddress(phy_start.0 + page_index * PAGE_SIZE));
             page_index += 1;
         }
 
@@ -280,7 +315,7 @@ impl Drop for PageTable<'_> {
         fn drop_table(table: &mut LevelTable, table_phy_addr: PhysicalAddress, src_alloc: &mut PhysicalMemoryAllocator) {
             for entry in table.entries {
                 if let Some(table) = entry.table_ref() {
-                    drop_table(table, entry.table_phy_addr(), src_alloc);
+                    drop_table(table, entry.table_phy_addr().unwrap(), src_alloc);
                 }
             }
             src_alloc.free(table_phy_addr)

@@ -2,9 +2,7 @@
 #![no_main]
 #![feature(int_roundings)]
 #![feature(lang_items)]
-#![feature(allocator_api)]
-
-extern crate alloc;
+#![recursion_limit = "256"]
 
 use core::{fmt::Write, panic::PanicInfo};
 
