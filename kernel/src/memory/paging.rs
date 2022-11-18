@@ -3,9 +3,9 @@ use core::ops::Range;
 
 use bitfield::bitfield;
 
-use super::{PhysicalAddress, VirtualAddress, PAGE_SIZE, PhysicalMemoryAllocator, MemoryError};
+use super::{MemoryError, PhysicalAddress, PhysicalMemoryAllocator, VirtualAddress, PAGE_SIZE};
 
-bitfield!{
+bitfield! {
     struct PageTableEntry(u64);
     impl Debug;
     u8;
@@ -33,14 +33,17 @@ impl PageTableEntry {
         let mut e = PageTableEntry(0);
         e.set_valid(true);
         e.set_type(false);
-        e.set_address((base_address.0 as u64) << (match level {
-            // TODO: what about level 0? are these possible with a 48-bit physical/output address?
-            // the page table code sure thinks so
-            0 => 12,
-            1 => 30,
-            2 => 21,
-            _ => panic!("invalid page level {}", level)
-        } - 12));
+        e.set_address(
+            (base_address.0 as u64)
+                << (match level {
+                    // TODO: what about level 0? are these possible with a 48-bit physical/output address?
+                    // the page table code sure thinks so
+                    0 => 12,
+                    1 => 30,
+                    2 => 21,
+                    _ => panic!("invalid page level {}", level),
+                } - 12),
+        );
         e
     }
 
@@ -67,9 +70,12 @@ impl PageTableEntry {
         // all page tables, so that the physical and virtual addresses are always the same. Perhaps
         // that is jank, but it is *really* convenient. Potentially not so great for the TLB though?
 
-        if lvl >= 3 { return None }
+        if lvl >= 3 {
+            return None;
+        }
         // this is safe, because at any level < 3 where table_phy_addr() is Some will have a pointer to a valid LevelTable
-        self.table_phy_addr().map(|PhysicalAddress(a)| a as *mut LevelTable)
+        self.table_phy_addr()
+            .map(|PhysicalAddress(a)| a as *mut LevelTable)
     }
 
     /// WARN: may still return a Some(...) if the entry is actually a page descriptor! Call table_ref() first!
@@ -112,7 +118,7 @@ pub struct PageTable<'a> {
     high_addresses: bool,
     phys_page_alloc: &'a mut PhysicalMemoryAllocator,
     level0_table: *mut LevelTable,
-    level0_phy_addr: PhysicalAddress
+    level0_phy_addr: PhysicalAddress,
 }
 
 pub enum MapError {
@@ -129,11 +135,14 @@ pub enum MapError {
         page_count: usize,
         virt_start: VirtualAddress,
     },
-    Memory(MemoryError)
+    Memory(MemoryError),
 }
 
 impl<'a> PageTable<'a> {
-    pub fn empty(phys_page_alloc: &'a mut PhysicalMemoryAllocator, high_addresses: bool) -> Result<PageTable<'a>, MemoryError> {
+    pub fn empty(
+        phys_page_alloc: &'a mut PhysicalMemoryAllocator,
+        high_addresses: bool,
+    ) -> Result<PageTable<'a>, MemoryError> {
         let level0_phy_addr = phys_page_alloc.alloc()?;
         let l0_ref = unsafe {
             // WARN: Assume that memory is identity mapped!
@@ -145,11 +154,16 @@ impl<'a> PageTable<'a> {
             high_addresses,
             phys_page_alloc,
             level0_table: l0_ref,
-            level0_phy_addr
+            level0_phy_addr,
         })
     }
 
-    pub fn identity(phys_page_alloc: &'a mut PhysicalMemoryAllocator, high_addresses: bool, start_addr: PhysicalAddress, page_count: usize) -> Result<PageTable<'a>, MapError> {
+    pub fn identity(
+        phys_page_alloc: &'a mut PhysicalMemoryAllocator,
+        high_addresses: bool,
+        start_addr: PhysicalAddress,
+        page_count: usize,
+    ) -> Result<PageTable<'a>, MapError> {
         let mut p = PageTable::empty(phys_page_alloc, high_addresses).map_err(MapError::Memory)?;
         p.map_range(start_addr, VirtualAddress(start_addr.0), page_count, true)?;
         Ok(p)
@@ -159,7 +173,7 @@ impl<'a> PageTable<'a> {
         todo!()
     }
 
-    fn allocate_table(&self) -> Result<PhysicalAddress, MemoryError> {
+    fn allocate_table(&mut self) -> Result<PhysicalAddress, MemoryError> {
         let new_page_phy_addr = self.phys_page_alloc.alloc()?;
         unsafe {
             // WARN: Assume that memory is identity mapped!
@@ -209,9 +223,10 @@ impl<'a> PageTable<'a> {
                 let (tag, i0, i1, i2, i3, po) = page_start.to_parts();
                 let mut table = self.level0_table;
                 for (lvl, i) in [i0, i1, i2, i3].into_iter().enumerate() {
-                    if let Some(existing_table) = table[i].table_ref(lvl as u8) {
+                    let tr = unsafe { table.as_ref().expect("table ptr is valid") };
+                    if let Some(existing_table) = tr[i].table_ref(lvl as u8) {
                         table = existing_table;
-                    } else if table[i].valid() {
+                    } else if tr[i].valid() {
                         return Err(MapError::RangeAlreadyMapped {
                             virt_start,
                             page_count,
@@ -235,25 +250,32 @@ impl<'a> PageTable<'a> {
                 (1, i1, i2 == 0 && i3 == 0, 512 * 512), // 1GiB in pages
                 (2, i2, i3 == 0, 512),                  // 2MiB in pages
             ] {
-                if let Some(existing_table) = table[i].table_ref(lvl) {
+                let tr = unsafe { table.as_mut().expect("table ptr is valid") };
+                if let Some(existing_table) = tr[i].table_ref(lvl) {
                     table = existing_table;
                 } else {
-                    assert!(!table[i].valid());
+                    assert!(!tr[i].valid());
                     if can_allocate_large_block && (page_count - page_index) >= large_block_size {
-                        table[i] = PageTableEntry::block_entry(PhysicalAddress(
-                            phy_start.0 + page_index * PAGE_SIZE,
-                        ), lvl);
+                        tr[i] = PageTableEntry::block_entry(
+                            PhysicalAddress(phy_start.0 + page_index * PAGE_SIZE),
+                            lvl,
+                        );
                         page_index += large_block_size;
                         continue 'top;
                     } else {
-                        table[i] = PageTableEntry::table_desc(self.allocate_table().map_err(MapError::Memory)?);
-                        table = table[i].table_ref(lvl).unwrap();
+                        tr[i] = PageTableEntry::table_desc(
+                            self.allocate_table().map_err(MapError::Memory)?,
+                        );
+                        table = tr[i].table_ref(lvl).unwrap();
                     }
                 }
             }
 
-            table[i3] =
-                PageTableEntry::page_entry(PhysicalAddress(phy_start.0 + page_index * PAGE_SIZE));
+            unsafe {
+                table.as_mut().expect("final table ptr is valid")[i3] = PageTableEntry::page_entry(
+                    PhysicalAddress(phy_start.0 + page_index * PAGE_SIZE),
+                );
+            }
             page_index += 1;
         }
 
@@ -270,14 +292,15 @@ impl<'a> PageTable<'a> {
             for (lvl, i, block_size) in [
                 (0, i0, 0),
                 (1, i1, 512 * 512), // 1GiB in pages
-                (2, i2, 512),                  // 2MiB in pages
-                (3, i3, 1)
+                (2, i2, 512),       // 2MiB in pages
+                (3, i3, 1),
             ] {
-                if let Some(existing_table) = table[i].table_ref(lvl) {
+                let tr = unsafe { table.as_mut().expect("table ptr is valid") };
+                if let Some(existing_table) = tr[i].table_ref(lvl) {
                     table = existing_table;
                 } else {
                     assert_ne!(block_size, 0);
-                    table[i] = PageTableEntry::invalid();
+                    tr[i] = PageTableEntry::invalid();
                     page_index += block_size;
                     break;
                 }
@@ -295,20 +318,21 @@ impl<'a> PageTable<'a> {
             (true, 0xffff) | (false, 0x0) => {}
             _ => return None,
         }
-        let mut table = &*self.level0_table;
+        let mut table = self.level0_table;
         // TODO: surely there is a clean way to generate this slice with iterators?
         for (lvl, i, block_size) in [
             (0, i0, 0),
             (1, i1, 512 * 512), // 1GiB in pages
-            (2, i2, 512),                  // 2MiB in pages
-            (3, i3, 1)
+            (2, i2, 512),       // 2MiB in pages
+            (3, i3, 1),
         ] {
-            if let Some(existing_table) = table[i].table_ref(lvl) {
+            let tr = unsafe { table.as_ref().expect("table ptr is valid") };
+            if let Some(existing_table) = tr[i].table_ref(lvl) {
                 table = existing_table;
             } else {
-                return table[i].base_address(lvl).map(|PhysicalAddress(addr)| {
-                    PhysicalAddress(addr + po)
-                });
+                return tr[i]
+                    .base_address(lvl)
+                    .map(|PhysicalAddress(addr)| PhysicalAddress(addr + po));
             }
         }
 
@@ -323,15 +347,25 @@ impl<'a> PageTable<'a> {
 impl Drop for PageTable<'_> {
     fn drop(&mut self) {
         // Does not drop actual pages!
-        fn drop_table(lvl: u8, table: &mut LevelTable, table_phy_addr: PhysicalAddress, src_alloc: &mut PhysicalMemoryAllocator) {
-            for entry in &table.entries {
+        fn drop_table(
+            lvl: u8,
+            table: *mut LevelTable,
+            table_phy_addr: PhysicalAddress,
+            src_alloc: &mut PhysicalMemoryAllocator,
+        ) {
+            for entry in unsafe { &table.as_ref().expect("table ptr is valid").entries } {
                 if let Some(table) = entry.table_ref(lvl) {
                     // we know that entry.table_phy_addr() will actually point to a table because we've already called table_ref()
-                    drop_table(lvl+ 1, table, entry.table_phy_addr().unwrap(), src_alloc);
+                    drop_table(lvl + 1, table, entry.table_phy_addr().unwrap(), src_alloc);
                 }
             }
             src_alloc.free(table_phy_addr)
         }
-        drop_table(0, self.level0_table, self.level0_phy_addr, self.phys_page_alloc);
+        drop_table(
+            0,
+            self.level0_table,
+            self.level0_phy_addr,
+            self.phys_page_alloc,
+        );
     }
 }

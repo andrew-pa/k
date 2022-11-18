@@ -34,7 +34,7 @@ pub struct VirtualAddress(pub usize);
 impl VirtualAddress {
     #[inline]
     pub fn to_parts(&self) -> (usize, usize, usize, usize, usize, usize) {
-        let tag = (0xffff_0000_0000_0000_0000 & self.0) >> 48;
+        let tag = (0xffff_0000_0000_0000 & self.0) >> 48;
         let lv0_index = ((0x1ff << 39) & self.0) >> 39;
         let lv1_index = ((0x1ff << 30) & self.0) >> 30;
         let lv2_index = ((0x1ff << 21) & self.0) >> 21;
