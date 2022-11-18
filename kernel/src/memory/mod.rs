@@ -77,4 +77,4 @@ pub enum MemoryError {
 mod physical_memory_allocator;
 pub use physical_memory_allocator::PhysicalMemoryAllocator;
 
-mod paging;
+pub mod paging;

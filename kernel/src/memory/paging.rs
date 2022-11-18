@@ -6,7 +6,7 @@ use bitfield::bitfield;
 use super::{MemoryError, PhysicalAddress, PhysicalMemoryAllocator, VirtualAddress, PAGE_SIZE};
 
 bitfield! {
-    struct PageTableEntry(u64);
+    pub struct PageTableEntry(u64);
     impl Debug;
     u8;
     valid, set_valid: 0;
@@ -20,43 +20,43 @@ bitfield! {
 
 impl PageTableEntry {
     /// Create a PageTableEntry pointing to a table in the next level in the page tree
-    fn table_desc(table_ptr: PhysicalAddress) -> PageTableEntry {
+    pub fn table_desc(table_ptr: PhysicalAddress) -> PageTableEntry {
         let mut e = PageTableEntry(0);
         e.set_valid(true);
         e.set_type(true);
-        e.set_address(table_ptr.0 as u64);
+        // first 12 bits are zero because the table must be page aligned??
+        e.set_address(table_ptr.0 as u64 >> 12);
         e
     }
 
     /// Create a PageTableEntry describing a block output address
-    fn block_entry(base_address: PhysicalAddress, level: u8) -> PageTableEntry {
+    pub fn block_entry(base_address: PhysicalAddress, level: u8) -> PageTableEntry {
         let mut e = PageTableEntry(0);
         e.set_valid(true);
         e.set_type(false);
         e.set_address(
-            (base_address.0 as u64)
-                << (match level {
-                    // TODO: what about level 0? are these possible with a 48-bit physical/output address?
-                    // the page table code sure thinks so
-                    0 => 12,
-                    1 => 30,
-                    2 => 21,
+            ((base_address.0 as u64)
+                & (match level {
+                    // zero out the RES0 bits
+                    1 => 0xffff_ffff_f000_0000,
+                    2 => 0xffff_ffff_fff0_0000,
                     _ => panic!("invalid page level {}", level),
-                } - 12),
+                })) >> 12,
         );
         e
     }
 
     /// Create a PageTableEntry describing a page output address
-    fn page_entry(base_address: PhysicalAddress) -> PageTableEntry {
+    pub fn page_entry(base_address: PhysicalAddress) -> PageTableEntry {
         let mut e = PageTableEntry(0);
         e.set_valid(true);
         e.set_type(true);
-        e.set_address(base_address.0 as u64);
+        // first 12 bits are zero because the page must be page aligned??
+        e.set_address(base_address.0 as u64 >> 12);
         e
     }
 
-    fn invalid() -> PageTableEntry {
+    pub fn invalid() -> PageTableEntry {
         PageTableEntry(0)
     }
 

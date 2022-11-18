@@ -6,6 +6,8 @@
 
 use core::{fmt::Write, panic::PanicInfo};
 
+use crate::memory::PhysicalAddress;
+
 mod dtb;
 mod memory;
 mod uart;
@@ -76,12 +78,21 @@ pub extern "C" fn kmain() {
     //     log::info!("device tree item: {item:?}");
     // }
 
-    let mut phys_mem_al = memory::PhysicalMemoryAllocator::init(&dt);
+    // let mut phys_mem_al = memory::PhysicalMemoryAllocator::init(&dt);
+    //
+    // let addr = phys_mem_al.alloc_contig(3).unwrap();
+    // log::info!("allocated 3 pages at {}", addr);
+    // phys_mem_al.free_pages(addr, 3);
+    // log::info!("freed 3 pages at {}", addr);
 
-    let addr = phys_mem_al.alloc_contig(3).unwrap();
-    log::info!("allocated 3 pages at {}", addr);
-    phys_mem_al.free_pages(addr, 3);
-    log::info!("freed 3 pages at {}", addr);
+    let x = memory::paging::PageTableEntry::table_desc(PhysicalAddress(0xaaaa_bbbb_cccc_dddd));
+    log::info!("table desc = 0x{:016x}", x.0);
+    for lvl in 1..3 {
+        let x = memory::paging::PageTableEntry::block_entry(PhysicalAddress(0xaaaa_bbbb_cccc_dddd), lvl);
+        log::info!("block desc (lvl={lvl}) = 0x{:016x}", x.0);
+    }
+    let x = memory::paging::PageTableEntry::page_entry(PhysicalAddress(0xaaaa_bbbb_cccc_dddd));
+    log::info!("page desc = 0x{:016x}", x.0);
 
     halt();
 }
@@ -91,7 +102,7 @@ fn panic_handler(info: &PanicInfo) -> ! {
     let mut uart = DebugUart {
         base: 0x09000000 as *mut u8,
     };
-    let _ = uart.write_fmt(format_args!("panic! {info}"));
+    let _ = uart.write_fmt(format_args!("\npanic! {info}"));
     halt();
 }
 
