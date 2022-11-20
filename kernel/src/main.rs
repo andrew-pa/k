@@ -6,7 +6,7 @@
 
 use core::{fmt::Write, panic::PanicInfo};
 
-use crate::memory::{PhysicalAddress, physical_memory_allocator};
+use crate::memory::{paging::PageTable, physical_memory_allocator, PhysicalAddress, PAGE_SIZE};
 
 mod dtb;
 mod memory;
@@ -78,7 +78,9 @@ pub extern "C" fn kmain() {
     //     log::info!("device tree item: {item:?}");
     // }
 
-    unsafe { memory::init_physical_memory_allocator(&dt); }
+    unsafe {
+        memory::init_physical_memory_allocator(&dt);
+    }
 
     {
         let mut phys_mem_al = physical_memory_allocator();
@@ -91,11 +93,22 @@ pub extern "C" fn kmain() {
     let x = memory::paging::PageTableEntry::table_desc(PhysicalAddress(0xaaaa_bbbb_cccc_dddd));
     log::info!("table desc = 0x{:016x}", x.0);
     for lvl in 1..3 {
-        let x = memory::paging::PageTableEntry::block_entry(PhysicalAddress(0xaaaa_bbbb_cccc_dddd), lvl);
+        let x = memory::paging::PageTableEntry::block_entry(
+            PhysicalAddress(0xaaaa_bbbb_cccc_dddd),
+            lvl,
+        );
         log::info!("block desc (lvl={lvl}) = 0x{:016x}", x.0);
     }
     let x = memory::paging::PageTableEntry::page_entry(PhysicalAddress(0xaaaa_bbbb_cccc_dddd));
     log::info!("page desc = 0x{:016x}", x.0);
+
+    let (mem_start, mem_size) = {
+        let pma = physical_memory_allocator();
+        (pma.memory_start_addr(), pma.total_memory_size() / PAGE_SIZE)
+    };
+
+    let mut pt = PageTable::identity(false, mem_start, mem_size).expect("create page table");
+    log::info!("created page table {:?}", pt);
 
     halt();
 }

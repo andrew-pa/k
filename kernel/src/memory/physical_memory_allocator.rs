@@ -88,6 +88,14 @@ impl PhysicalMemoryAllocator {
         }
     }
 
+    pub fn memory_start_addr(&self) -> PhysicalAddress {
+        PhysicalAddress(self.memory_start)
+    }
+
+    pub fn total_memory_size(&self) -> usize {
+        self.memory_length
+    }
+
     pub fn alloc(&mut self) -> Result<PhysicalAddress, MemoryError> {
         self.alloc_contig(1)
     }
@@ -160,7 +168,8 @@ pub unsafe fn init_physical_memory_allocator(device_tree: &DeviceTree) {
 
 pub fn physical_memory_allocator() -> spin::MutexGuard<'static, PhysicalMemoryAllocator> {
     unsafe {
-        PMA.as_ref().expect("physical memory allocator initalized").lock()
+        PMA.as_ref()
+            .expect("physical memory allocator initalized")
+            .lock()
     }
 }
-

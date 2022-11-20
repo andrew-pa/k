@@ -3,11 +3,13 @@ use core::ops::Range;
 
 use bitfield::bitfield;
 
-use super::{MemoryError, PhysicalAddress, PhysicalMemoryAllocator, VirtualAddress, PAGE_SIZE, physical_memory_allocator};
+use super::{
+    physical_memory_allocator, MemoryError, PhysicalAddress, PhysicalMemoryAllocator,
+    VirtualAddress, PAGE_SIZE,
+};
 
 bitfield! {
     pub struct PageTableEntry(u64);
-    impl Debug;
     u8;
     valid, set_valid: 0;
     get_type, set_type: 1;
@@ -41,7 +43,8 @@ impl PageTableEntry {
                     1 => 0xffff_ffff_f000_0000,
                     2 => 0xffff_ffff_fff0_0000,
                     _ => panic!("invalid page level {}", level),
-                })) >> 12,
+                }))
+                >> 12,
         );
         e
     }
@@ -83,7 +86,7 @@ impl PageTableEntry {
         if !self.valid() || !self.get_type() {
             return None; // invalid or block entry
         }
-        Some(PhysicalAddress(self.address() as usize))
+        Some(PhysicalAddress((self.address() as usize) << 12))
     }
 
     fn base_address(&self, lvl: u8) -> Option<PhysicalAddress> {
@@ -113,6 +116,7 @@ impl core::ops::IndexMut<usize> for LevelTable {
 }
 
 // WARN: Currently assumes that physical memory is identity mapped in the 0x0000 prefix!
+#[derive(Debug)]
 pub struct PageTable {
     /// true => this page table is for virtual addresses of prefix 0xffff, false => prefix must be 0x0000
     high_addresses: bool,
@@ -120,6 +124,7 @@ pub struct PageTable {
     level0_phy_addr: PhysicalAddress,
 }
 
+#[derive(Debug)]
 pub enum MapError {
     RangeAlreadyMapped {
         virt_start: VirtualAddress,
@@ -138,9 +143,7 @@ pub enum MapError {
 }
 
 impl PageTable {
-    pub fn empty(
-        high_addresses: bool,
-    ) -> Result<PageTable, MemoryError> {
+    pub fn empty(high_addresses: bool) -> Result<PageTable, MemoryError> {
         let level0_phy_addr = Self::allocate_table()?;
         Ok(PageTable {
             high_addresses,
@@ -160,7 +163,14 @@ impl PageTable {
     }
 
     pub unsafe fn activate(&self) {
-        todo!()
+        if !self.high_addresses {
+            core::arch::asm!("msr TBR0_EL1, {addr}",
+                addr = in(reg) self.level0_phy_addr.0)
+        } else {
+            core::arch::asm!("msr TBR1_EL1, {addr}",
+                addr = in(reg) self.level0_phy_addr.0)
+        }
+        core::arch::asm!("isb");
     }
 
     fn allocate_table() -> Result<PhysicalAddress, MemoryError> {
@@ -233,6 +243,7 @@ impl PageTable {
         'top: while page_index < page_count {
             let page_start = VirtualAddress(virt_start.0 + page_index * PAGE_SIZE);
             let (tag, i0, i1, i2, i3, po) = page_start.to_parts();
+            log::trace!("mapping page {page_start}=[{tag:x}:{i0:x}:{i1:x}:{i2:x}:{i3:x}:{po:x}], {} pages left", page_count - page_index);
             let mut table = self.level0_table;
             // TODO: surely there is a clean way to generate this slice with iterators?
             for (lvl, i, can_allocate_large_block, large_block_size) in [
@@ -337,11 +348,7 @@ impl PageTable {
 impl Drop for PageTable {
     fn drop(&mut self) {
         // Does not drop actual pages!
-        fn drop_table(
-            lvl: u8,
-            table: *mut LevelTable,
-            table_phy_addr: PhysicalAddress,
-        ) {
+        fn drop_table(lvl: u8, table: *mut LevelTable, table_phy_addr: PhysicalAddress) {
             for entry in unsafe { &table.as_ref().expect("table ptr is valid").entries } {
                 if let Some(table) = entry.table_ref(lvl) {
                     // we know that entry.table_phy_addr() will actually point to a table because we've already called table_ref()
@@ -350,10 +357,49 @@ impl Drop for PageTable {
             }
             physical_memory_allocator().free(table_phy_addr)
         }
-        drop_table(
-            0,
-            self.level0_table,
-            self.level0_phy_addr,
-        );
+        drop_table(0, self.level0_table, self.level0_phy_addr);
     }
+}
+
+pub unsafe fn enable_mmu() {
+    log::debug!("enabling MMU!");
+    core::arch::asm!(
+        "mrs {tmp}, SCTLR_EL1", //read existing SCTLR_EL1 configuration
+        "orr {tmp}, {tmp}, #1", //set MMU enable bit
+        "msr SCTLR_EL1, {tmp}", //write SCTLR_EL1 back
+        "isb",                  //force changes to get picked up on the next instruction
+        tmp = out(reg) _
+    )
+}
+
+bitfield! {
+    pub struct TranslationControlReg(u64);
+    u8;
+    pub top_byte_ignore1, set_top_byte_ignore1: 38;
+    pub top_byte_ignore0, set_top_byte_ignore0: 37;
+    pub asid_size, set_asid_size: 36;
+    pub ipas, set_ipas: 34, 32;
+
+    pub granule_size1, set_granule_size1: 31, 30;
+    pub shareability1, set_shareability1: 29, 28;
+    pub outer_cacheablity1, set_outer_cacheablity1: 27, 26;
+    pub inner_cacheablity1, set_inner_cacheablity1: 27, 26;
+    pub walk_on_miss1, set_walk_on_miss1: 23;
+    pub a1, set_a1: 22;
+    pub size_offset1, set_size_offset1: 21, 16;
+
+    pub granule_size0, set_granule_size0: 15, 14;
+    pub shareability0, set_shareability0: 13, 12;
+    pub outer_cacheablity0, set_outer_cacheablity0: 11, 10;
+    pub inner_cacheablity0, set_inner_cacheablity0: 9, 8;
+    pub walk_on_miss0, set_walk_on_miss0: 7;
+    pub size_offset0, set_size_offset0: 5, 0;
+}
+
+pub unsafe fn set_tcr(new_tcr: TranslationControlReg) {
+    core::arch::asm!(
+        "msr TCR_EL1, {val}",
+        "isb",
+        val = in(reg) new_tcr.0
+    )
 }
