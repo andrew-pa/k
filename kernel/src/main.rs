@@ -6,7 +6,7 @@
 
 use core::{fmt::Write, panic::PanicInfo};
 
-use crate::memory::PhysicalAddress;
+use crate::memory::{PhysicalAddress, physical_memory_allocator};
 
 mod dtb;
 mod memory;
@@ -78,12 +78,15 @@ pub extern "C" fn kmain() {
     //     log::info!("device tree item: {item:?}");
     // }
 
-    // let mut phys_mem_al = memory::PhysicalMemoryAllocator::init(&dt);
-    //
-    // let addr = phys_mem_al.alloc_contig(3).unwrap();
-    // log::info!("allocated 3 pages at {}", addr);
-    // phys_mem_al.free_pages(addr, 3);
-    // log::info!("freed 3 pages at {}", addr);
+    unsafe { memory::init_physical_memory_allocator(&dt); }
+
+    {
+        let mut phys_mem_al = physical_memory_allocator();
+        let addr = phys_mem_al.alloc_contig(3).unwrap();
+        log::info!("allocated 3 pages at {}", addr);
+        phys_mem_al.free_pages(addr, 3);
+        log::info!("freed 3 pages at {}", addr);
+    }
 
     let x = memory::paging::PageTableEntry::table_desc(PhysicalAddress(0xaaaa_bbbb_cccc_dddd));
     log::info!("table desc = 0x{:016x}", x.0);

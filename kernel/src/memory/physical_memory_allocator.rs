@@ -1,9 +1,12 @@
+use core::sync::atomic::{AtomicBool, AtomicUsize};
+
 use crate::{
     dtb::{DeviceTree, StructureItem},
     memory::{__kernel_end, __kernel_start, PAGE_SIZE},
 };
 use bitvec::{index::BitIdx, prelude::*};
 use byteorder::{BigEndian, ByteOrder};
+use spin::Mutex;
 
 use super::{MemoryError, PhysicalAddress};
 
@@ -14,7 +17,7 @@ pub struct PhysicalMemoryAllocator {
 }
 
 impl PhysicalMemoryAllocator {
-    pub fn init(device_tree: &DeviceTree) -> PhysicalMemoryAllocator {
+    fn init(device_tree: &DeviceTree) -> PhysicalMemoryAllocator {
         // for now, find the first memory node and use it to determine how big RAM is
         let memory_props = device_tree
             .iter_structure()
@@ -147,3 +150,17 @@ impl PhysicalMemoryAllocator {
         }
     }
 }
+
+static mut PMA: Option<Mutex<PhysicalMemoryAllocator>> = None;
+
+/// SAFETY: Not thread safe!
+pub unsafe fn init_physical_memory_allocator(device_tree: &DeviceTree) {
+    PMA = Some(Mutex::new(PhysicalMemoryAllocator::init(device_tree)));
+}
+
+pub fn physical_memory_allocator() -> spin::MutexGuard<'static, PhysicalMemoryAllocator> {
+    unsafe {
+        PMA.as_ref().expect("physical memory allocator initalized").lock()
+    }
+}
+

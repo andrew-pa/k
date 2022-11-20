@@ -3,7 +3,7 @@ use core::ops::Range;
 
 use bitfield::bitfield;
 
-use super::{MemoryError, PhysicalAddress, PhysicalMemoryAllocator, VirtualAddress, PAGE_SIZE};
+use super::{MemoryError, PhysicalAddress, PhysicalMemoryAllocator, VirtualAddress, PAGE_SIZE, physical_memory_allocator};
 
 bitfield! {
     pub struct PageTableEntry(u64);
@@ -113,10 +113,9 @@ impl core::ops::IndexMut<usize> for LevelTable {
 }
 
 // WARN: Currently assumes that physical memory is identity mapped in the 0x0000 prefix!
-pub struct PageTable<'a> {
+pub struct PageTable {
     /// true => this page table is for virtual addresses of prefix 0xffff, false => prefix must be 0x0000
     high_addresses: bool,
-    phys_page_alloc: &'a mut PhysicalMemoryAllocator,
     level0_table: *mut LevelTable,
     level0_phy_addr: PhysicalAddress,
 }
@@ -138,33 +137,24 @@ pub enum MapError {
     Memory(MemoryError),
 }
 
-impl<'a> PageTable<'a> {
+impl PageTable {
     pub fn empty(
-        phys_page_alloc: &'a mut PhysicalMemoryAllocator,
         high_addresses: bool,
-    ) -> Result<PageTable<'a>, MemoryError> {
-        let level0_phy_addr = phys_page_alloc.alloc()?;
-        let l0_ref = unsafe {
-            // WARN: Assume that memory is identity mapped!
-            let table_ptr: *mut LevelTable = VirtualAddress(level0_phy_addr.0).as_ptr();
-            core::ptr::write_bytes(table_ptr, 0, core::mem::size_of::<LevelTable>());
-            table_ptr
-        };
+    ) -> Result<PageTable, MemoryError> {
+        let level0_phy_addr = Self::allocate_table()?;
         Ok(PageTable {
             high_addresses,
-            phys_page_alloc,
-            level0_table: l0_ref,
+            level0_table: level0_phy_addr.0 as *mut LevelTable,
             level0_phy_addr,
         })
     }
 
     pub fn identity(
-        phys_page_alloc: &'a mut PhysicalMemoryAllocator,
         high_addresses: bool,
         start_addr: PhysicalAddress,
         page_count: usize,
-    ) -> Result<PageTable<'a>, MapError> {
-        let mut p = PageTable::empty(phys_page_alloc, high_addresses).map_err(MapError::Memory)?;
+    ) -> Result<PageTable, MapError> {
+        let mut p = PageTable::empty(high_addresses).map_err(MapError::Memory)?;
         p.map_range(start_addr, VirtualAddress(start_addr.0), page_count, true)?;
         Ok(p)
     }
@@ -173,8 +163,8 @@ impl<'a> PageTable<'a> {
         todo!()
     }
 
-    fn allocate_table(&mut self) -> Result<PhysicalAddress, MemoryError> {
-        let new_page_phy_addr = self.phys_page_alloc.alloc()?;
+    fn allocate_table() -> Result<PhysicalAddress, MemoryError> {
+        let new_page_phy_addr = physical_memory_allocator().alloc()?;
         unsafe {
             // WARN: Assume that memory is identity mapped!
             let table_ptr: *mut LevelTable = VirtualAddress(new_page_phy_addr.0).as_ptr();
@@ -264,7 +254,7 @@ impl<'a> PageTable<'a> {
                         continue 'top;
                     } else {
                         tr[i] = PageTableEntry::table_desc(
-                            self.allocate_table().map_err(MapError::Memory)?,
+                            Self::allocate_table().map_err(MapError::Memory)?,
                         );
                         table = tr[i].table_ref(lvl).unwrap();
                     }
@@ -344,28 +334,26 @@ impl<'a> PageTable<'a> {
     }
 }
 
-impl Drop for PageTable<'_> {
+impl Drop for PageTable {
     fn drop(&mut self) {
         // Does not drop actual pages!
         fn drop_table(
             lvl: u8,
             table: *mut LevelTable,
             table_phy_addr: PhysicalAddress,
-            src_alloc: &mut PhysicalMemoryAllocator,
         ) {
             for entry in unsafe { &table.as_ref().expect("table ptr is valid").entries } {
                 if let Some(table) = entry.table_ref(lvl) {
                     // we know that entry.table_phy_addr() will actually point to a table because we've already called table_ref()
-                    drop_table(lvl + 1, table, entry.table_phy_addr().unwrap(), src_alloc);
+                    drop_table(lvl + 1, table, entry.table_phy_addr().unwrap());
                 }
             }
-            src_alloc.free(table_phy_addr)
+            physical_memory_allocator().free(table_phy_addr)
         }
         drop_table(
             0,
             self.level0_table,
             self.level0_phy_addr,
-            self.phys_page_alloc,
         );
     }
 }
