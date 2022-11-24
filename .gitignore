@@ -1,4 +1,5 @@
 .build/
 .ninja_log
 kernel/target
+ref/*.pdf
 

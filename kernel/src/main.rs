@@ -6,7 +6,7 @@
 
 use core::{fmt::Write, panic::PanicInfo};
 
-use crate::memory::{paging::PageTable, physical_memory_allocator, PhysicalAddress, PAGE_SIZE};
+use crate::memory::{paging::{PageTable, TranslationControlReg}, physical_memory_allocator, PhysicalAddress, PAGE_SIZE, VirtualAddress};
 
 mod dtb;
 mod memory;
@@ -107,8 +107,38 @@ pub extern "C" fn kmain() {
         (pma.memory_start_addr(), pma.total_memory_size() / PAGE_SIZE)
     };
 
-    let mut pt = PageTable::identity(false, mem_start, mem_size).expect("create page table");
-    log::info!("created page table {:?}", pt);
+    let mut identity_map = PageTable::identity(false, mem_start, mem_size).expect("create page table");
+    log::info!("created page table {:?}", identity_map);
+
+    let mut test_map = PageTable::empty(true).expect("create page table");
+    let test_page = {
+        physical_memory_allocator().alloc().expect("allocate test page")
+    };
+    test_map.map_range(test_page, VirtualAddress(0xffff_0000_0000_0000), 1, true).expect("map range");
+    log::info!("created page table {:?}", test_map);
+
+    // load page tables and activate MMU
+    log::info!("activating virtual memory!");
+    unsafe {
+        identity_map.activate();
+        test_map.activate();
+        let mut tcr = TranslationControlReg(0);
+        memory::paging::set_tcr(tcr);
+        memory::paging::enable_mmu();
+    }
+    log::info!("virtual memory activated!");
+
+    let test_ptr_h = (0xffff_0000_0000_0000) as *mut usize;
+    // due to the identity mapping, we can still read the physical address
+    let test_ptr_l = (test_page.0) as *mut usize;
+    unsafe {
+        let v = 0xabab_bcbc_cdcd_dede;
+        test_ptr_h.write(v);
+        assert_eq!(v, test_ptr_l.read());
+        let v = !v;
+        test_ptr_l.write(v);
+        assert_eq!(v, test_ptr_h.read());
+    }
 
     halt();
 }

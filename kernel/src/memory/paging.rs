@@ -396,6 +396,15 @@ bitfield! {
     pub size_offset0, set_size_offset0: 5, 0;
 }
 
+pub unsafe fn get_tcr() -> TranslationControlReg {
+    let mut tcr = TranslationControlReg(0);
+    core::arch::asm!(
+        "mrs {val}, TCR_EL1",
+        val = out(reg) tcr.0
+    );
+    tcr
+}
+
 pub unsafe fn set_tcr(new_tcr: TranslationControlReg) {
     core::arch::asm!(
         "msr TCR_EL1, {val}",
