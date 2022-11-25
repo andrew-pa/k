@@ -123,6 +123,19 @@ pub extern "C" fn kmain() {
         identity_map.activate();
         test_map.activate();
         let mut tcr = TranslationControlReg(0);
+        tcr.set_ha(true);
+        tcr.set_hd(true);
+        tcr.set_hpd1(true);
+        tcr.set_hpd0(true);
+        tcr.set_ipas(0b101); //48bits, 256TB
+        tcr.set_granule_size1(0b10); // 4KiB
+        tcr.set_granule_size0(0b10); // 4KiB
+        tcr.set_a1(false);
+        tcr.set_size_offset1(16);
+        tcr.set_size_offset0(16);
+        tcr.set_outer_cacheablity1(0b01); // Write-Back, always allocate
+        tcr.set_inner_cacheablity1(0b01);
+        tcr.set_inner_cacheablity0(0b01);
         memory::paging::set_tcr(tcr);
         memory::paging::enable_mmu();
     }

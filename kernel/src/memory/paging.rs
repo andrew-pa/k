@@ -164,10 +164,10 @@ impl PageTable {
 
     pub unsafe fn activate(&self) {
         if !self.high_addresses {
-            core::arch::asm!("msr TBR0_EL1, {addr}",
+            core::arch::asm!("msr TTBR0_EL1, {addr}",
                 addr = in(reg) self.level0_phy_addr.0)
         } else {
-            core::arch::asm!("msr TBR1_EL1, {addr}",
+            core::arch::asm!("msr TTBR1_EL1, {addr}",
                 addr = in(reg) self.level0_phy_addr.0)
         }
         core::arch::asm!("isb");
@@ -375,6 +375,20 @@ pub unsafe fn enable_mmu() {
 bitfield! {
     pub struct TranslationControlReg(u64);
     u8;
+    pub ds, set_ds: 59;
+    pub tcma1, set_tcma1: 58;
+    pub tcma0, set_tcma0: 57;
+    pub e0pd1, set_e0pd1: 56;
+    pub e0pd0, set_e0pd0: 55;
+    pub nfd1, set_nfd1: 54;
+    pub nfd0, set_nfd0: 53;
+    pub tbid1, set_tbid1: 52;
+    pub tbid0, set_tbid0: 51;
+    pub hardware_use_enable, set_hardware_use_enable: 50, 43;
+    pub hpd1, set_hpd1: 42;
+    pub hpd0, set_hpd0: 41;
+    pub hd, set_hd: 40;
+    pub ha, set_ha: 39;
     pub top_byte_ignore1, set_top_byte_ignore1: 38;
     pub top_byte_ignore0, set_top_byte_ignore0: 37;
     pub asid_size, set_asid_size: 36;
@@ -384,7 +398,7 @@ bitfield! {
     pub shareability1, set_shareability1: 29, 28;
     pub outer_cacheablity1, set_outer_cacheablity1: 27, 26;
     pub inner_cacheablity1, set_inner_cacheablity1: 27, 26;
-    pub walk_on_miss1, set_walk_on_miss1: 23;
+    pub epd1, set_epd1: 23;
     pub a1, set_a1: 22;
     pub size_offset1, set_size_offset1: 21, 16;
 
@@ -392,7 +406,7 @@ bitfield! {
     pub shareability0, set_shareability0: 13, 12;
     pub outer_cacheablity0, set_outer_cacheablity0: 11, 10;
     pub inner_cacheablity0, set_inner_cacheablity0: 9, 8;
-    pub walk_on_miss0, set_walk_on_miss0: 7;
+    pub epd0, set_epd0: 7;
     pub size_offset0, set_size_offset0: 5, 0;
 }
 
