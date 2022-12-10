@@ -2,6 +2,7 @@
 #![no_main]
 #![feature(int_roundings)]
 #![feature(lang_items)]
+#![feature(is_some_and)]
 #![recursion_limit = "256"]
 
 use core::{fmt::Write, panic::PanicInfo};
@@ -72,6 +73,20 @@ pub extern "C" fn kmain() {
     log::set_max_level(log::LevelFilter::Trace);
     log::info!("starting kernel!");
 
+    let mut current_el = 0usize;
+    unsafe {
+        core::arch::asm!(
+            "mrs {val}, CurrentEL",
+            val = out(reg) current_el
+        );
+    }
+    current_el >>= 2;
+    log::info!("current EL = {current_el}");
+
+    if current_el != 1 {
+        todo!("switch from {current_el} to EL1 at boot");
+    }
+
     let dt = unsafe { dtb::DeviceTree::at_address(0x4000_0000 as *mut u8) };
 
     // for item in dt.iter_structure() {
@@ -81,62 +96,114 @@ pub extern "C" fn kmain() {
     unsafe {
         memory::init_physical_memory_allocator(&dt);
     }
-
-    {
-        let mut phys_mem_al = physical_memory_allocator();
-        let addr = phys_mem_al.alloc_contig(3).unwrap();
-        log::info!("allocated 3 pages at {}", addr);
-        phys_mem_al.free_pages(addr, 3);
-        log::info!("freed 3 pages at {}", addr);
-    }
-
-    let x = memory::paging::PageTableEntry::table_desc(PhysicalAddress(0xaaaa_bbbb_cccc_dddd));
-    log::info!("table desc = 0x{:016x}", x.0);
-    for lvl in 1..3 {
-        let x = memory::paging::PageTableEntry::block_entry(
-            PhysicalAddress(0xaaaa_bbbb_cccc_dddd),
-            lvl,
-        );
-        log::info!("block desc (lvl={lvl}) = 0x{:016x}", x.0);
-    }
-    let x = memory::paging::PageTableEntry::page_entry(PhysicalAddress(0xaaaa_bbbb_cccc_dddd));
-    log::info!("page desc = 0x{:016x}", x.0);
-
+    //
+    // {
+    //     let mut phys_mem_al = physical_memory_allocator();
+    //     let addr = phys_mem_al.alloc_contig(3).unwrap();
+    //     log::info!("allocated 3 pages at {}", addr);
+    //     phys_mem_al.free_pages(addr, 3);
+    //     log::info!("freed 3 pages at {}", addr);
+    // }
+    //
+    // let x = memory::paging::PageTableEntry::table_desc(PhysicalAddress(0xaaaa_bbbb_cccc_dddd));
+    // log::info!("table desc = 0x{:016x}", x.0);
+    // for lvl in 1..3 {
+    //     let x = memory::paging::PageTableEntry::block_entry(
+    //         PhysicalAddress(0xaaaa_bbbb_cccc_dddd),
+    //         lvl,
+    //     );
+    //     log::info!("block desc (lvl={lvl}) = 0x{:016x}", x.0);
+    // }
+    // let x = memory::paging::PageTableEntry::page_entry(PhysicalAddress(0xaaaa_bbbb_cccc_dddd));
+    // log::info!("page desc = 0x{:016x}", x.0);
+    //
     let (mem_start, mem_size) = {
         let pma = physical_memory_allocator();
         (pma.memory_start_addr(), pma.total_memory_size() / PAGE_SIZE)
     };
 
     let mut identity_map = PageTable::identity(false, mem_start, mem_size).expect("create page table");
-    log::info!("created page table {:?}", identity_map);
+    // make sure to keep the UART mapped
+    identity_map.map_range(PhysicalAddress(0x09000000), VirtualAddress(0x09000000), 1, true).expect("map uart");
+    log::info!("created page table {:#?}", identity_map);
 
     let mut test_map = PageTable::empty(true).expect("create page table");
     let test_page = {
         physical_memory_allocator().alloc().expect("allocate test page")
     };
     test_map.map_range(test_page, VirtualAddress(0xffff_0000_0000_0000), 1, true).expect("map range");
-    log::info!("created page table {:?}", test_map);
+    log::info!("created page table {:#?}", test_map);
+
+    // assert_eq!(identity_map.physical_address_of(VirtualAddress(0x46ff4400)), Some(PhysicalAddress(0x46ff4400)));
+
+    let mut mmfr_el1 = 0usize;
+    unsafe {
+        core::arch::asm!(
+            "mrs {val}, ID_AA64MMFR0_EL1",
+            val = out(reg) mmfr_el1
+        );
+    }
+    log::debug!("MMFR0_EL1 = {:64b}", mmfr_el1);
+
+    let mut ttbr0_el1 = 0usize;
+    unsafe {
+        core::arch::asm!(
+            "mrs {val}, TTBR0_EL1",
+            val = out(reg) ttbr0_el1
+        );
+    }
+    log::debug!("TTBR0_EL1 = {:16x}", ttbr0_el1);
+
+    let mut ttbr1_el1 = 0usize;
+    unsafe {
+        core::arch::asm!(
+            "mrs {val}, TTBR1_EL1",
+            val = out(reg) ttbr1_el1
+        );
+    }
+    log::debug!("TTBR1_EL1 = {:16x}", ttbr1_el1);
+
+    unsafe { memory::paging::disable_mmu(); }
+
+    let mut sctlr_el1 = 0usize;
+    unsafe {
+        core::arch::asm!(
+            "mrs {val}, SCTLR_EL1",
+            val = out(reg) sctlr_el1
+        );
+    }
+    log::debug!("SCTLR_EL1 = {sctlr_el1:64b}");
+    let otcr = unsafe { memory::paging::get_tcr() };
+    log::debug!("TCR_EL1  = {:16x} {:?}", otcr.0, otcr);
+
+    let mut tcr = TranslationControlReg(0);
+    tcr.set_ha(true);
+    tcr.set_hd(true);
+    tcr.set_hpd1(true);
+    tcr.set_hpd0(true);
+    tcr.set_ipas(0b100); //44bits, 16TB. This is what MMFR0_EL1 says in QEMU
+    tcr.set_granule_size1(0b10); // 4KiB
+    tcr.set_granule_size0(0b00); // 4KiB
+    tcr.set_a1(false);
+    tcr.set_size_offset1(16);
+    tcr.set_size_offset0(16);
+    tcr.set_outer_cacheablity1(0b01); // Write-Back, always allocate
+    tcr.set_inner_cacheablity1(0b01);
+    tcr.set_outer_cacheablity0(0b01);
+    tcr.set_inner_cacheablity0(0b01);
+    tcr.set_shareability0(0b11);
+    log::trace!("TCR_EL1' = {:16x} {:?}", tcr.0, tcr);
+    log::trace!("{:16x}", otcr.0 ^ tcr.0);
 
     // load page tables and activate MMU
     log::info!("activating virtual memory!");
     unsafe {
         identity_map.activate();
+        log::trace!("identity map activated");
         test_map.activate();
-        let mut tcr = TranslationControlReg(0);
-        tcr.set_ha(true);
-        tcr.set_hd(true);
-        tcr.set_hpd1(true);
-        tcr.set_hpd0(true);
-        tcr.set_ipas(0b101); //48bits, 256TB
-        tcr.set_granule_size1(0b10); // 4KiB
-        tcr.set_granule_size0(0b10); // 4KiB
-        tcr.set_a1(false);
-        tcr.set_size_offset1(16);
-        tcr.set_size_offset0(16);
-        tcr.set_outer_cacheablity1(0b01); // Write-Back, always allocate
-        tcr.set_inner_cacheablity1(0b01);
-        tcr.set_inner_cacheablity0(0b01);
+        log::trace!("test map activated");
         memory::paging::set_tcr(tcr);
+        log::trace!("TCR set");
         memory::paging::enable_mmu();
     }
     log::info!("virtual memory activated!");
@@ -152,6 +219,8 @@ pub extern "C" fn kmain() {
         test_ptr_l.write(v);
         assert_eq!(v, test_ptr_h.read());
     }
+
+    log::info!("everything works!");
 
     halt();
 }

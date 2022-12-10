@@ -23,11 +23,11 @@ pub unsafe fn zero_bss_section() {
 // M1 Macs use 16kB pages though I think?? Switching is probably not that hard for a from-scratch project
 pub const PAGE_SIZE: usize = 4 * 1024;
 
-#[derive(Copy, Clone, Debug, Display)]
+#[derive(Copy, Clone, Display, PartialEq, Eq)]
 #[display(fmt = "p:0x{:x}", _0)]
 pub struct PhysicalAddress(pub usize);
 
-#[derive(Copy, Clone, Debug, Display)]
+#[derive(Copy, Clone, Display, PartialEq, Eq)]
 #[display(fmt = "v:0x{:x}", _0)]
 pub struct VirtualAddress(pub usize);
 
@@ -63,6 +63,18 @@ impl VirtualAddress {
 
     pub fn as_ptr<T>(&self) -> *mut T {
         self.0 as *mut T
+    }
+}
+
+impl core::fmt::Debug for PhysicalAddress {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "p:0x{:x}", self.0)
+    }
+}
+
+impl core::fmt::Debug for VirtualAddress {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "v:0x{:x}", self.0)
     }
 }
 

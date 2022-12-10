@@ -10,14 +10,14 @@ use super::{
 
 bitfield! {
     pub struct PageTableEntry(u64);
-    u8;
-    valid, set_valid: 0;
-    get_type, set_type: 1;
-    u16, low_attrb, set_low_attrb: 11, 2;
-    //get_res0, set_res0: 12, 12; -- only needed for >4KB pages
-    u64, address, set_address: 47, 12;
-    res0, set_res0: 49, 48;
+    u64;
     high_attrb, set_high_attrb: 63, 50;
+    res0, set_res0: 49, 48;
+    address, set_address: 47, 12;
+    //get_res0, set_res0: 12, 12; -- only needed for >4KB pages
+    u16, low_attrb, set_low_attrb: 11, 2;
+    get_type, set_type: 1;
+    valid, set_valid: 0;
 }
 
 impl PageTableEntry {
@@ -33,7 +33,7 @@ impl PageTableEntry {
 
     /// Create a PageTableEntry describing a block output address
     pub fn block_entry(base_address: PhysicalAddress, level: u8) -> PageTableEntry {
-        let mut e = PageTableEntry(0);
+        let mut e = PageTableEntry(1 << 10);
         e.set_valid(true);
         e.set_type(false);
         e.set_address(
@@ -51,7 +51,7 @@ impl PageTableEntry {
 
     /// Create a PageTableEntry describing a page output address
     pub fn page_entry(base_address: PhysicalAddress) -> PageTableEntry {
-        let mut e = PageTableEntry(0);
+        let mut e = PageTableEntry(1 << 10);
         e.set_valid(true);
         e.set_type(true);
         // first 12 bits are zero because the page must be page aligned??
@@ -97,6 +97,16 @@ impl PageTableEntry {
     }
 }
 
+impl core::fmt::Debug for PageTableEntry {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        if self.valid() {
+            write!(f, "{{{} ({:b}|{:b}.{:b}) @ 0x{:x}}}", if self.get_type() { "E" } else { "B" }, self.high_attrb(), self.res0(), self.low_attrb(), self.address())
+        } else {
+            write!(f, "{{invalid}}")
+        }
+    }
+}
+
 struct LevelTable {
     entries: [PageTableEntry; 512],
 }
@@ -116,7 +126,6 @@ impl core::ops::IndexMut<usize> for LevelTable {
 }
 
 // WARN: Currently assumes that physical memory is identity mapped in the 0x0000 prefix!
-#[derive(Debug)]
 pub struct PageTable {
     /// true => this page table is for virtual addresses of prefix 0xffff, false => prefix must be 0x0000
     high_addresses: bool,
@@ -142,7 +151,49 @@ pub enum MapError {
     Memory(MemoryError),
 }
 
+impl core::fmt::Debug for PageTable {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "PageTable@{} ({}) [\n", self.level0_phy_addr, if self.high_addresses { "H" } else { "L" })?;
+        fn print_table(f: &mut core::fmt::Formatter<'_>, lvl: u8, table: *mut LevelTable, table_phy_addr: PhysicalAddress) -> core::fmt::Result {
+            let mut entries = unsafe { &table.as_ref().expect("table ptr is valid").entries }.iter().peekable();
+            let mut index = 0;
+            while let Some(entry) = entries.next() {
+                for _ in 0..lvl {
+                    write!(f, "\t")?;
+                }
+                write!(f, "0x{index:x} {entry:?}")?;
+                if let Some(table) = entry.table_ref(lvl) {
+                    write!(f, " [\n")?;
+                    // we know that entry.table_phy_addr() will actually point to a table because we've already called table_ref()
+                    print_table(f, lvl + 1, table, entry.table_phy_addr().unwrap())?;
+                    for _ in 0..lvl {
+                        write!(f, "\t")?;
+                    }
+                    write!(f, "]")?;
+                }
+                if entries.peek().is_some_and(|ne| ne.0 == entry.0) {
+                    let mut n = 0;
+                    while entries.peek().is_some_and(|ne| ne.0 == entry.0) {
+                        entries.next();
+                        n += 1;
+                    }
+                    write!(f, "x{n}...")?;
+                }
+                write!(f, ",\n")?;
+                index += 1;
+            }
+            Ok(())
+        }
+        print_table(f, 0, self.level0_table, self.level0_phy_addr)?;
+        write!(f, "]")
+    }
+}
+
 impl PageTable {
+    pub unsafe fn at_address(high_addresses: bool, addr: PhysicalAddress) -> PageTable {
+        PageTable { high_addresses, level0_table: addr.0 as *mut LevelTable, level0_phy_addr: addr }
+    }
+
     pub fn empty(high_addresses: bool) -> Result<PageTable, MemoryError> {
         let level0_phy_addr = Self::allocate_table()?;
         Ok(PageTable {
@@ -163,14 +214,19 @@ impl PageTable {
     }
 
     pub unsafe fn activate(&self) {
+        // TODO: set ASID (address space ID), probably from a paramter, instead of setting it to 0
+        log::debug!("activating table @ {:x}", self.level0_phy_addr.0);
+        let v = self.level0_phy_addr.0; // CnP bit is set to zero by assumption rn, see D17.2.144
+                                        // for details about $x$
+        log::debug!("TTBRx_EL1 ← {:16x}", v);
         if !self.high_addresses {
             core::arch::asm!("msr TTBR0_EL1, {addr}",
-                addr = in(reg) self.level0_phy_addr.0)
+                addr = in(reg) v)
         } else {
             core::arch::asm!("msr TTBR1_EL1, {addr}",
-                addr = in(reg) self.level0_phy_addr.0)
+                addr = in(reg) v)
         }
-        core::arch::asm!("isb");
+        // core::arch::asm!("isb");
     }
 
     fn allocate_table() -> Result<PhysicalAddress, MemoryError> {
@@ -314,6 +370,7 @@ impl PageTable {
     /// the virtual address would result in a page fault, `None` is returned
     pub fn physical_address_of(&self, virt: VirtualAddress) -> Option<PhysicalAddress> {
         let (tag, i0, i1, i2, i3, po) = virt.to_parts();
+        log::trace!("[{tag:x}:{i0:x}:{i1:x}:{i2:x}:{i3:x}:{po:x}]");
 
         match (self.high_addresses, tag) {
             (true, 0xffff) | (false, 0x0) => {}
@@ -327,13 +384,18 @@ impl PageTable {
             (2, i2, 512),       // 2MiB in pages
             (3, i3, 1),
         ] {
+            log::debug!("lvl={lvl:x}, i={i}, block_size={block_size}");
             let tr = unsafe { table.as_ref().expect("table ptr is valid") };
+            log::debug!("{table:?}");
             if let Some(existing_table) = tr[i].table_ref(lvl) {
                 table = existing_table;
             } else {
+                log::debug!("{:x}", tr[i].0);
+                //TODO: this isn't correct if this is a block because it should
+                //include bits from i1/i2/i3 in the page/block offset
                 return tr[i]
                     .base_address(lvl)
-                    .map(|PhysicalAddress(addr)| PhysicalAddress(addr + po));
+                    .map(|PhysicalAddress(addr)| PhysicalAddress(addr<<12 + po));
             }
         }
 
@@ -361,9 +423,22 @@ impl Drop for PageTable {
     }
 }
 
+pub unsafe fn disable_mmu() {
+    log::debug!("disabling MMU!");
+    core::arch::asm!(
+        "isb",
+        "mrs {tmp}, SCTLR_EL1", //read existing SCTLR_EL1 configuration
+        "bic {tmp}, {tmp}, #1", //clear MMU enable bit
+        "msr SCTLR_EL1, {tmp}", //write SCTLR_EL1 back
+        "isb",                  //force changes to get picked up on the next instruction
+        tmp = out(reg) _
+    )
+}
+
 pub unsafe fn enable_mmu() {
     log::debug!("enabling MMU!");
     core::arch::asm!(
+        "isb",
         "mrs {tmp}, SCTLR_EL1", //read existing SCTLR_EL1 configuration
         "orr {tmp}, {tmp}, #1", //set MMU enable bit
         "msr SCTLR_EL1, {tmp}", //write SCTLR_EL1 back
@@ -374,6 +449,7 @@ pub unsafe fn enable_mmu() {
 
 bitfield! {
     pub struct TranslationControlReg(u64);
+    impl Debug;
     u8;
     pub ds, set_ds: 59;
     pub tcma1, set_tcma1: 58;
@@ -420,9 +496,10 @@ pub unsafe fn get_tcr() -> TranslationControlReg {
 }
 
 pub unsafe fn set_tcr(new_tcr: TranslationControlReg) {
+    log::trace!("setting TCR to {:x}", new_tcr.0);
     core::arch::asm!(
         "msr TCR_EL1, {val}",
-        "isb",
+        // "isb",
         val = in(reg) new_tcr.0
     )
 }
