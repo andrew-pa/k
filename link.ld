@@ -1,5 +1,6 @@
 SECTIONS {
-    . = 0x44004400;
+    /* . = 0x44004400; */
+    . = 0xffff000000000000;
     __kernel_start = . ;
     .text : { *(.text .text.*) }
     .data : { *(.data .data.*) }
@@ -11,4 +12,4 @@ SECTIONS {
     }
     __kernel_end = . ;
 }
-ENTRY(kmain)
+ENTRY(_start)

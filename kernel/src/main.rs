@@ -5,13 +5,15 @@
 #![feature(is_some_and)]
 #![recursion_limit = "256"]
 
-use core::{fmt::Write, panic::PanicInfo};
+use core::{fmt::Write, panic::PanicInfo, arch::global_asm};
 
 use crate::memory::{paging::{PageTable, TranslationControlReg}, physical_memory_allocator, PhysicalAddress, PAGE_SIZE, VirtualAddress};
 
 mod dtb;
 mod memory;
 mod uart;
+
+global_asm!(include_str!("start.S"));
 
 struct DebugUart {
     base: *mut u8,
@@ -62,6 +64,18 @@ pub fn halt() -> ! {
     }
 }
 
+pub fn test_fn(id_map: &mut PageTable, mem_start: PhysicalAddress, page_count: usize) {
+    log::trace!("before unmap");
+
+    id_map.unmap_range(VirtualAddress(mem_start.0), page_count);
+
+    log::trace!("after unmap");
+
+    for i in 0..10 {
+        log::trace!("{i}");
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn kmain() {
     // make sure the BSS section is zeroed
@@ -96,27 +110,7 @@ pub extern "C" fn kmain() {
     unsafe {
         memory::init_physical_memory_allocator(&dt);
     }
-    //
-    // {
-    //     let mut phys_mem_al = physical_memory_allocator();
-    //     let addr = phys_mem_al.alloc_contig(3).unwrap();
-    //     log::info!("allocated 3 pages at {}", addr);
-    //     phys_mem_al.free_pages(addr, 3);
-    //     log::info!("freed 3 pages at {}", addr);
-    // }
-    //
-    // let x = memory::paging::PageTableEntry::table_desc(PhysicalAddress(0xaaaa_bbbb_cccc_dddd));
-    // log::info!("table desc = 0x{:016x}", x.0);
-    // for lvl in 1..3 {
-    //     let x = memory::paging::PageTableEntry::block_entry(
-    //         PhysicalAddress(0xaaaa_bbbb_cccc_dddd),
-    //         lvl,
-    //     );
-    //     log::info!("block desc (lvl={lvl}) = 0x{:016x}", x.0);
-    // }
-    // let x = memory::paging::PageTableEntry::page_entry(PhysicalAddress(0xaaaa_bbbb_cccc_dddd));
-    // log::info!("page desc = 0x{:016x}", x.0);
-    //
+
     let (mem_start, mem_size) = {
         let pma = physical_memory_allocator();
         (pma.memory_start_addr(), pma.total_memory_size() / PAGE_SIZE)
@@ -132,6 +126,9 @@ pub extern "C" fn kmain() {
         physical_memory_allocator().alloc().expect("allocate test page")
     };
     test_map.map_range(test_page, VirtualAddress(0xffff_0000_0000_0000), 1, true).expect("map range");
+
+    test_map.map_range(mem_start, VirtualAddress(0xffff_8000_0000_0000 + mem_start.0), mem_size, true).expect("second id mapping");
+
     log::info!("created page table {:#?}", test_map);
 
     // assert_eq!(identity_map.physical_address_of(VirtualAddress(0x46ff4400)), Some(PhysicalAddress(0x46ff4400)));
@@ -211,16 +208,25 @@ pub extern "C" fn kmain() {
     let test_ptr_h = (0xffff_0000_0000_0000) as *mut usize;
     // due to the identity mapping, we can still read the physical address
     let test_ptr_l = (test_page.0) as *mut usize;
+    let test_ptr_hi = (0xffff_8000_0000_0000 + test_page.0) as *mut usize;
     unsafe {
         let v = 0xabab_bcbc_cdcd_dede;
         test_ptr_h.write(v);
         assert_eq!(v, test_ptr_l.read());
+        assert_eq!(v, test_ptr_hi.read());
         let v = !v;
         test_ptr_l.write(v);
         assert_eq!(v, test_ptr_h.read());
+        assert_eq!(v, test_ptr_hi.read());
     }
 
     log::info!("everything works!");
+
+    let test_fn2: fn(&mut PageTable, PhysicalAddress, usize) = unsafe {
+        core::mem::transmute::<usize, fn(&mut PageTable, PhysicalAddress, usize)>(test_fn as usize + 0xffff_8000_0000_0000)
+    };
+
+    test_fn2(&mut identity_map, mem_start, mem_size);
 
     halt();
 }
@@ -237,6 +243,7 @@ fn panic_handler(info: &PanicInfo) -> ! {
 /* TODO:
  *  - initialize MMU & provide API for page allocation and changing page tables. also make sure reserved regions on memory are correctly mapped
  *      - you can identity map the page the instruction ptr is in and then jump elsewhere safely
+ *      - need to do initial mapping so that we can compile/link the kernel to run at high addresses
  *  - kernel heap/GlobalAlloc impl
  *  - set up interrupt handlers
  *  - start timer interrupt
