@@ -1,8 +1,11 @@
 SECTIONS {
     /* . = 0x44004400; */
-    . = 0xffff000000000000;
+    . = 0xffff000000000000 ;
     __kernel_start = . ;
-    .text : { *(.text .text.*) }
+    .text : {
+        *(.text._start)
+        *(.text .text.*)
+    }
     .data : { *(.data .data.*) }
     .rodata : { *(.rodata .rodata.*) }
     .bss : {
