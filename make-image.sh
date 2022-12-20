@@ -4,7 +4,7 @@
 GPREFIX=aarch64-linux-gnu-
 # BIN_NAME=/tmp/$(uuidgen).bin
 BIN_NAME=./.build/k.img
-LOAD_ADDR=44004400
+LOAD_ADDR=41000000
 
 echo "input elf  = ${1}"
 echo "output img = ${2}"

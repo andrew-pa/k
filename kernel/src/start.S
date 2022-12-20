@@ -38,17 +38,22 @@ _start:
     isb
 
     /* start the kernel, now running in the correct spot in virtual memory */
-    b kmain
+    adr x0, kmain
+    movz x1, #0xffff, lsl 48
+    add x0, x0, x1
+    br x0
     .quad 0xbeefbeefbeefbeef
 
 .section .data.boot
 
 .global _kernel_page_table_root
 
+.balign 4096
 _kernel_page_table_root:
     .quad 0
     .ds.d 511
 
+.balign 4096
 _kernel_id_map_level1_table:
     .quad 0
     .quad (0x40000000) | (1 << 10) | 1
