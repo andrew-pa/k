@@ -8,6 +8,11 @@ use super::{
     VirtualAddress, PAGE_SIZE,
 };
 
+// defined by start.S
+extern "C" {
+    static mut _kernel_page_table_root: u8;
+}
+
 bitfield! {
     pub struct PageTableEntry(u64);
     u64;
@@ -72,13 +77,15 @@ impl PageTableEntry {
         // One potential solution is to identity map (by necessity in the kernel's low address range)
         // all page tables, so that the physical and virtual addresses are always the same. Perhaps
         // that is jank, but it is *really* convenient. Potentially not so great for the TLB though?
+        // TODO: for now we are assuming that memory is identity mapped starting at
+        // 0xffff_0000_0000_0000virtual = 0x0physical
 
         if lvl >= 3 {
             return None;
         }
-        // this is safe, because at any level < 3 where table_phy_addr() is Some will have a pointer to a valid LevelTable
+        // this is safe, because at any level < 3 where table_phy_addr() is Some will have a pointer to a valid LevelTable -- so long at the identity mapping is set up correctly!
         self.table_phy_addr()
-            .map(|PhysicalAddress(a)| a as *mut LevelTable)
+            .map(|a| unsafe { a.to_virtual_canonical().as_ptr() })
     }
 
     /// WARN: may still return a Some(...) if the entry is actually a page descriptor! Call table_ref() first!
@@ -100,7 +107,15 @@ impl PageTableEntry {
 impl core::fmt::Debug for PageTableEntry {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         if self.valid() {
-            write!(f, "{{{} ({:b}|{:b}.{:b}) @ 0x{:x}}}", if self.get_type() { "E" } else { "B" }, self.high_attrb(), self.res0(), self.low_attrb(), self.address())
+            write!(
+                f,
+                "{{{} ({:b}|{:b}.{:b}) @ 0x{:x}}}",
+                if self.get_type() { "E" } else { "B" },
+                self.high_attrb(),
+                self.res0(),
+                self.low_attrb(),
+                self.address()
+            )
         } else {
             write!(f, "{{invalid}}")
         }
@@ -153,9 +168,21 @@ pub enum MapError {
 
 impl core::fmt::Debug for PageTable {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "PageTable@{} ({}) [\n", self.level0_phy_addr, if self.high_addresses { "H" } else { "L" })?;
-        fn print_table(f: &mut core::fmt::Formatter<'_>, lvl: u8, table: *mut LevelTable, table_phy_addr: PhysicalAddress) -> core::fmt::Result {
-            let mut entries = unsafe { &table.as_ref().expect("table ptr is valid").entries }.iter().peekable();
+        write!(
+            f,
+            "PageTable@{} ({}) [\n",
+            self.level0_phy_addr,
+            if self.high_addresses { "H" } else { "L" }
+        )?;
+        fn print_table(
+            f: &mut core::fmt::Formatter<'_>,
+            lvl: u8,
+            table: *mut LevelTable,
+            table_phy_addr: PhysicalAddress,
+        ) -> core::fmt::Result {
+            let mut entries = unsafe { &table.as_ref().expect("table ptr is valid").entries }
+                .iter()
+                .peekable();
             let mut index = 0;
             while let Some(entry) = entries.next() {
                 for _ in 0..lvl {
@@ -191,7 +218,21 @@ impl core::fmt::Debug for PageTable {
 
 impl PageTable {
     pub unsafe fn at_address(high_addresses: bool, addr: PhysicalAddress) -> PageTable {
-        PageTable { high_addresses, level0_table: addr.0 as *mut LevelTable, level0_phy_addr: addr }
+        PageTable {
+            high_addresses,
+            level0_table: unsafe { addr.to_virtual_canonical().as_ptr() },
+            level0_phy_addr: addr,
+        }
+    }
+
+    pub unsafe fn kernel_table() -> PageTable {
+        let level0_table = core::mem::transmute(&mut _kernel_page_table_root);
+
+        PageTable {
+            high_addresses: true,
+            level0_table,
+            level0_phy_addr: VirtualAddress::from(level0_table).to_physical_canonical(),
+        }
     }
 
     pub fn empty(high_addresses: bool) -> Result<PageTable, MemoryError> {
@@ -233,8 +274,8 @@ impl PageTable {
         let new_page_phy_addr = physical_memory_allocator().alloc()?;
         log::trace!("allocating new page table at {}", new_page_phy_addr);
         unsafe {
-            // WARN: Assume that memory is identity mapped!
-            let table_ptr: *mut LevelTable = VirtualAddress(new_page_phy_addr.0).as_ptr();
+            // WARN: Assume that memory is identity mapped in the high addresses!
+            let table_ptr: *mut LevelTable = new_page_phy_addr.to_virtual_canonical().as_ptr();
             core::ptr::write_bytes(table_ptr, 0, 1);
         }
         Ok(new_page_phy_addr)
@@ -397,7 +438,7 @@ impl PageTable {
                 //include bits from i1/i2/i3 in the page/block offset
                 return tr[i]
                     .base_address(lvl)
-                    .map(|PhysicalAddress(addr)| PhysicalAddress(addr<<12 + po));
+                    .map(|PhysicalAddress(addr)| PhysicalAddress(addr << 12 + po));
             }
         }
 

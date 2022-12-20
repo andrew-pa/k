@@ -5,9 +5,12 @@
 #![feature(is_some_and)]
 #![recursion_limit = "256"]
 
-use core::{fmt::Write, panic::PanicInfo, arch::global_asm};
+use core::{arch::global_asm, fmt::Write, panic::PanicInfo};
 
-use crate::memory::{paging::{PageTable, TranslationControlReg}, physical_memory_allocator, PhysicalAddress, PAGE_SIZE, VirtualAddress};
+use crate::memory::{
+    paging::{PageTable, TranslationControlReg},
+    physical_memory_allocator, PhysicalAddress, VirtualAddress, PAGE_SIZE,
+};
 
 mod dtb;
 mod memory;
@@ -118,118 +121,45 @@ pub extern "C" fn kmain() {
         (pma.memory_start_addr(), pma.total_memory_size() / PAGE_SIZE)
     };
 
-    let mut identity_map = PageTable::identity(false, mem_start, mem_size).expect("create page table");
+    let mut identity_map =
+        PageTable::identity(false, mem_start, mem_size).expect("create page table");
     // make sure to keep the UART mapped
-    identity_map.map_range(PhysicalAddress(0x09000000), VirtualAddress(0x09000000), 1, true).expect("map uart");
+    identity_map
+        .map_range(
+            PhysicalAddress(0x09000000),
+            VirtualAddress(0x09000000),
+            1,
+            true,
+        )
+        .expect("map uart");
     log::info!("created page table {:#?}", identity_map);
 
     let mut test_map = PageTable::empty(true).expect("create page table");
     let test_page = {
-        physical_memory_allocator().alloc().expect("allocate test page")
+        physical_memory_allocator()
+            .alloc()
+            .expect("allocate test page")
     };
-    test_map.map_range(test_page, VirtualAddress(0xffff_0000_0000_0000), 1, true).expect("map range");
+    test_map
+        .map_range(test_page, VirtualAddress(0xffff_0000_0000_0000), 1, true)
+        .expect("map range");
 
-    test_map.map_range(mem_start, VirtualAddress(0xffff_8000_0000_0000 + mem_start.0), mem_size, true).expect("second id mapping");
+    test_map
+        .map_range(
+            mem_start,
+            VirtualAddress(0xffff_8000_0000_0000 + mem_start.0),
+            mem_size,
+            true,
+        )
+        .expect("second id mapping");
 
     log::info!("created page table {:#?}", test_map);
 
-    // assert_eq!(identity_map.physical_address_of(VirtualAddress(0x46ff4400)), Some(PhysicalAddress(0x46ff4400)));
+    let mut kernel_map = unsafe { PageTable::kernel_table() };
 
-    let mut mmfr_el1 = 0usize;
-    unsafe {
-        core::arch::asm!(
-            "mrs {val}, ID_AA64MMFR0_EL1",
-            val = out(reg) mmfr_el1
-        );
-    }
-    log::debug!("MMFR0_EL1 = {:64b}", mmfr_el1);
+    log::info!("kernel table {:#?}", kernel_map);
 
-    let mut ttbr0_el1 = 0usize;
-    unsafe {
-        core::arch::asm!(
-            "mrs {val}, TTBR0_EL1",
-            val = out(reg) ttbr0_el1
-        );
-    }
-    log::debug!("TTBR0_EL1 = {:16x}", ttbr0_el1);
-
-    let mut ttbr1_el1 = 0usize;
-    unsafe {
-        core::arch::asm!(
-            "mrs {val}, TTBR1_EL1",
-            val = out(reg) ttbr1_el1
-        );
-    }
-    log::debug!("TTBR1_EL1 = {:16x}", ttbr1_el1);
-
-    unsafe { memory::paging::disable_mmu(); }
-
-    let mut sctlr_el1 = 0usize;
-    unsafe {
-        core::arch::asm!(
-            "mrs {val}, SCTLR_EL1",
-            val = out(reg) sctlr_el1
-        );
-    }
-    log::debug!("SCTLR_EL1 = {sctlr_el1:64b}");
-    let otcr = unsafe { memory::paging::get_tcr() };
-    log::debug!("TCR_EL1  = {:16x} {:?}", otcr.0, otcr);
-
-    let mut tcr = TranslationControlReg(0);
-    tcr.set_ha(true);
-    tcr.set_hd(true);
-    tcr.set_hpd1(true);
-    tcr.set_hpd0(true);
-    tcr.set_ipas(0b100); //44bits, 16TB. This is what MMFR0_EL1 says in QEMU
-    tcr.set_granule_size1(0b10); // 4KiB
-    tcr.set_granule_size0(0b00); // 4KiB
-    tcr.set_a1(false);
-    tcr.set_size_offset1(16);
-    tcr.set_size_offset0(16);
-    tcr.set_outer_cacheablity1(0b01); // Write-Back, always allocate
-    tcr.set_inner_cacheablity1(0b01);
-    tcr.set_outer_cacheablity0(0b01);
-    tcr.set_inner_cacheablity0(0b01);
-    tcr.set_shareability0(0b11);
-    log::trace!("TCR_EL1' = {:16x} {:?}", tcr.0, tcr);
-    log::trace!("{:16x}", otcr.0 ^ tcr.0);
-
-    // load page tables and activate MMU
-    log::info!("activating virtual memory!");
-    unsafe {
-        identity_map.activate();
-        log::trace!("identity map activated");
-        test_map.activate();
-        log::trace!("test map activated");
-        memory::paging::set_tcr(tcr);
-        log::trace!("TCR set");
-        memory::paging::enable_mmu();
-    }
-    log::info!("virtual memory activated!");
-
-    let test_ptr_h = (0xffff_0000_0000_0000) as *mut usize;
-    // due to the identity mapping, we can still read the physical address
-    let test_ptr_l = (test_page.0) as *mut usize;
-    let test_ptr_hi = (0xffff_8000_0000_0000 + test_page.0) as *mut usize;
-    unsafe {
-        let v = 0xabab_bcbc_cdcd_dede;
-        test_ptr_h.write(v);
-        assert_eq!(v, test_ptr_l.read());
-        assert_eq!(v, test_ptr_hi.read());
-        let v = !v;
-        test_ptr_l.write(v);
-        assert_eq!(v, test_ptr_h.read());
-        assert_eq!(v, test_ptr_hi.read());
-    }
-
-    log::info!("everything works!");
-
-    let test_fn2: fn(&mut PageTable, PhysicalAddress, usize) = unsafe {
-        core::mem::transmute::<usize, fn(&mut PageTable, PhysicalAddress, usize)>(test_fn as usize + 0xffff_8000_0000_0000)
-    };
-
-    test_fn2(&mut identity_map, mem_start, mem_size);
-
+    log::warn!("halting...");
     halt();
 }
 

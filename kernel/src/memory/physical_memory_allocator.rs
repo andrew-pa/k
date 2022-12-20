@@ -42,7 +42,8 @@ impl PhysicalMemoryAllocator {
         }
 
         // these addresses will be in high memory, so they need shifted to be physical addresses
-        let kernel_start = unsafe { (&__kernel_start as *const u8) as usize } - 0xffff_0000_0000_0000;
+        let kernel_start =
+            unsafe { (&__kernel_start as *const u8) as usize } - 0xffff_0000_0000_0000;
         let kernel_end = unsafe { (&__kernel_end as *const u8) as usize } - 0xffff_0000_0000_0000;
         log::info!("kernel_start = p:0x{kernel_start:x}, kernel_end = p:0x{kernel_end:x}");
 
@@ -53,7 +54,7 @@ impl PhysicalMemoryAllocator {
             8 - kernel_end % 8
         };
 
-        // make sure the bitmap starts on a word boundary
+        // make sure the bitmap starts on a word boundary and is placed in virtual memory correctly
         let alloc_bitmap_addr = (0xffff_0000_0000_0000 + kernel_end + padding) as *mut usize;
 
         let allocated_pages = unsafe {
