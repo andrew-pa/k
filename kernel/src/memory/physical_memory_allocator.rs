@@ -54,7 +54,7 @@ impl PhysicalMemoryAllocator {
         };
 
         // make sure the bitmap starts on a word boundary
-        let alloc_bitmap_addr = (kernel_end + padding) as *mut usize;
+        let alloc_bitmap_addr = (0xffff_0000_0000_0000 + kernel_end + padding) as *mut usize;
 
         let allocated_pages = unsafe {
             bitvec::slice::from_raw_parts_unchecked_mut(

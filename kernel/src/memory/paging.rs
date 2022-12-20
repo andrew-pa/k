@@ -235,7 +235,7 @@ impl PageTable {
         unsafe {
             // WARN: Assume that memory is identity mapped!
             let table_ptr: *mut LevelTable = VirtualAddress(new_page_phy_addr.0).as_ptr();
-            core::ptr::write_bytes(table_ptr, 0, core::mem::size_of::<LevelTable>());
+            core::ptr::write_bytes(table_ptr, 0, 1);
         }
         Ok(new_page_phy_addr)
     }
