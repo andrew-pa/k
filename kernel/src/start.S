@@ -37,10 +37,11 @@ _start:
     msr SCTLR_EL1, x0
     isb
 
+    /* TODO: fix stack pointer */
+
     /* start the kernel, now running in the correct spot in virtual memory */
     adr x0, kmain
-    movz x1, #0xffff, lsl 48
-    add x0, x0, x1
+    movk x0, #0xffff, lsl 48
     br x0
     .quad 0xbeefbeefbeefbeef
 
@@ -55,7 +56,7 @@ _kernel_page_table_root:
 
 .balign 4096
 _kernel_id_map_level1_table:
-    .quad 0
+    .quad (0x00000000) | (1 << 10) | 1
     .quad (0x40000000) | (1 << 10) | 1
     .quad (0x80000000) | (1 << 10) | 1
     .ds.d 509

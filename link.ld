@@ -1,6 +1,6 @@
 SECTIONS {
     /* . = 0x44004400; */
-    . = 0xffff000000000000 ;
+    . = 0xffff000041000000 ;
     __kernel_start = . ;
     .text : {
         *(.text.boot)
