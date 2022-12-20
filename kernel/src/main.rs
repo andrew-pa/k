@@ -111,6 +111,8 @@ pub extern "C" fn kmain() {
         memory::init_physical_memory_allocator(&dt);
     }
 
+    log::trace!("physical memory allocator initialized!");
+
     let (mem_start, mem_size) = {
         let pma = physical_memory_allocator();
         (pma.memory_start_addr(), pma.total_memory_size() / PAGE_SIZE)

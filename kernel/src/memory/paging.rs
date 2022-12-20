@@ -231,6 +231,7 @@ impl PageTable {
 
     fn allocate_table() -> Result<PhysicalAddress, MemoryError> {
         let new_page_phy_addr = physical_memory_allocator().alloc()?;
+        log::trace!("allocating new page table at {}", new_page_phy_addr);
         unsafe {
             // WARN: Assume that memory is identity mapped!
             let table_ptr: *mut LevelTable = VirtualAddress(new_page_phy_addr.0).as_ptr();

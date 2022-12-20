@@ -41,8 +41,9 @@ impl PhysicalMemoryAllocator {
             log::info!("reserved memory region at 0x{addr:x}, size={size}");
         }
 
-        let kernel_start = unsafe { (&__kernel_start as *const u8) as usize };
-        let kernel_end = unsafe { (&__kernel_end as *const u8) as usize };
+        // these addresses will be in high memory, so they need shifted to be physical addresses
+        let kernel_start = unsafe { (&__kernel_start as *const u8) as usize } - 0xffff_0000_0000_0000;
+        let kernel_end = unsafe { (&__kernel_end as *const u8) as usize } - 0xffff_0000_0000_0000;
         log::info!("kernel_start = p:0x{kernel_start:x}, kernel_end = p:0x{kernel_end:x}");
 
         // assumes 64bit alignment/8bpb
