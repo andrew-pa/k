@@ -10,7 +10,8 @@ echo "input elf  = ${1}"
 echo "output img = ${2}"
 echo "binary     = ${BIN_NAME}"
 
-ENTRY_ADDR=$(${GPREFIX}objdump -f $1 | awk "/start/ { print \$3 }")
+# ENTRY_ADDR=$(${GPREFIX}objdump -f $1 | awk "/start/ { printf(\"%x\", 0x$LOAD_ADDR + \$3) }")
+ENTRY_ADDR=$LOAD_ADDR
 
 echo "entry point @ ${ENTRY_ADDR}"
 

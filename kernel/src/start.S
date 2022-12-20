@@ -16,7 +16,8 @@ _start:
 
     /* create correct level 0 entry to point to our level 1 table */
     adr x1, _kernel_id_map_level1_table
-    lsr x1, x1, #12
+    /* lsr x1, x1, #12 */
+    bic x1, x1, #0xfff
     orr x1, x1, #3
     str x1, [x0]
 
@@ -24,8 +25,10 @@ _start:
     msr TTBR0_EL1, x0
     msr TTBR1_EL1, x0
 
-    /* set TCR to known correct value*/
-    mov x0, #0
+    /* set TCR to known correct value 0x0784'8410'3510*/
+    mov x0, #0x3510
+    movk x0, #0x8410, lsl 16
+    movk x0, #0x0784, lsl 32
     msr TCR_EL1, x0
 
     /* enable the MMU */
@@ -47,6 +50,7 @@ _kernel_page_table_root:
     .ds.d 511
 
 _kernel_id_map_level1_table:
-    .quad (0x40000000 >> 12) | (1 << 10) | 1
-    .quad (0x80000000 >> 12) | (1 << 10) | 1
-    .ds.d 510
+    .quad 0
+    .quad (0x40000000) | (1 << 10) | 1
+    .quad (0x80000000) | (1 << 10) | 1
+    .ds.d 509

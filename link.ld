@@ -3,7 +3,7 @@ SECTIONS {
     . = 0xffff000000000000 ;
     __kernel_start = . ;
     .text : {
-        *(.text._start)
+        *(.text.boot)
         *(.text .text.*)
     }
     .data : { *(.data .data.*) }
