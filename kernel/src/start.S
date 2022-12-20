@@ -38,6 +38,8 @@ _start:
     isb
 
     /* TODO: fix stack pointer */
+    movz x0, #0xffff, lsl 48
+    add sp, sp, x0
 
     /* start the kernel, now running in the correct spot in virtual memory */
     adr x0, kmain

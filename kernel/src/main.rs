@@ -183,6 +183,7 @@ pub extern "C" fn kmain() {
 
     unsafe {
         test_map.activate();
+        memory::paging::flush_tlb_total();
     }
 
     unsafe {

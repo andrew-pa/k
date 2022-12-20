@@ -550,3 +550,22 @@ pub unsafe fn set_tcr(new_tcr: TranslationControlReg) {
         val = in(reg) new_tcr.0
     )
 }
+
+pub unsafe fn flush_tlb_total() {
+    core::arch::asm!(
+        "DSB ISHST", //ensure writes to tables have completed
+        "TLBI ALLE1", // flush entire TLB
+        "DSB ISH", // ensure that flush has completed
+        "ISB", // make sure next instruction is fetched with changes
+    )
+}
+
+pub unsafe fn flush_tlb_for_asid(asid: usize) {
+    core::arch::asm!(
+        "DSB ISHST", //ensure writes to tables have completed
+        "TLBI ASIDE1, {asid}", // flush TLB entries associated with ASID
+        "DSB ISH", // ensure that flush has completed
+        "ISB", // make sure next instruction is fetched with changes
+        asid = in(reg) asid
+    )
+}
