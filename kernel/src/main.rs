@@ -43,7 +43,7 @@ impl log::Log for DebugUartLogger {
     fn log(&self, record: &log::Record) {
         //WARN: this is currently NOT thread safe!
         let mut uart = DebugUart {
-            base: 0x09000000 as *mut u8,
+            base: 0xffff_0000_0900_0000 as *mut u8,
         };
         writeln!(
             uart,
@@ -116,15 +116,34 @@ pub extern "C" fn kmain() {
 
     log::trace!("physical memory allocator initialized!");
 
-    let (mem_start, mem_size) = {
-        let pma = physical_memory_allocator();
-        (pma.memory_start_addr(), pma.total_memory_size() / PAGE_SIZE)
-    };
+    // let (mem_start, mem_size) = {
+    //     let pma = physical_memory_allocator();
+    //     (pma.memory_start_addr(), pma.total_memory_size() / PAGE_SIZE)
+    // };
 
-    let mut identity_map =
-        PageTable::identity(false, mem_start, mem_size).expect("create page table");
-    // make sure to keep the UART mapped
-    identity_map
+    // let mut identity_map =
+    //     PageTable::identity(false, mem_start, mem_size).expect("create page table");
+    // // make sure to keep the UART mapped
+    // identity_map
+    //     .map_range(
+    //         PhysicalAddress(0x09000000),
+    //         VirtualAddress(0x09000000),
+    //         1,
+    //         true,
+    //     )
+    //     .expect("map uart");
+    // log::info!("created page table {:#?}", identity_map);
+
+    let mut test_map = PageTable::empty(false).expect("create page table");
+    let test_page = {
+        physical_memory_allocator()
+            .alloc()
+            .expect("allocate test page")
+    };
+    test_map
+        .map_range(test_page, VirtualAddress(0x0000_0000_000a_0000), 1, true)
+        .expect("map range");
+    test_map
         .map_range(
             PhysicalAddress(0x09000000),
             VirtualAddress(0x09000000),
@@ -132,32 +151,45 @@ pub extern "C" fn kmain() {
             true,
         )
         .expect("map uart");
-    log::info!("created page table {:#?}", identity_map);
 
-    let mut test_map = PageTable::empty(true).expect("create page table");
-    let test_page = {
-        physical_memory_allocator()
-            .alloc()
-            .expect("allocate test page")
-    };
-    test_map
-        .map_range(test_page, VirtualAddress(0xffff_0000_0000_0000), 1, true)
-        .expect("map range");
-
-    test_map
-        .map_range(
-            mem_start,
-            VirtualAddress(0xffff_8000_0000_0000 + mem_start.0),
-            mem_size,
-            true,
-        )
-        .expect("second id mapping");
+    // test_map
+    //     .map_range(
+    //         mem_start,
+    //         VirtualAddress(0xffff_8000_0000_0000 + mem_start.0),
+    //         mem_size,
+    //         true,
+    //     )
+    //     .expect("second id mapping");
 
     log::info!("created page table {:#?}", test_map);
 
     let mut kernel_map = unsafe { PageTable::kernel_table() };
 
+    let test_page_virt = VirtualAddress(0xffff_abcd_0000_0000);
+    kernel_map
+        .map_range(test_page, test_page_virt, 1, true)
+        .expect("map test page");
+
     log::info!("kernel table {:#?}", kernel_map);
+
+    let v = 0xabcd_ef11_abcd_ef22;
+    let x: *mut usize = test_page_virt.as_ptr();
+    unsafe {
+        x.write(v);
+        let v2 = test_page.to_virtual_canonical().as_ptr::<usize>().read();
+        log::debug!("{v} {v2}");
+        assert_eq!(v, v2);
+    }
+
+    unsafe {
+        test_map.activate();
+    }
+
+    unsafe {
+        let y = VirtualAddress(0xa_0000).as_ptr::<usize>().read();
+        log::debug!("{y}");
+        assert_eq!(v, y);
+    }
 
     log::warn!("halting...");
     halt();
@@ -166,7 +198,7 @@ pub extern "C" fn kmain() {
 #[panic_handler]
 fn panic_handler(info: &PanicInfo) -> ! {
     let mut uart = DebugUart {
-        base: 0x09000000 as *mut u8,
+        base: 0xffff_0000_0900_0000 as *mut u8,
     };
     let _ = uart.write_fmt(format_args!("\npanic! {info}"));
     halt();

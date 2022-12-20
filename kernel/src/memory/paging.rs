@@ -259,7 +259,11 @@ impl PageTable {
         log::debug!("activating table @ {:x}", self.level0_phy_addr.0);
         let v = self.level0_phy_addr.0; // CnP bit is set to zero by assumption rn, see D17.2.144
                                         // for details about $x$
-        log::debug!("TTBRx_EL1 ← {:16x}", v);
+        log::debug!(
+            "TTBR{}_EL1 ← {:16x}",
+            if self.high_addresses { 1 } else { 0 },
+            v
+        );
         if !self.high_addresses {
             core::arch::asm!("msr TTBR0_EL1, {addr}",
                 addr = in(reg) v)
