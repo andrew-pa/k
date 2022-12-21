@@ -1,11 +1,18 @@
 #![no_std]
 #![no_main]
+#![recursion_limit = "256"]
 #![feature(int_roundings)]
 #![feature(lang_items)]
 #![feature(is_some_and)]
-#![recursion_limit = "256"]
+#![feature(allocator_api)]
+#![feature(default_alloc_error_handler)]
+
+extern crate alloc;
 
 use core::{arch::global_asm, fmt::Write, panic::PanicInfo};
+
+use alloc::vec;
+use alloc::vec::Vec;
 
 use crate::memory::{
     paging::{PageTable, TranslationControlReg},
@@ -127,34 +134,43 @@ pub extern "C" fn kmain() {
 
     log::info!("created page table {:#?}", test_map);
 
-    let mut kernel_map = memory::paging::kernel_table();
+    {
+        let mut kernel_map = memory::paging::kernel_table();
 
-    let test_page_virt = VirtualAddress(0xffff_abcd_0000_0000);
-    kernel_map
-        .map_range(test_page, test_page_virt, 1, true)
-        .expect("map test page");
+        let test_page_virt = VirtualAddress(0xffff_abcd_0000_0000);
+        kernel_map
+            .map_range(test_page, test_page_virt, 1, true)
+            .expect("map test page");
 
-    log::info!("kernel table {:#?}", kernel_map);
+        log::info!("kernel table {:#?}", kernel_map);
 
-    let v = 0xabcd_ef11_abcd_ef22;
-    let x: *mut usize = test_page_virt.as_ptr();
-    unsafe {
-        x.write(v);
-        let v2 = test_page.to_virtual_canonical().as_ptr::<usize>().read();
-        log::debug!("{v} {v2}");
-        assert_eq!(v, v2);
+        let v = 0xabcd_ef11_abcd_ef22;
+        let x: *mut usize = test_page_virt.as_ptr();
+        unsafe {
+            x.write(v);
+            let v2 = test_page.to_virtual_canonical().as_ptr::<usize>().read();
+            log::debug!("{v} {v2}");
+            assert_eq!(v, v2);
+        }
+
+        unsafe {
+            test_map.activate();
+            memory::paging::flush_tlb_total();
+        }
+
+        unsafe {
+            let y = VirtualAddress(0xa_0000).as_ptr::<usize>().read();
+            log::debug!("{y}");
+            assert_eq!(v, y);
+        }
     }
 
-    unsafe {
-        test_map.activate();
-        memory::paging::flush_tlb_total();
+    let mut v = vec![1, 2, 3, 4, 5];
+    log::debug!("{v:?}");
+    for i in 0..16 {
+        v.push(i);
     }
-
-    unsafe {
-        let y = VirtualAddress(0xa_0000).as_ptr::<usize>().read();
-        log::debug!("{y}");
-        assert_eq!(v, y);
-    }
+    log::debug!("{v:?}");
 
     log::warn!("halting...");
     halt();

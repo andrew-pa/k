@@ -109,4 +109,5 @@ pub use physical_memory_allocator::{
     init_physical_memory_allocator, physical_memory_allocator, PhysicalMemoryAllocator,
 };
 
+pub mod heap;
 pub mod paging;
