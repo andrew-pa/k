@@ -63,7 +63,9 @@ impl KernelGlobalAlloc {
     fn find_suitable_free_block(&self, layout: &Layout) -> Option<NonNull<FreeBlock>> {
         let mut free_list_head = self.free_list_head.lock();
         if free_list_head.is_null() {
+            drop(free_list_head);
             self.init();
+            free_list_head = self.free_list_head.lock();
         }
 
         // find a suitable block or null if none are found
@@ -83,8 +85,14 @@ impl KernelGlobalAlloc {
             unsafe {
                 if let Some(b_prev) = b.prev.as_mut() {
                     b_prev.next = b.next;
+                    if let Some(n) = b.next.as_mut() {
+                        n.prev = b.prev;
+                    }
                 } else {
                     *free_list_head = b.next;
+                    if let Some(n) = b.next.as_mut() {
+                        n.prev = null_mut();
+                    }
                 }
             }
             NonNull::new(block)
@@ -94,6 +102,11 @@ impl KernelGlobalAlloc {
     }
 
     fn add_free_block(&self, location: *mut u8, size: usize) {
+        log::trace!(
+            "returning block at 0x{:x} of size {}",
+            location as usize,
+            size
+        );
         let new_block = location as *mut FreeBlock;
         unsafe {
             let mut head = self.free_list_head.lock();
@@ -101,7 +114,9 @@ impl KernelGlobalAlloc {
             nb.size = size;
             nb.prev = null_mut();
             nb.next = *head;
-            head.as_mut().expect("non-null head").prev = nb;
+            if let Some(head) = head.as_mut() {
+                head.prev = nb;
+            }
             *head = new_block;
         }
         // TODO: coalesce blocks? return pages back to the PMA?
@@ -128,6 +143,28 @@ impl KernelGlobalAlloc {
             b.size = num_pages;
         }
         *self.free_list_head.lock() = block;
+    }
+
+    fn log_heap_info(&self) {
+        let heap_size = self.heap_size.load(core::sync::atomic::Ordering::Acquire);
+        log::info!(
+            "total heap size = {} pages ({} bytes)",
+            heap_size,
+            heap_size * PAGE_SIZE
+        );
+        let mut free_size = 0;
+        unsafe {
+            let mut cur = *self.free_list_head.lock();
+            while let Some(cur_block) = cur.as_ref() {
+                log::info!("0x{:x}: {cur_block:?}", cur as usize);
+                free_size += cur_block.size;
+                cur = cur_block.next;
+            }
+        }
+        log::info!(
+            "total free = {free_size}b, total allocated = {}b",
+            heap_size * PAGE_SIZE - free_size
+        );
     }
 }
 
@@ -163,10 +200,15 @@ unsafe impl GlobalAlloc for KernelGlobalAlloc {
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        log::trace!("dealloc 0x{:x} {layout:?}", ptr as usize);
         // TODO: we never return physical memory back to the system once it has been allocated, it just goes back in the heap free pool
         self.add_free_block(
             ptr.offset(-(ALLOC_HEADER_SIZE as isize)),
             layout.size() + ALLOC_HEADER_SIZE,
         )
     }
+}
+
+pub fn log_heap_info() {
+    GLOBAL_HEAP.log_heap_info();
 }
