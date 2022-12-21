@@ -124,25 +124,28 @@ impl KernelGlobalAlloc {
 
     fn increase_heap_size(&self, layout: &Layout) {
         let mut pt = super::paging::kernel_table();
-        let mut pma = super::physical_memory_allocator();
         let num_pages = (layout.size() + ALLOC_HEADER_SIZE).div_ceil(PAGE_SIZE);
         let old_heap_size = self
             .heap_size
             .fetch_add(num_pages, core::sync::atomic::Ordering::AcqRel);
-        let pages = pma
-            .alloc_contig(num_pages)
-            .expect("allocate pages for kernel heap");
+        let pages = {
+            let mut pma = super::physical_memory_allocator();
+            pma.alloc_contig(num_pages)
+                .expect("allocate pages for kernel heap")
+        };
         let old_heap_end = VirtualAddress(KERNEL_HEAP_START.0 + old_heap_size * PAGE_SIZE);
         pt.map_range(pages, old_heap_end, num_pages, true)
             .expect("map kernel heap pages");
         let block: *mut FreeBlock = old_heap_end.as_ptr();
+        let mut head = self.free_list_head.lock();
         unsafe {
             let b = block.as_mut().unwrap();
-            b.next = null_mut();
+            b.next = *head;
             b.prev = null_mut();
-            b.size = num_pages;
+            b.size = num_pages * PAGE_SIZE;
+            head.as_mut().expect("non-null head").prev = block;
         }
-        *self.free_list_head.lock() = block;
+        *head = block;
     }
 
     fn log_heap_info(&self) {

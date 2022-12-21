@@ -168,11 +168,11 @@ pub extern "C" fn kmain() {
     let mut v = vec![1, 2, 3, 4, 5];
     memory::heap::log_heap_info();
     log::debug!("{v:?}");
-    for i in 0..160 {
+    for i in 0..16000 {
         v.push(i);
     }
     memory::heap::log_heap_info();
-    log::debug!("{v:?}");
+    log::debug!("{}", v.len());
 
     log::warn!("halting...");
     halt();
