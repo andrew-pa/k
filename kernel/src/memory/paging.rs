@@ -553,8 +553,11 @@ pub unsafe fn set_tcr(new_tcr: TranslationControlReg) {
 
 pub unsafe fn flush_tlb_total() {
     core::arch::asm!(
-        "DSB ISHST", //ensure writes to tables have completed
-        "TLBI ALLE1", // flush entire TLB
+        "DSB ISHST", // ensure writes to tables have completed
+        "TLBI VMALLE1", // flush entire TLB. The programming guide uses the 'ALLE1'
+                        // variant, which causes a fault in QEMU with EC=0, but
+                        // https://forum.osdev.org/viewtopic.php?t=36412&p=303237
+                        // suggests using VMALLE1 instead, which appears to work
         "DSB ISH", // ensure that flush has completed
         "ISB", // make sure next instruction is fetched with changes
     )
@@ -562,7 +565,7 @@ pub unsafe fn flush_tlb_total() {
 
 pub unsafe fn flush_tlb_for_asid(asid: usize) {
     core::arch::asm!(
-        "DSB ISHST", //ensure writes to tables have completed
+        "DSB ISHST", // ensure writes to tables have completed
         "TLBI ASIDE1, {asid}", // flush TLB entries associated with ASID
         "DSB ISH", // ensure that flush has completed
         "ISB", // make sure next instruction is fetched with changes

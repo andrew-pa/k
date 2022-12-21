@@ -37,7 +37,7 @@ _start:
     msr SCTLR_EL1, x0
     isb
 
-    /* TODO: fix stack pointer */
+    /* fix stack pointer */
     movz x0, #0xffff, lsl 48
     add sp, sp, x0
 
