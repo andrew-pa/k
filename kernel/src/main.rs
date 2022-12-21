@@ -12,7 +12,6 @@ extern crate alloc;
 use core::{arch::global_asm, fmt::Write, panic::PanicInfo};
 
 use alloc::vec;
-use alloc::vec::Vec;
 
 use crate::memory::{
     paging::{PageTable, TranslationControlReg},
@@ -20,6 +19,7 @@ use crate::memory::{
 };
 
 mod dtb;
+mod exception;
 mod memory;
 mod uart;
 
@@ -118,6 +118,7 @@ pub extern "C" fn kmain() {
     // }
 
     unsafe {
+        exception::install_exception_vector_table();
         memory::init_physical_memory_allocator(&dt);
         memory::paging::init_kernel_page_table();
     }
@@ -173,6 +174,12 @@ pub extern "C" fn kmain() {
     }
     memory::heap::log_heap_info();
     log::debug!("{}", v.len());
+
+    log::warn!("attempting to generate a page fault...");
+    let fault_addr = VirtualAddress(0xffff_ffff_ffff_ab00);
+    unsafe {
+        fault_addr.as_ptr::<usize>().write(3);
+    }
 
     log::warn!("halting...");
     halt();
