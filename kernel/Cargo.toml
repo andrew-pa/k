@@ -12,7 +12,3 @@ bitvec = { version = "1", default-features = false }
 bitfield = "0.14"
 derive_more = "0.99"
 spin = "0.9"
-
-[build-dependencies]
-cc = "1"
-

@@ -112,27 +112,8 @@ pub extern "C" fn kmain() {
 
     unsafe {
         memory::init_physical_memory_allocator(&dt);
+        memory::paging::init_kernel_page_table();
     }
-
-    log::trace!("physical memory allocator initialized!");
-
-    // let (mem_start, mem_size) = {
-    //     let pma = physical_memory_allocator();
-    //     (pma.memory_start_addr(), pma.total_memory_size() / PAGE_SIZE)
-    // };
-
-    // let mut identity_map =
-    //     PageTable::identity(false, mem_start, mem_size).expect("create page table");
-    // // make sure to keep the UART mapped
-    // identity_map
-    //     .map_range(
-    //         PhysicalAddress(0x09000000),
-    //         VirtualAddress(0x09000000),
-    //         1,
-    //         true,
-    //     )
-    //     .expect("map uart");
-    // log::info!("created page table {:#?}", identity_map);
 
     let mut test_map = PageTable::empty(false).expect("create page table");
     let test_page = {
@@ -143,27 +124,10 @@ pub extern "C" fn kmain() {
     test_map
         .map_range(test_page, VirtualAddress(0x0000_0000_000a_0000), 1, true)
         .expect("map range");
-    test_map
-        .map_range(
-            PhysicalAddress(0x09000000),
-            VirtualAddress(0x09000000),
-            1,
-            true,
-        )
-        .expect("map uart");
-
-    // test_map
-    //     .map_range(
-    //         mem_start,
-    //         VirtualAddress(0xffff_8000_0000_0000 + mem_start.0),
-    //         mem_size,
-    //         true,
-    //     )
-    //     .expect("second id mapping");
 
     log::info!("created page table {:#?}", test_map);
 
-    let mut kernel_map = unsafe { PageTable::kernel_table() };
+    let mut kernel_map = memory::paging::kernel_table();
 
     let test_page_virt = VirtualAddress(0xffff_abcd_0000_0000);
     kernel_map

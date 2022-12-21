@@ -2,6 +2,7 @@
 use core::ops::Range;
 
 use bitfield::bitfield;
+use spin::Mutex;
 
 use super::{
     physical_memory_allocator, MemoryError, PhysicalAddress, PhysicalMemoryAllocator,
@@ -225,7 +226,8 @@ impl PageTable {
         }
     }
 
-    pub unsafe fn kernel_table() -> PageTable {
+    // TODO: how do we synchronize access to this table if there is more than one reference to it?
+    unsafe fn kernel_table() -> PageTable {
         let level0_table = core::mem::transmute(&mut _kernel_page_table_root);
 
         PageTable {
@@ -553,13 +555,13 @@ pub unsafe fn set_tcr(new_tcr: TranslationControlReg) {
 
 pub unsafe fn flush_tlb_total() {
     core::arch::asm!(
-        "DSB ISHST", // ensure writes to tables have completed
+        "DSB ISHST",    // ensure writes to tables have completed
         "TLBI VMALLE1", // flush entire TLB. The programming guide uses the 'ALLE1'
-                        // variant, which causes a fault in QEMU with EC=0, but
-                        // https://forum.osdev.org/viewtopic.php?t=36412&p=303237
-                        // suggests using VMALLE1 instead, which appears to work
+        // variant, which causes a fault in QEMU with EC=0, but
+        // https://forum.osdev.org/viewtopic.php?t=36412&p=303237
+        // suggests using VMALLE1 instead, which appears to work
         "DSB ISH", // ensure that flush has completed
-        "ISB", // make sure next instruction is fetched with changes
+        "ISB",     // make sure next instruction is fetched with changes
     )
 }
 
@@ -571,4 +573,19 @@ pub unsafe fn flush_tlb_for_asid(asid: usize) {
         "ISB", // make sure next instruction is fetched with changes
         asid = in(reg) asid
     )
+}
+
+static mut KERNEL_TABLE: Option<Mutex<PageTable>> = None;
+
+pub unsafe fn init_kernel_page_table() {
+    KERNEL_TABLE = Some(Mutex::new(PageTable::kernel_table()));
+}
+
+pub fn kernel_table() -> spin::MutexGuard<'static, PageTable> {
+    unsafe {
+        KERNEL_TABLE
+            .as_ref()
+            .expect("kernel page table initialized")
+            .lock()
+    }
 }
