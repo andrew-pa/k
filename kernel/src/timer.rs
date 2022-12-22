@@ -2,9 +2,8 @@
 // TODO: other ELs?
 // TODO: physical vs virtual timers?
 
-use core::arch::asm;
-
 use bitfield::bitfield;
+use core::arch::asm;
 
 pub fn read_compare_value() -> u64 {
     let mut cv: u64;
@@ -30,7 +29,7 @@ pub fn read_timer_value() -> u32 {
 
 pub fn write_timer_value(timer_value: u32) {
     unsafe {
-        asm!("msr CNTP_CVAL_EL0, {cv:w}", cv = in(reg) timer_value);
+        asm!("msr CNTP_TVAL_EL0, {cv:x}", cv = in(reg) timer_value);
     }
 }
 
@@ -40,6 +39,18 @@ pub fn counter() -> u64 {
         asm!("mrs {val}, CNTPCT_EL0", val = out(reg) cntpct);
     }
     cntpct
+}
+
+// WARN: the documentation says that hardware doesn't touch this but that it is
+// only for software. However the documentation is also unclear on where to read a
+// suitable value to write to this register. It is possible that U-boot sets this
+// for us if we are lucky, but I don't know
+pub fn frequency() -> u32 {
+    let mut freq: u64;
+    unsafe {
+        asm!("mrs {val}, CNTFRQ_EL0", val = out(reg) freq);
+    }
+    freq as u32
 }
 
 bitfield! {
@@ -79,11 +90,11 @@ pub fn set_interrupts_enabled(enabled: bool) {
     write_control(c);
 }
 
-pub fn timer_enabled() -> bool {
+pub fn enabled() -> bool {
     read_control().enable()
 }
 
-pub fn set_timer_enabled(enabled: bool) {
+pub fn set_enabled(enabled: bool) {
     let mut c = read_control();
     c.set_enable(true);
     write_control(c);
