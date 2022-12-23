@@ -6,6 +6,7 @@
 #![feature(is_some_and)]
 #![feature(allocator_api)]
 #![feature(default_alloc_error_handler)]
+#![feature(cstr_from_bytes_until_nul)]
 
 extern crate alloc;
 
@@ -13,14 +14,18 @@ use core::{arch::global_asm, fmt::Write, panic::PanicInfo};
 
 use alloc::vec;
 
-use crate::memory::{
-    paging::{PageTable, TranslationControlReg},
-    physical_memory_allocator, PhysicalAddress, VirtualAddress, PAGE_SIZE,
+use crate::{
+    exception::interrupt_controller,
+    memory::{
+        paging::{PageTable, TranslationControlReg},
+        physical_memory_allocator, PhysicalAddress, VirtualAddress, PAGE_SIZE,
+    },
 };
 
 mod dtb;
 mod exception;
 mod memory;
+mod timer;
 mod uart;
 
 global_asm!(include_str!("start.S"));
@@ -97,7 +102,7 @@ pub extern "C" fn kmain() {
     log::set_max_level(log::LevelFilter::Trace);
     log::info!("starting kernel!");
 
-    let mut current_el = 0usize;
+    let mut current_el: usize;
     unsafe {
         core::arch::asm!(
             "mrs {val}, CurrentEL",
@@ -123,7 +128,13 @@ pub extern "C" fn kmain() {
         memory::paging::init_kernel_page_table();
     }
 
-    let mut test_map = PageTable::empty(false).expect("create page table");
+    /* --- Kernel heap is now available --- */
+
+    unsafe {
+        exception::init_interrupt_controller(&dt);
+    }
+
+    /*let mut test_map = PageTable::empty(false).expect("create page table");
     let test_page = {
         physical_memory_allocator()
             .alloc()
@@ -173,13 +184,49 @@ pub extern "C" fn kmain() {
         v.push(i);
     }
     memory::heap::log_heap_info();
-    log::debug!("{}", v.len());
+    log::debug!("{}", v.len());*/
 
-    log::warn!("attempting to generate a page fault...");
-    let fault_addr = VirtualAddress(0xffff_ffff_ffff_ab00);
-    unsafe {
-        fault_addr.as_ptr::<usize>().write(3);
+    {
+        let kernel_map = memory::paging::kernel_table();
+        log::info!("kernel table {:#?}", kernel_map);
     }
+
+    let props = timer::find_timer_properties(&dt);
+    log::info!("timer properties = {props:?}");
+
+    let timer_irq = 13;
+
+    let ic = interrupt_controller();
+    ic.set_config(timer_irq, exception::InterruptConfig::Edge);
+    ic.set_priority(timer_irq, 0);
+    // TODO: mystery CPU id that we can probably read from the DT
+    ic.set_target_cpu(timer_irq, 0x1);
+    ic.set_pending(timer_irq, false);
+    ic.set_enable(timer_irq, true);
+
+    timer::set_enabled(true);
+    timer::set_interrupts_enabled(true);
+    timer::write_timer_value(15000);
+    log::info!("timer enabled = {}", timer::enabled());
+    log::info!("timer interrupts = {}", timer::interrupts_enabled());
+    log::info!("timer compare value = {}", timer::read_compare_value());
+    log::info!("timer frequency = {}", timer::frequency());
+
+    for i in 0..200 {
+        let cntpct = timer::counter();
+        log::info!("{i} timer counter = {cntpct}");
+        if timer::condition_met() {
+            log::info!("condition met");
+            timer::write_timer_value(2500);
+            break;
+        }
+    }
+
+    // log::warn!("attempting to generate a page fault...");
+    // let fault_addr = VirtualAddress(0xffff_ffff_ffff_ab00);
+    // unsafe {
+    //     fault_addr.as_ptr::<usize>().write(3);
+    // }
 
     log::warn!("halting...");
     halt();
