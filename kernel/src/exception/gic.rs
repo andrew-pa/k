@@ -1,9 +1,17 @@
 use core::ffi::CStr;
 
+use bitvec::{
+    index::BitIdx,
+    order::Lsb0,
+    ptr::{BitPtr, Const, Mut},
+};
+
 use crate::{
     dtb::{DeviceTree, MemRegionIter, StructureItem},
     memory::PhysicalAddress,
 };
+
+use super::{InterruptConfig, InterruptController, InterruptId};
 
 pub struct GenericInterruptController {
     distributor_base: *mut u32,
@@ -61,12 +69,186 @@ impl GenericInterruptController {
         );
 
         // TODO: SAFETY: assume that these are in low memory that has already been mapped
-        unsafe {
-            Some(Self {
+        let mut s = unsafe {
+            Self {
                 distributor_base: distributor_base.to_virtual_canonical().as_ptr(),
                 cpu_base: cpu_base.to_virtual_canonical().as_ptr(),
-            })
+            }
+        };
+        s.init_distributor();
+        s.init_cpu_interface();
+        Some(s)
+    }
+
+    fn init_distributor(&mut self) {
+        unsafe {
+            // enable distributor
+            self.distributor_base.offset(GICD_CTLR).write_volatile(0x1);
         }
+    }
+
+    fn init_cpu_interface(&mut self) {
+        unsafe {
+            // enable cpu interface
+            self.cpu_base.offset(GICC_CTLR).write_volatile(0x1);
+            // accept interrupts of any priority by setting the minimum priority
+            // register to the lowest possible priority
+            self.cpu_base.offset(GICC_PMR).write_volatile(0xff);
+            // disable group priority bits
+            self.cpu_base.offset(GICC_BPR).write_volatile(0x0);
+        }
+    }
+
+    fn read_bit_for_id(&self, register: isize, id: InterruptId) -> bool {
+        let (byte_offset, bit_offset) = id_to_bit_offset(id);
+        unsafe {
+            let ptr = self.distributor_base.offset(register).offset(byte_offset);
+            let bp =
+                BitPtr::<Const, u32, Lsb0>::new(ptr.as_ref().unwrap().into(), bit_offset).unwrap();
+            bp.read_volatile()
+        }
+    }
+
+    fn read_byte_for_id(&self, register: isize, id: InterruptId) -> u8 {
+        unsafe {
+            let ptr = self.distributor_base.offset(register) as *mut u8;
+            ptr.offset(id as isize).read_volatile()
+        }
+    }
+
+    fn write_bit_for_id(&self, register: isize, id: InterruptId, bit: bool) {
+        let (byte_offset, bit_offset) = id_to_bit_offset(id);
+        unsafe {
+            let ptr = self.distributor_base.offset(register).offset(byte_offset);
+            let bp =
+                BitPtr::<Mut, u32, Lsb0>::new(ptr.as_mut().unwrap().into(), bit_offset).unwrap();
+            bp.write_volatile(bit);
+        }
+    }
+
+    fn write_byte_for_id(&self, register: isize, id: InterruptId, value: u8) {
+        unsafe {
+            let ptr = self.distributor_base.offset(register) as *mut u8;
+            ptr.offset(id as isize).write_volatile(value);
+        }
+    }
+}
+
+fn id_to_bit_offset(id: InterruptId) -> (isize, BitIdx<u32>) {
+    (
+        (id / 32) as isize,
+        BitIdx::<u32>::new((id % 32) as u8).unwrap(),
+    )
+}
+
+impl InterruptController for GenericInterruptController {
+    fn is_enabled(&self, id: InterruptId) -> bool {
+        self.read_bit_for_id(GICD_ISENABLER_N, id)
+    }
+
+    fn set_enable(&self, id: InterruptId, enabled: bool) {
+        self.write_bit_for_id(
+            if enabled {
+                GICD_ISENABLER_N
+            } else {
+                GICD_ICENABLER_N
+            },
+            id,
+            true,
+        )
+    }
+
+    fn is_pending(&self, id: InterruptId) -> bool {
+        self.read_bit_for_id(GICD_ISPENDR_N, id)
+    }
+
+    fn set_pending(&self, id: InterruptId, enabled: bool) {
+        self.write_bit_for_id(
+            if enabled {
+                GICD_ISPENDR_N
+            } else {
+                GICD_ICPENDR_N
+            },
+            id,
+            true,
+        )
+    }
+
+    fn is_active(&self, id: InterruptId) -> bool {
+        self.read_bit_for_id(GICD_ISACTIVER_N, id)
+    }
+
+    fn set_active(&self, id: InterruptId, enabled: bool) {
+        self.write_bit_for_id(
+            if enabled {
+                GICD_ISACTIVER_N
+            } else {
+                GICD_ICACTIVER_N
+            },
+            id,
+            true,
+        )
+    }
+
+    fn priority(&self, id: InterruptId) -> u8 {
+        self.read_byte_for_id(GICD_IPRIORITYR_N, id)
+    }
+
+    fn set_priority(&self, id: InterruptId, priority: u8) {
+        self.write_byte_for_id(GICD_IPRIORITYR_N, id, priority)
+    }
+
+    fn target_cpu(&self, id: InterruptId) -> u8 {
+        self.read_byte_for_id(GICD_ITARGETSR_N, id)
+    }
+
+    fn set_target_cpu(&self, id: InterruptId, target_cpu: u8) {
+        self.write_byte_for_id(GICD_ITARGETSR_N, id, target_cpu)
+    }
+
+    fn config(&self, id: InterruptId) -> InterruptConfig {
+        let (byte_offset, bit_offset) = (
+            (id / 16) as isize,
+            BitIdx::new((id % 16) as u8 + 1).unwrap(),
+        );
+        unsafe {
+            let ptr = self
+                .distributor_base
+                .offset(GICD_ICFGR_N)
+                .offset(byte_offset);
+            let bp =
+                BitPtr::<Const, u32, Lsb0>::new(ptr.as_ref().unwrap().into(), bit_offset).unwrap();
+            match bp.read_volatile() {
+                true => InterruptConfig::Edge,
+                false => InterruptConfig::Level,
+            }
+        }
+    }
+
+    fn set_config(&self, id: InterruptId, config: InterruptConfig) {
+        let (byte_offset, bit_offset) = ((id / 16) as isize, BitIdx::new((id % 16) as u8).unwrap());
+        unsafe {
+            let ptr = self
+                .distributor_base
+                .offset(GICD_ICFGR_N)
+                .offset(byte_offset);
+            let bp =
+                BitPtr::<Mut, u32, Lsb0>::new(ptr.as_mut().unwrap().into(), bit_offset).unwrap();
+            match config {
+                InterruptConfig::Edge => {
+                    bp.write_volatile(false);
+                    bp.offset(1).write_volatile(true);
+                }
+                InterruptConfig::Level => {
+                    bp.write_volatile(false);
+                    bp.offset(1).write_volatile(false);
+                }
+            }
+        }
+    }
+
+    fn ack_interrupt(&self) -> InterruptId {
+        unsafe { self.cpu_base.offset(GICC_IAR).read_volatile() }
     }
 }
 
