@@ -3,7 +3,10 @@
 // TODO: physical vs virtual timers?
 
 use bitfield::bitfield;
-use core::arch::asm;
+use byteorder::{BigEndian, ByteOrder};
+use core::{arch::asm, ffi::CStr};
+
+use crate::dtb::{DeviceTree, StructureItem};
 
 pub fn read_compare_value() -> u64 {
     let mut cv: u64;
@@ -98,4 +101,58 @@ pub fn set_enabled(enabled: bool) {
     let mut c = read_control();
     c.set_enable(true);
     write_control(c);
+}
+
+#[derive(Debug)]
+pub struct TimerProperties<'dt> {
+    interrupt: crate::exception::InterruptId,
+    compatible: &'dt core::ffi::CStr,
+}
+
+pub fn find_timer_properties(device_tree: &DeviceTree) -> TimerProperties {
+    let mut found_node = false;
+    let mut interrupt = None;
+    let mut compatible = None;
+    let mut dt = device_tree.iter_structure();
+
+    while let Some(n) = dt.next() {
+        match n {
+            StructureItem::StartNode(name) if name.starts_with("timer") => {
+                found_node = true;
+            }
+            StructureItem::StartNode(_) if found_node => {
+                while let Some(j) = dt.next() {
+                    if let StructureItem::EndNode = j {
+                        break;
+                    }
+                }
+            }
+            StructureItem::EndNode if found_node => break,
+            StructureItem::Property { name, data } if found_node => match name {
+                "interrupts" => {
+                    let mut i = 0;
+                    while i < data.len() {
+                        let ty = BigEndian::read_u32(&data[i..]);
+                        i += 4;
+                        let irq = BigEndian::read_u32(&data[i..]);
+                        i += 4;
+                        let flags = BigEndian::read_u32(&data[i..]);
+                        i += 4;
+                        log::debug!(
+                            "timer interrupt at {irq} with type={ty:x} and flags={flags:x}"
+                        );
+                    }
+                    interrupt = Some(0);
+                }
+                "compatible" => compatible = Some(CStr::from_bytes_until_nul(data).unwrap()),
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+
+    TimerProperties {
+        interrupt: interrupt.expect("found timer interrupt"),
+        compatible: compatible.expect("found timer compatible string"),
+    }
 }
