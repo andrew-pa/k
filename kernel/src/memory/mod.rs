@@ -32,7 +32,7 @@ pub struct PhysicalAddress(pub usize);
 pub struct VirtualAddress(pub usize);
 
 impl PhysicalAddress {
-    //TODO: WARN: assumes that we have identity mapped memory starting at 0xffff_0000_0000_0000 and that this physical address is part of the range of memory that has been identity mapped
+    ///TODO: WARN: assumes that we have identity mapped memory starting at 0xffff_0000_0000_0000 and that this physical address is part of the range of memory that has been identity mapped
     pub unsafe fn to_virtual_canonical(self) -> VirtualAddress {
         VirtualAddress(self.0 + 0xffff_0000_0000_0000)
     }
@@ -72,7 +72,7 @@ impl VirtualAddress {
         self.0 as *mut T
     }
 
-    //TODO: WARN: assumes that we have identity mapped memory starting at 0xffff_0000_0000_0000, this will only work if the address is in the identity mapped region
+    ///TODO: WARN: assumes that we have identity mapped memory starting at 0xffff_0000_0000_0000, this will only work if the address is in the identity mapped region
     pub unsafe fn to_physical_canonical(self) -> PhysicalAddress {
         PhysicalAddress(self.0 - 0xffff_0000_0000_0000)
     }

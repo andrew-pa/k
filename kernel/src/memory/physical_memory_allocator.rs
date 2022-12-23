@@ -1,5 +1,3 @@
-use core::sync::atomic::{AtomicBool, AtomicUsize};
-
 use crate::{
     dtb::{DeviceTree, StructureItem},
     memory::{__kernel_end, __kernel_start, PAGE_SIZE},

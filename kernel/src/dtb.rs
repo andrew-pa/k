@@ -84,7 +84,7 @@ pub struct Cursor<'dt> {
 }
 
 pub struct MemRegionIter<'dt> {
-    dt: &'dt DeviceTree,
+    data: &'dt [u8],
     current_offset: usize,
 }
 
@@ -131,10 +131,7 @@ impl DeviceTree {
     }
 
     pub fn iter_reserved_memory_regions(&self) -> MemRegionIter {
-        MemRegionIter {
-            dt: self,
-            current_offset: 0,
-        }
+        MemRegionIter::for_data(self.mem_map)
     }
 }
 
@@ -192,13 +189,22 @@ impl<'dt> Iterator for Cursor<'dt> {
     }
 }
 
+impl<'dt> MemRegionIter<'dt> {
+    pub fn for_data(data: &'dt [u8]) -> Self {
+        Self {
+            data,
+            current_offset: 0,
+        }
+    }
+}
+
 impl<'dt> Iterator for MemRegionIter<'dt> {
     type Item = (u64, u64);
 
     fn next(&mut self) -> Option<Self::Item> {
-        let addr = BigEndian::read_u64(&self.dt.mem_map[self.current_offset..]);
+        let addr = BigEndian::read_u64(&self.data[self.current_offset..]);
         self.current_offset += 8;
-        let size = BigEndian::read_u64(&self.dt.mem_map[self.current_offset..]);
+        let size = BigEndian::read_u64(&self.data[self.current_offset..]);
         self.current_offset += 8;
         if addr == 0 && size == 0 {
             None
