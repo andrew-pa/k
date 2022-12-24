@@ -2,6 +2,8 @@ use core::{arch::global_asm, fmt::Display};
 
 use bitfield::bitfield;
 
+use crate::timer;
+
 pub type InterruptId = u32;
 
 pub mod gic;
@@ -31,6 +33,7 @@ pub trait InterruptController {
     fn set_config(&self, id: InterruptId, config: InterruptConfig);
 
     fn ack_interrupt(&self) -> InterruptId;
+    fn finish_interrupt(&self, id: InterruptId);
 }
 
 static mut IC: Option<&'static dyn InterruptController> = None;
@@ -48,6 +51,29 @@ pub unsafe fn init_interrupt_controller(device_tree: &crate::dtb::DeviceTree) {
 pub fn interrupt_controller() -> &'static dyn InterruptController {
     // SAFETY: this basically puts thread safety onto the IC implementation
     unsafe { IC.expect("interrupt controller initialized") }
+}
+
+bitfield! {
+    pub struct InterruptMask(u64);
+    u8;
+    pub debug, set_debug: 9;
+    pub sys_error, set_sys_error: 8;
+    pub irq, set_irq: 7;
+    pub frq, set_frq: 6;
+}
+
+pub fn read_interrupt_mask() -> InterruptMask {
+    let mut v: u64;
+    unsafe {
+        core::arch::asm!("mrs {v}, DAIF", v = out(reg) v);
+    }
+    InterruptMask(v)
+}
+
+pub fn write_interrupt_mask(m: InterruptMask) {
+    unsafe {
+        core::arch::asm!("msr DAIF, {v}", v = in(reg) m.0);
+    }
 }
 
 global_asm!(include_str!("table.S"));
@@ -91,12 +117,19 @@ unsafe extern "C" fn handle_synchronous_exception(regs: *mut Registers, esr: usi
 
 #[no_mangle]
 unsafe extern "C" fn handle_interrupt(regs: *mut Registers, esr: usize, far: usize) {
-    todo!("interrupt, ESR={esr:x}");
+    let ic = interrupt_controller();
+    let id = ic.ack_interrupt();
+    log::trace!("interrupt {id} {}", timer::counter());
+    timer::write_timer_value(timer::frequency() >> 1);
+    ic.finish_interrupt(id);
 }
 
 #[no_mangle]
 unsafe extern "C" fn handle_fast_interrupt(regs: *mut Registers, esr: usize, far: usize) {
-    todo!("fast interrupt, ESR={esr:x}");
+    let ic = interrupt_controller();
+    let id = ic.ack_interrupt();
+    log::trace!("fast interrupt {id}");
+    ic.finish_interrupt(id);
 }
 
 #[no_mangle]

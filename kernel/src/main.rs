@@ -12,8 +12,6 @@ extern crate alloc;
 
 use core::{arch::global_asm, fmt::Write, panic::PanicInfo};
 
-use alloc::vec;
-
 use crate::{
     exception::interrupt_controller,
     memory::{
@@ -76,18 +74,6 @@ impl log::Log for DebugUartLogger {
 pub fn halt() -> ! {
     loop {
         unsafe { core::arch::asm!("wfi", options(nomem, nostack)) }
-    }
-}
-
-pub fn test_fn(id_map: &mut PageTable, mem_start: PhysicalAddress, page_count: usize) {
-    log::trace!("before unmap");
-
-    id_map.unmap_range(VirtualAddress(mem_start.0), page_count);
-
-    log::trace!("after unmap");
-
-    for i in 0..10 {
-        log::trace!("{i}");
     }
 }
 
@@ -194,33 +180,37 @@ pub extern "C" fn kmain() {
     let props = timer::find_timer_properties(&dt);
     log::info!("timer properties = {props:?}");
 
-    let timer_irq = 13;
+    let timer_irq = props.interrupt;
 
     let ic = interrupt_controller();
-    ic.set_config(timer_irq, exception::InterruptConfig::Edge);
-    ic.set_priority(timer_irq, 0);
-    // TODO: mystery CPU id that we can probably read from the DT
     ic.set_target_cpu(timer_irq, 0x1);
+    ic.set_priority(timer_irq, 0);
+    ic.set_config(timer_irq, exception::InterruptConfig::Level);
     ic.set_pending(timer_irq, false);
     ic.set_enable(timer_irq, true);
 
     timer::set_enabled(true);
     timer::set_interrupts_enabled(true);
-    timer::write_timer_value(15000);
     log::info!("timer enabled = {}", timer::enabled());
     log::info!("timer interrupts = {}", timer::interrupts_enabled());
     log::info!("timer compare value = {}", timer::read_compare_value());
     log::info!("timer frequency = {}", timer::frequency());
+    timer::write_timer_value(timer::frequency() >> 1);
 
-    for i in 0..200 {
-        let cntpct = timer::counter();
-        log::info!("{i} timer counter = {cntpct}");
-        if timer::condition_met() {
-            log::info!("condition met");
-            timer::write_timer_value(2500);
-            break;
-        }
-    }
+    // enable all interrupts in DAIF process state mask
+    exception::write_interrupt_mask(exception::InterruptMask(0));
+
+    // for i in 0..50 {
+    //     let cntpct = timer::counter();
+    //     let p = ic.is_pending(timer_irq);
+    //     let e = ic.is_enabled(timer_irq);
+    //     let a = ic.is_active(timer_irq);
+    //     log::info!("{i} timer counter = {cntpct} P:{p} E:{e} A:{a}");
+    //     if timer::condition_met() {
+    //         log::info!("condition met");
+    //         timer::write_timer_value(15000);
+    //     }
+    // }
 
     // log::warn!("attempting to generate a page fault...");
     // let fault_addr = VirtualAddress(0xffff_ffff_ffff_ab00);
@@ -228,7 +218,7 @@ pub extern "C" fn kmain() {
     //     fault_addr.as_ptr::<usize>().write(3);
     // }
 
-    log::warn!("halting...");
+    log::info!("waiting for interrupts...");
     halt();
 }
 
@@ -237,7 +227,7 @@ fn panic_handler(info: &PanicInfo) -> ! {
     let mut uart = DebugUart {
         base: 0xffff_0000_0900_0000 as *mut u8,
     };
-    let _ = uart.write_fmt(format_args!("\npanic! {info}"));
+    let _ = uart.write_fmt(format_args!("\npanic! {info}\n"));
     halt();
 }
 

@@ -84,12 +84,12 @@ pub fn condition_met() -> bool {
 }
 
 pub fn interrupts_enabled() -> bool {
-    read_control().imask()
+    !read_control().imask()
 }
 
 pub fn set_interrupts_enabled(enabled: bool) {
     let mut c = read_control();
-    c.set_imask(true);
+    c.set_imask(!enabled);
     write_control(c);
 }
 
@@ -99,14 +99,14 @@ pub fn enabled() -> bool {
 
 pub fn set_enabled(enabled: bool) {
     let mut c = read_control();
-    c.set_enable(true);
+    c.set_enable(enabled);
     write_control(c);
 }
 
 #[derive(Debug)]
 pub struct TimerProperties<'dt> {
-    interrupt: crate::exception::InterruptId,
-    compatible: &'dt core::ffi::CStr,
+    pub interrupt: crate::exception::InterruptId,
+    pub compatible: &'dt core::ffi::CStr,
 }
 
 pub fn find_timer_properties(device_tree: &DeviceTree) -> TimerProperties {
@@ -142,7 +142,8 @@ pub fn find_timer_properties(device_tree: &DeviceTree) -> TimerProperties {
                             "timer interrupt at {irq} with type={ty:x} and flags={flags:x}"
                         );
                     }
-                    interrupt = Some(0);
+                    // TODO: this is the actual IRQ that we get. why 30?! that's not in the device tree!
+                    interrupt = Some(30);
                 }
                 "compatible" => compatible = Some(CStr::from_bytes_until_nul(data).unwrap()),
                 _ => {}
