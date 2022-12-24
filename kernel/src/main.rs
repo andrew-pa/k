@@ -10,7 +10,16 @@
 
 extern crate alloc;
 
-use core::{arch::global_asm, fmt::Write, panic::PanicInfo};
+mod dtb;
+
+mod exception;
+mod memory;
+mod process;
+
+mod timer;
+mod uart;
+
+use core::{arch::global_asm, panic::PanicInfo};
 
 use crate::{
     exception::interrupt_controller,
@@ -20,55 +29,7 @@ use crate::{
     },
 };
 
-mod dtb;
-mod exception;
-mod memory;
-mod timer;
-mod uart;
-
 global_asm!(include_str!("start.S"));
-
-struct DebugUart {
-    base: *mut u8,
-}
-
-impl Write for DebugUart {
-    fn write_str(&mut self, s: &str) -> core::fmt::Result {
-        for b in s.bytes() {
-            unsafe {
-                self.base.write_volatile(b);
-            }
-        }
-        Ok(())
-    }
-}
-
-struct DebugUartLogger;
-
-impl log::Log for DebugUartLogger {
-    fn enabled(&self, _metadata: &log::Metadata) -> bool {
-        true
-    }
-
-    fn log(&self, record: &log::Record) {
-        //WARN: this is currently NOT thread safe!
-        let mut uart = DebugUart {
-            base: 0xffff_0000_0900_0000 as *mut u8,
-        };
-        writeln!(
-            uart,
-            "[{:<5} ({}:{}) {}] {}",
-            record.level(),
-            record.file().unwrap_or("unknown file"),
-            record.line().unwrap_or(0),
-            record.module_path().unwrap_or("unknown module"),
-            record.args()
-        )
-        .unwrap();
-    }
-
-    fn flush(&self) {}
-}
 
 #[inline]
 pub fn halt() -> ! {
@@ -84,7 +45,7 @@ pub extern "C" fn kmain() {
         memory::zero_bss_section();
     }
 
-    log::set_logger(&DebugUartLogger).expect("set logger");
+    log::set_logger(&uart::DebugUartLogger).expect("set logger");
     log::set_max_level(log::LevelFilter::Trace);
     log::info!("starting kernel!");
 
@@ -224,7 +185,8 @@ pub extern "C" fn kmain() {
 
 #[panic_handler]
 fn panic_handler(info: &PanicInfo) -> ! {
-    let mut uart = DebugUart {
+    use core::fmt::Write;
+    let mut uart = uart::DebugUart {
         base: 0xffff_0000_0900_0000 as *mut u8,
     };
     let _ = uart.write_fmt(format_args!("\npanic! {info}\n"));
@@ -232,12 +194,12 @@ fn panic_handler(info: &PanicInfo) -> ! {
 }
 
 /* TODO:
- *  - initialize MMU & provide API for page allocation and changing page tables. also make sure reserved regions on memory are correctly mapped
+ *  + initialize MMU & provide API for page allocation and changing page tables. also make sure reserved regions on memory are correctly mapped
  *      - you can identity map the page the instruction ptr is in and then jump elsewhere safely
  *      - need to do initial mapping so that we can compile/link the kernel to run at high addresses
- *  - kernel heap/GlobalAlloc impl
- *  - set up interrupt handlers
- *  - start timer interrupt
+ *  + kernel heap/GlobalAlloc impl
+ *  + set up interrupt handlers
+ *  + start timer interrupt
  *  - switching between user/kernel space
  *  - process scheduling
  *  - system calls
