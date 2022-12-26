@@ -102,24 +102,107 @@ impl KernelGlobalAlloc {
     }
 
     fn add_free_block(&self, location: *mut u8, size: usize) {
+        fn check_adj(
+            cur_block_loc: usize,
+            cur_block_size: usize,
+            new_block_loc: usize,
+            new_block_size: usize,
+        ) -> i8 {
+            if new_block_loc == cur_block_loc + cur_block_size {
+                1
+            } else if cur_block_loc == new_block_loc + new_block_size {
+                -1
+            } else {
+                0 // not adj
+            }
+        }
+
         log::trace!(
             "returning block at 0x{:x} of size {}",
             location as usize,
             size
         );
-        let new_block = location as *mut FreeBlock;
-        unsafe {
-            let mut head = self.free_list_head.lock();
-            let nb = new_block.as_mut().expect("new block non-null");
-            nb.size = size;
-            nb.prev = null_mut();
-            nb.next = *head;
-            if let Some(head) = head.as_mut() {
-                head.prev = nb;
-            }
-            *head = new_block;
+        if location.is_null() {
+            log::warn!("attempted to free nullptr of size {size}");
+            return;
         }
-        // TODO: coalesce blocks? return pages back to the PMA?
+        let new_block = location as *mut FreeBlock;
+        // TODO: return pages back to the PMA?
+        /* iterate through free list:
+         *     if we've found a block that is adjacent to the block we're trying to free, merge
+         *     them together and break
+         *     if we've found the spot the block should be inserted to keep the list in sorted
+         *     order by address:
+         *         check the next block to see if it is adjacent to the current block and merge if so
+         *         if not, insert the block here and break
+         */
+        let mut head = self.free_list_head.lock();
+        let mut cur = *head;
+        let mut insert_spot = null_mut();
+        while let Some(cur_block) = unsafe { cur.as_mut() } {
+            match check_adj(cur as usize, cur_block.size, new_block as usize, size) {
+                -1 => {
+                    // new_block is before cur_block
+                    let nb = unsafe { new_block.as_mut().expect("new block non-null") };
+                    nb.size = cur_block.size + size;
+                    nb.next = cur_block.next;
+                    nb.prev = cur_block.prev;
+                    if let Some(prev_block) = unsafe { cur_block.prev.as_mut() } {
+                        prev_block.next = new_block;
+                    }
+                    if let Some(next_block) = unsafe { cur_block.next.as_mut() } {
+                        next_block.prev = new_block;
+                    }
+                    return;
+                }
+                1 => {
+                    // new_block is after cur_block
+                    cur_block.size += size;
+                    return;
+                }
+                _ => {
+                    // blocks are not adjacent
+                    if cur as usize > (new_block as usize) {
+                        insert_spot = cur;
+                        break;
+                    }
+                }
+            }
+            insert_spot = cur;
+            cur = cur_block.next;
+        }
+
+        // it wasn't possible to merge with any of the other blocks
+        let nb = unsafe { new_block.as_mut().expect("new block non-null") };
+        nb.size = size;
+        nb.next = null_mut();
+        nb.prev = null_mut();
+        match unsafe { insert_spot.as_mut() } {
+            // inserting at the end of the list
+            Some(s) if s.next.is_null() => {
+                log::trace!("inserting new free block at the end of the list {s:?}");
+                s.next = new_block;
+                nb.prev = insert_spot;
+            }
+            // inserting in the middle of the list before insert_spot
+            Some(s) => {
+                log::trace!("inserting new free block in the middle of the list {s:?}");
+                nb.next = insert_spot;
+                nb.prev = s.prev;
+                s.prev = new_block;
+                if let Some(prev) = unsafe { s.prev.as_mut() } {
+                    prev.next = new_block;
+                } else {
+                    *head = new_block;
+                }
+            }
+            // there aren't any blocks
+            None => {
+                log::trace!("inserting new free block at the front of the list");
+                assert!(head.is_null());
+                *head = new_block;
+            }
+        }
     }
 
     fn increase_heap_size(&self, layout: &Layout) {

@@ -458,7 +458,7 @@ impl PageTable {
 
 impl Drop for PageTable {
     fn drop(&mut self) {
-        // Does not drop actual pages!
+        // WARN: Does not drop actual pages!
         fn drop_table(lvl: u8, table: *mut LevelTable, table_phy_addr: PhysicalAddress) {
             for entry in unsafe { &table.as_ref().expect("table ptr is valid").entries } {
                 if let Some(table) = entry.table_ref(lvl) {
