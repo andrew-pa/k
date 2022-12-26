@@ -1,19 +1,10 @@
 use bitfield::bitfield;
-use chashmap::{ReadGuard, WriteGuard, CHashMap};
-use core::{cell::{RefCell, OnceCell}, ops::Deref};
-use hashbrown::HashMap;
-use lock_api::{MappedRwLockReadGuard, RwLockReadGuard};
+use core::cell::OnceCell;
 use smallvec::SmallVec;
-use spin::lock_api::{Mutex, RwLock};
-
 use crate::{
     exception::Registers,
-    memory::{paging::PageTable, PhysicalAddress},
+    memory::paging::PageTable, CHashMapG,
 };
-
-pub type CHashMapG<K, V> = CHashMap<K, V, hashbrown::hash_map::DefaultHashBuilder, spin::RwLock<()>>;
-pub type CHashMapGReadGuard<'a, K, V> = ReadGuard<'a, K, V, hashbrown::hash_map::DefaultHashBuilder, spin::RwLock<()>>;
-pub type CHashMapGWriteGuard<'a, K, V> = WriteGuard<'a, K, V, hashbrown::hash_map::DefaultHashBuilder, spin::RwLock<()>>;
 
 pub type ProcessId = u32;
 pub type ThreadId = u32;

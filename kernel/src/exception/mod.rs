@@ -2,7 +2,7 @@ use core::{arch::global_asm, fmt::Display, cell::OnceCell};
 
 use bitfield::bitfield;
 
-use crate::timer;
+use crate::{timer, CHashMapG};
 
 pub type InterruptId = u32;
 
@@ -36,20 +36,28 @@ pub trait InterruptController {
     fn finish_interrupt(&self, id: InterruptId);
 }
 
-static mut IC: OnceCell<&'static dyn InterruptController> = OnceCell::new();
+pub type InterruptHandler = fn(InterruptId, *mut Registers);
 
-pub unsafe fn init_interrupt_controller(device_tree: &crate::dtb::DeviceTree) {
+static mut IC: OnceCell<&'static dyn InterruptController> = OnceCell::new();
+static mut INTERRUPT_HANDLERS: OnceCell<CHashMapG<InterruptId, InterruptHandler>> = OnceCell::new();
+
+pub unsafe fn init_interrupts(device_tree: &crate::dtb::DeviceTree) {
     use alloc::boxed::Box;
 
     // for now this is our only implementation
     let gic = gic::GenericInterruptController::in_device_tree(device_tree).expect("find/init GIC");
 
     IC.set(Box::leak(Box::new(gic))).ok().expect("init interrupt controller once");
+    INTERRUPT_HANDLERS.set(Default::default()).ok().expect("init interrupts once");
 }
 
 pub fn interrupt_controller() -> &'static dyn InterruptController {
     // SAFETY: this basically puts thread safety onto the IC implementation
     unsafe { *IC.get().expect("interrupt controller initialized") }
+}
+
+pub fn interrupt_handlers() -> &'static CHashMapG<InterruptId, InterruptHandler> {
+    unsafe { INTERRUPT_HANDLERS.get().expect("init interrupts") }
 }
 
 bitfield! {
@@ -115,16 +123,19 @@ unsafe extern "C" fn handle_synchronous_exception(regs: *mut Registers, esr: usi
 }
 
 #[no_mangle]
-unsafe extern "C" fn handle_interrupt(regs: *mut Registers, esr: usize, far: usize) {
+unsafe extern "C" fn handle_interrupt(regs: *mut Registers, _esr: usize, _far: usize) {
     let ic = interrupt_controller();
     let id = ic.ack_interrupt();
-    log::trace!("interrupt {id} {}", timer::counter());
-    timer::write_timer_value(timer::frequency() >> 1);
+    log::trace!("interrupt {id}");
+    match interrupt_handlers().get(&id) {
+        Some(h) => (*h)(id, regs),
+        None => log::warn!("unhandled interrupt {id}"),
+    }
     ic.finish_interrupt(id);
 }
 
 #[no_mangle]
-unsafe extern "C" fn handle_fast_interrupt(regs: *mut Registers, esr: usize, far: usize) {
+unsafe extern "C" fn handle_fast_interrupt(_regs: *mut Registers, _esr: usize, _far: usize) {
     let ic = interrupt_controller();
     let id = ic.ack_interrupt();
     log::trace!("fast interrupt {id}");

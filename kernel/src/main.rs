@@ -12,7 +12,6 @@
 extern crate alloc;
 
 mod dtb;
-mod id_map;
 
 mod exception;
 mod memory;
@@ -23,15 +22,14 @@ mod uart;
 
 use core::{arch::global_asm, panic::PanicInfo};
 
-use crate::{
-    exception::interrupt_controller,
-    memory::{
-        paging::{PageTable, TranslationControlReg},
-        physical_memory_allocator, PhysicalAddress, VirtualAddress, PAGE_SIZE,
-    },
-};
+use alloc::boxed::Box;
+
+pub type CHashMapG<K, V> = chashmap::CHashMap<K, V, hashbrown::hash_map::DefaultHashBuilder, spin::RwLock<()>>;
+pub type CHashMapGReadGuard<'a, K, V> = chashmap::ReadGuard<'a, K, V, hashbrown::hash_map::DefaultHashBuilder, spin::RwLock<()>>;
+pub type CHashMapGWriteGuard<'a, K, V> = chashmap::WriteGuard<'a, K, V, hashbrown::hash_map::DefaultHashBuilder, spin::RwLock<()>>;
 
 global_asm!(include_str!("start.S"));
+
 
 #[inline]
 pub fn halt() -> ! {
@@ -75,12 +73,10 @@ pub extern "C" fn kmain() {
         exception::install_exception_vector_table();
         memory::init_physical_memory_allocator(&dt);
         memory::paging::init_kernel_page_table();
-    }
 
     /* --- Kernel heap is now available --- */
 
-    unsafe {
-        exception::init_interrupt_controller(&dt);
+        exception::init_interrupts(&dt);
     }
 
     /*let mut test_map = PageTable::empty(false).expect("create page table");
@@ -145,7 +141,7 @@ pub extern "C" fn kmain() {
 
     let timer_irq = props.interrupt;
 
-    let ic = interrupt_controller();
+    let ic = exception::interrupt_controller();
     ic.set_target_cpu(timer_irq, 0x1);
     ic.set_priority(timer_irq, 0);
     ic.set_config(timer_irq, exception::InterruptConfig::Level);
@@ -159,6 +155,11 @@ pub extern "C" fn kmain() {
     log::info!("timer compare value = {}", timer::read_compare_value());
     log::info!("timer frequency = {}", timer::frequency());
     timer::write_timer_value(timer::frequency() >> 1);
+
+    exception::interrupt_handlers().insert(timer_irq, |id, _regs| {
+        log::info!("{id} timer interrupt! {}", timer::counter());
+        timer::write_timer_value(timer::frequency() >> 1);
+    });
 
     // enable all interrupts in DAIF process state mask
     exception::write_interrupt_mask(exception::InterruptMask(0));
