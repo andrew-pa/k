@@ -7,10 +7,12 @@
 #![feature(allocator_api)]
 #![feature(default_alloc_error_handler)]
 #![feature(cstr_from_bytes_until_nul)]
+#![feature(once_cell)]
 
 extern crate alloc;
 
 mod dtb;
+mod id_map;
 
 mod exception;
 mod memory;
@@ -122,9 +124,9 @@ pub extern "C" fn kmain() {
             log::debug!("{y}");
             assert_eq!(v, y);
         }
-    }
+    }*/
 
-    let mut v = vec![1, 2, 3, 4, 5];
+    /*let mut v = alloc::vec![1, 2, 3, 4, 5];
     memory::heap::log_heap_info();
     log::debug!("{v:?}");
     for i in 0..16000 {
@@ -178,6 +180,8 @@ pub extern "C" fn kmain() {
     // unsafe {
     //     fault_addr.as_ptr::<usize>().write(3);
     // }
+
+    // let x = process::process(0).unwrap();
 
     log::info!("waiting for interrupts...");
     halt();

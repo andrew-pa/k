@@ -1,4 +1,4 @@
-use core::{arch::global_asm, fmt::Display};
+use core::{arch::global_asm, fmt::Display, cell::OnceCell};
 
 use bitfield::bitfield;
 
@@ -36,21 +36,20 @@ pub trait InterruptController {
     fn finish_interrupt(&self, id: InterruptId);
 }
 
-static mut IC: Option<&'static dyn InterruptController> = None;
+static mut IC: OnceCell<&'static dyn InterruptController> = OnceCell::new();
 
 pub unsafe fn init_interrupt_controller(device_tree: &crate::dtb::DeviceTree) {
     use alloc::boxed::Box;
-    assert!(IC.is_none());
 
     // for now this is our only implementation
     let gic = gic::GenericInterruptController::in_device_tree(device_tree).expect("find/init GIC");
 
-    IC = Some(Box::leak(Box::new(gic)));
+    IC.set(Box::leak(Box::new(gic))).ok().expect("init interrupt controller once");
 }
 
 pub fn interrupt_controller() -> &'static dyn InterruptController {
     // SAFETY: this basically puts thread safety onto the IC implementation
-    unsafe { IC.expect("interrupt controller initialized") }
+    unsafe { *IC.get().expect("interrupt controller initialized") }
 }
 
 bitfield! {

@@ -9,6 +9,10 @@ edition = "2021"
 log = "0.4"
 byteorder = { version = "1", default-features = false }
 bitvec = { version = "1", default-features = false }
+smallvec = "1"
+hashbrown = "0.13"
 bitfield = "0.14"
 derive_more = "0.99"
 spin = "0.9"
+lock_api = "0.4"
+chashmap = { path = "../../nostd-chashmap/chashmap" }

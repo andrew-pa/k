@@ -1,3 +1,5 @@
+use core::cell::OnceCell;
+
 use crate::{
     dtb::{DeviceTree, StructureItem},
     memory::{__kernel_end, __kernel_start, PAGE_SIZE},
@@ -159,16 +161,16 @@ impl PhysicalMemoryAllocator {
     }
 }
 
-static mut PMA: Option<Mutex<PhysicalMemoryAllocator>> = None;
+static mut PMA: OnceCell<Mutex<PhysicalMemoryAllocator>> = OnceCell::new();
 
 /// SAFETY: Not thread safe!
 pub unsafe fn init_physical_memory_allocator(device_tree: &DeviceTree) {
-    PMA = Some(Mutex::new(PhysicalMemoryAllocator::init(device_tree)));
+    PMA.set(Mutex::new(PhysicalMemoryAllocator::init(device_tree))).ok().expect("init physical memory once");
 }
 
 pub fn physical_memory_allocator() -> spin::MutexGuard<'static, PhysicalMemoryAllocator> {
     unsafe {
-        PMA.as_ref()
+        PMA.get().as_ref()
             .expect("physical memory allocator initalized")
             .lock()
     }

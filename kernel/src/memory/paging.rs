@@ -1,5 +1,5 @@
 #![allow(unused)]
-use core::ops::Range;
+use core::{ops::Range, cell::OnceCell};
 
 use bitfield::bitfield;
 use spin::Mutex;
@@ -575,15 +575,16 @@ pub unsafe fn flush_tlb_for_asid(asid: usize) {
     )
 }
 
-static mut KERNEL_TABLE: Option<Mutex<PageTable>> = None;
+static mut KERNEL_TABLE: OnceCell<Mutex<PageTable>> = OnceCell::new();
 
 pub unsafe fn init_kernel_page_table() {
-    KERNEL_TABLE = Some(Mutex::new(PageTable::kernel_table()));
+    KERNEL_TABLE.set(Mutex::new(PageTable::kernel_table())).expect("init kernel page table once");
 }
 
 pub fn kernel_table() -> spin::MutexGuard<'static, PageTable> {
     unsafe {
         KERNEL_TABLE
+            .get()
             .as_ref()
             .expect("kernel page table initialized")
             .lock()
