@@ -55,7 +55,7 @@ impl Thread {
     }
 }
 
-pub const IDLE_THREAD: ThreadId = u32::MAX;
+pub const IDLE_THREAD: ThreadId = 0;
 
 static mut PROCESSES: OnceCell<CHashMapG<ProcessId, Process>> = OnceCell::new();
 static mut THREADS: OnceCell<CHashMapG<ThreadId, Thread>> = OnceCell::new();

@@ -133,6 +133,14 @@ impl DeviceTree {
     pub fn iter_reserved_memory_regions(&self) -> MemRegionIter {
         MemRegionIter::for_data(self.mem_map)
     }
+
+    pub fn log(&self) {
+        log::debug!("Device tree:");
+        for item in self.iter_structure() {
+            log::debug!("{item:?}");
+        }
+        log::debug!("-----------");
+    }
 }
 
 fn pad_end_4b(num_bytes: usize) -> usize {

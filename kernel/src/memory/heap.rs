@@ -231,9 +231,10 @@ impl KernelGlobalAlloc {
         *head = block;
     }
 
-    fn log_heap_info(&self) {
+    fn log_heap_info(&self, level: log::Level) {
         let heap_size = self.heap_size.load(core::sync::atomic::Ordering::Acquire);
-        log::info!(
+        log::log!(
+            level,
             "total heap size = {} pages ({} bytes)",
             heap_size,
             heap_size * PAGE_SIZE
@@ -242,12 +243,13 @@ impl KernelGlobalAlloc {
         unsafe {
             let mut cur = *self.free_list_head.lock();
             while let Some(cur_block) = cur.as_ref() {
-                log::info!("0x{:x}: {cur_block:?}", cur as usize);
+                log::log!(level, "0x{:x}: {cur_block:?}", cur as usize);
                 free_size += cur_block.size;
                 cur = cur_block.next;
             }
         }
-        log::info!(
+        log::log!(
+            level,
             "total free = {free_size}b, total allocated = {}b",
             heap_size * PAGE_SIZE - free_size
         );
@@ -295,6 +297,6 @@ unsafe impl GlobalAlloc for KernelGlobalAlloc {
     }
 }
 
-pub fn log_heap_info() {
-    GLOBAL_HEAP.log_heap_info();
+pub fn log_heap_info(level: log::Level) {
+    GLOBAL_HEAP.log_heap_info(level);
 }
