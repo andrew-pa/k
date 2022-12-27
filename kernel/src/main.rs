@@ -20,12 +20,9 @@ mod process;
 mod timer;
 mod uart;
 
-use core::{arch::global_asm, fmt::Write, panic::PanicInfo};
+use core::{arch::global_asm, panic::PanicInfo};
 
-use alloc::boxed::Box;
 use smallvec::SmallVec;
-
-use crate::process::scheduler;
 
 pub type CHashMapG<K, V> =
     chashmap::CHashMap<K, V, hashbrown::hash_map::DefaultHashBuilder, spin::RwLock<()>>;
@@ -44,13 +41,11 @@ fn fib(n: usize) -> usize {
     }
 }
 
-pub fn test_thread_code_a() -> ! {
-    let mut uart = uart::DebugUart {
-        base: (0x0000_fff0_0000_0000) as *mut u8,
-    };
+pub unsafe fn test_thread_code_a() -> ! {
     loop {
-        uart.write_char('A').unwrap();
         // log::info!("hello from thread A! {}", fib(30));
+        // it is impossible to do anything interesting here without mapping the entire kernel
+        core::arch::asm!("mov x0, #0x0000fff000000000", "mov x1, #65", "str x1, [x0]")
     }
 }
 
