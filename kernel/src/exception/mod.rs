@@ -90,9 +90,47 @@ pub fn write_interrupt_mask(m: InterruptMask) {
 
 global_asm!(include_str!("table.S"));
 
-#[derive(Debug, Default, Copy, Clone)]
+#[derive(Default, Copy, Clone)]
 pub struct Registers {
-    pub x: [usize; 30],
+    pub x: [usize; 31],
+}
+
+impl core::fmt::Debug for Registers {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let mut s = f.debug_struct("Registers");
+        s.field("x0", &format_args!("0x{:x}", self.x[0]));
+        s.field("x1", &format_args!("0x{:x}", self.x[1]));
+        s.field("x2", &format_args!("0x{:x}", self.x[2]));
+        s.field("x3", &format_args!("0x{:x}", self.x[3]));
+        s.field("x4", &format_args!("0x{:x}", self.x[4]));
+        s.field("x5", &format_args!("0x{:x}", self.x[5]));
+        s.field("x6", &format_args!("0x{:x}", self.x[6]));
+        s.field("x7", &format_args!("0x{:x}", self.x[7]));
+        s.field("x8", &format_args!("0x{:x}", self.x[8]));
+        s.field("x9", &format_args!("0x{:x}", self.x[9]));
+        s.field("x10", &format_args!("0x{:x}", self.x[10]));
+        s.field("x11", &format_args!("0x{:x}", self.x[11]));
+        s.field("x12", &format_args!("0x{:x}", self.x[12]));
+        s.field("x13", &format_args!("0x{:x}", self.x[13]));
+        s.field("x14", &format_args!("0x{:x}", self.x[14]));
+        s.field("x15", &format_args!("0x{:x}", self.x[15]));
+        s.field("x16", &format_args!("0x{:x}", self.x[16]));
+        s.field("x17", &format_args!("0x{:x}", self.x[17]));
+        s.field("x18", &format_args!("0x{:x}", self.x[18]));
+        s.field("x19", &format_args!("0x{:x}", self.x[19]));
+        s.field("x20", &format_args!("0x{:x}", self.x[20]));
+        s.field("x21", &format_args!("0x{:x}", self.x[21]));
+        s.field("x22", &format_args!("0x{:x}", self.x[22]));
+        s.field("x23", &format_args!("0x{:x}", self.x[23]));
+        s.field("x24", &format_args!("0x{:x}", self.x[24]));
+        s.field("x25", &format_args!("0x{:x}", self.x[25]));
+        s.field("x26", &format_args!("0x{:x}", self.x[26]));
+        s.field("x27", &format_args!("0x{:x}", self.x[27]));
+        s.field("x28", &format_args!("0x{:x}", self.x[28]));
+        s.field("x29", &format_args!("0x{:x}", self.x[29]));
+        s.field("x30", &format_args!("0x{:x}", self.x[30]));
+        s.finish()
+    }
 }
 
 bitfield! {

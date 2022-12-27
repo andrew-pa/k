@@ -38,14 +38,12 @@ global_asm!(include_str!("start.S"));
 pub fn test_thread_code_a() -> ! {
     loop {
         log::info!("hello from thread A!");
-        halt();
     }
 }
 
 pub fn test_thread_code_b() -> ! {
     loop {
         log::info!("hello from thread B!");
-        halt();
     }
 }
 
@@ -155,6 +153,15 @@ pub extern "C" fn kmain() {
         log::info!("kernel table {:#?}", kernel_map);
     }
 
+    let mut x: usize;
+    unsafe {
+        core::arch::asm!(
+            "mrs {val}, SPSel",
+            val = out(reg) x
+        );
+    }
+    log::info!("SPSel = {x}");
+
     let props = timer::find_timer_properties(&dt);
     log::info!("timer properties = {props:?}");
 
@@ -177,6 +184,11 @@ pub extern "C" fn kmain() {
 
     // create a way unsafe ad-hoc thread
     log::info!("{:x}", test_thread_code_b as usize);
+    let stack_a_start = {
+        memory::physical_memory_allocator()
+            .alloc_contig(4 * 1024)
+            .expect("allocate stack")
+    };
     process::threads().insert(
         0xa,
         process::Thread {
@@ -185,8 +197,19 @@ pub extern "C" fn kmain() {
             register_state: exception::Registers::default(),
             program_status: process::SavedProgramStatus::default_at_el1(),
             pc: memory::VirtualAddress(test_thread_code_a as usize),
+            sp: unsafe {
+                memory::VirtualAddress(
+                    stack_a_start.to_virtual_canonical().0 + 4 * 1024 * memory::PAGE_SIZE,
+                )
+            },
         },
     );
+
+    let stack_b_start = {
+        memory::physical_memory_allocator()
+            .alloc_contig(4 * 1024)
+            .expect("allocate stack")
+    };
     process::threads().insert(
         0xb,
         process::Thread {
@@ -195,6 +218,11 @@ pub extern "C" fn kmain() {
             register_state: exception::Registers::default(),
             program_status: process::SavedProgramStatus::default_at_el1(),
             pc: memory::VirtualAddress(test_thread_code_b as usize),
+            sp: unsafe {
+                memory::VirtualAddress(
+                    stack_b_start.to_virtual_canonical().0 + 4 * 1024 * memory::PAGE_SIZE,
+                )
+            },
         },
     );
     process::scheduler::scheduler().add_thread(0xa);

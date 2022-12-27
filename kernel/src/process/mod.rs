@@ -25,6 +25,7 @@ pub struct Thread {
     pub register_state: Registers,
     pub program_status: SavedProgramStatus,
     pub pc: VirtualAddress,
+    pub sp: VirtualAddress,
 }
 
 impl Thread {
@@ -34,11 +35,13 @@ impl Thread {
         self.register_state = *regs;
         self.program_status = read_saved_program_status();
         self.pc = read_exception_link_reg();
+        self.sp = read_stack_pointer(0);
     }
 
     /// Restore this thread so that it will resume when the kernel finishes processesing an exception
     pub unsafe fn restore(&self, regs: &mut Registers) {
         write_exception_link_reg(self.pc);
+        write_stack_pointer(0, self.sp);
         write_saved_program_status(&self.program_status);
         *regs = self.register_state;
     }
@@ -117,5 +120,31 @@ pub fn read_exception_link_reg() -> VirtualAddress {
 pub fn write_exception_link_reg(addr: VirtualAddress) {
     unsafe {
         core::arch::asm!("msr ELR_EL1, {v}", v = in(reg) addr.0);
+    }
+}
+
+pub fn read_stack_pointer(el: u8) -> VirtualAddress {
+    let mut v: usize;
+    unsafe {
+        match el {
+            0 => core::arch::asm!("mrs {v}, SP_EL0", v = out(reg) v),
+            1 => core::arch::asm!("mrs {v}, SP_EL1", v = out(reg) v),
+            2 => core::arch::asm!("mrs {v}, SP_EL2", v = out(reg) v),
+            // 3 => core::arch::asm!("mrs {v}, SP_EL3", v = out(reg) v),
+            _ => panic!("invalid exception level {el}"),
+        }
+    }
+    VirtualAddress(v)
+}
+
+pub fn write_stack_pointer(el: u8, sp: VirtualAddress) {
+    unsafe {
+        match el {
+            0 => core::arch::asm!("msr SP_EL0, {v}", v = in(reg) sp.0),
+            1 => core::arch::asm!("msr SP_EL1, {v}", v = in(reg) sp.0),
+            2 => core::arch::asm!("msr SP_EL2, {v}", v = in(reg) sp.0),
+            // 3 => core::arch::asm!("msr SP_EL3, {v}", v = in(reg) sp.0),
+            _ => panic!("invalid exception level {el}"),
+        }
     }
 }

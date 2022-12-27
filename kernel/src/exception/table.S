@@ -74,13 +74,13 @@ _handle_unimplemented:
 _exception_vector_table:
 /* current EL with SP0 */
 .balign 0x80
-    b _handle_unimplemented
+    b _handle_synchronous
 .balign 0x80
-    b _handle_unimplemented
+    b _handle_interrupt
 .balign 0x80
-    b _handle_unimplemented
+    b _handle_fast_interrupt
 .balign 0x80
-    b _handle_unimplemented
+    b _handle_system_error
 /* current EL with SPX */
 .balign 0x80
     b _handle_synchronous
