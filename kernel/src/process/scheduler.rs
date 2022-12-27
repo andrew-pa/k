@@ -68,15 +68,22 @@ pub fn run_scheduler(current_regs: *mut Registers) {
             return;
         }
     };
-    {
+    let previous_asid = {
         let current = scheduler.currently_running();
         log::trace!("pausing thread {current}");
         unsafe {
             if let Some(mut t) = threads().get_mut(&current) {
                 t.save(current_regs.as_ref().unwrap());
+                if let Some(proc) = t.parent.and_then(|id| processes().get(&id)) {
+                    Some(proc.page_tables.asid)
+                } else {
+                    None
+                }
+            } else {
+                None
             }
         }
-    }
+    };
     scheduler.schedule_next_thread();
     {
         let current = scheduler.currently_running();
@@ -87,9 +94,10 @@ pub fn run_scheduler(current_regs: *mut Registers) {
 
         unsafe {
             if let Some(proc) = thread.parent.and_then(|id| processes().get(&id)) {
-                // TODO: set ASID
                 proc.page_tables.activate();
             }
+
+            crate::memory::paging::flush_tlb_for_asid(previous_asid.unwrap_or(0));
 
             thread.restore(current_regs.as_mut().unwrap());
         }

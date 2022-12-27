@@ -145,7 +145,7 @@ impl core::ops::IndexMut<usize> for LevelTable {
 pub struct PageTable {
     /// true => this page table is for virtual addresses of prefix 0xffff, false => prefix must be 0x0000
     high_addresses: bool,
-    asid: u16,
+    pub asid: u16,
     level0_table: *mut LevelTable,
     level0_phy_addr: PhysicalAddress,
 }
@@ -574,10 +574,10 @@ pub unsafe fn flush_tlb_total() {
     )
 }
 
-pub unsafe fn flush_tlb_for_asid(asid: usize) {
+pub unsafe fn flush_tlb_for_asid(asid: u16) {
     core::arch::asm!(
         "DSB ISHST", // ensure writes to tables have completed
-        "TLBI ASIDE1, {asid}", // flush TLB entries associated with ASID
+        "TLBI ASIDE1, {asid:x}", // flush TLB entries associated with ASID
         "DSB ISH", // ensure that flush has completed
         "ISB", // make sure next instruction is fetched with changes
         asid = in(reg) asid
