@@ -98,7 +98,14 @@ bitfield! {
 }
 
 impl SavedProgramStatus {
-    pub fn default_at_el1() -> SavedProgramStatus {
+    /// This creates a suitable SPSR value for a thread running at EL0 (using the SP_EL0 stack pointer)
+    pub fn initial_for_el0() -> SavedProgramStatus {
+        SavedProgramStatus(0)
+    }
+
+    /// This creates a suitable SPSR value for a thread running at EL1 with its own stack using the
+    /// SP_EL0 stack pointer
+    pub fn initial_for_el1() -> SavedProgramStatus {
         let mut spsr = SavedProgramStatus(0);
         spsr.set_el(1);
         spsr

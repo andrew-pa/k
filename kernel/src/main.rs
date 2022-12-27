@@ -45,7 +45,12 @@ pub unsafe fn test_thread_code_a() -> ! {
     loop {
         // log::info!("hello from thread A! {}", fib(30));
         // it is impossible to do anything interesting here without mapping the entire kernel
-        core::arch::asm!("mov x0, #0x0000fff000000000", "mov x1, #65", "str x1, [x0]")
+        core::arch::asm!(
+            "mov x0, #0x0000fff000000000",
+            "mov x1, #65",
+            "str x1, [x0]",
+            "svc #0xabcd"
+        )
     }
 }
 
@@ -113,7 +118,7 @@ fn create_test_threads() {
             id: 0xa,
             parent: Some(0x1a),
             register_state: exception::Registers::default(),
-            program_status: process::SavedProgramStatus(0),
+            program_status: process::SavedProgramStatus::initial_for_el0(),
             pc: memory::VirtualAddress(po),
             sp: memory::VirtualAddress(0x0000_ffff_0000_0000 + 1024 * memory::PAGE_SIZE),
             priority: process::ThreadPriority::Normal,
@@ -131,7 +136,7 @@ fn create_test_threads() {
             id: 0xb,
             parent: None,
             register_state: exception::Registers::default(),
-            program_status: process::SavedProgramStatus::default_at_el1(),
+            program_status: process::SavedProgramStatus::initial_for_el1(),
             pc: memory::VirtualAddress(test_thread_code_b as usize),
             sp: unsafe {
                 memory::VirtualAddress(
@@ -203,7 +208,7 @@ pub extern "C" fn kmain() {
             id: process::IDLE_THREAD,
             parent: None,
             register_state: exception::Registers::default(),
-            program_status: process::SavedProgramStatus::default_at_el1(),
+            program_status: process::SavedProgramStatus::initial_for_el1(),
             pc: memory::VirtualAddress(0),
             sp: memory::VirtualAddress(0),
             priority: process::ThreadPriority::Low,
