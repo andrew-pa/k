@@ -1,27 +1,47 @@
+use crate::{
+    exception::Registers,
+    memory::{paging::PageTable, VirtualAddress},
+    CHashMapG,
+};
 use bitfield::bitfield;
 use core::cell::OnceCell;
 use smallvec::SmallVec;
-use crate::{
-    exception::Registers,
-    memory::paging::PageTable, CHashMapG,
-};
+
+pub mod scheduler;
 
 pub type ProcessId = u32;
 pub type ThreadId = u32;
 
 pub struct Process {
-    id: ProcessId,
-    page_tables: PageTable,
-    threads: SmallVec<[ThreadId; 4]>,
+    pub id: ProcessId,
+    pub page_tables: PageTable,
+    pub threads: SmallVec<[ThreadId; 4]>,
 }
 
 pub struct Thread {
-    id: ThreadId,
+    pub id: ThreadId,
     /// None => kernel thread
-    parent: Option<ProcessId>,
-    register_state: Registers,
-    program_status: SavedProgramStatus,
-    pc: usize,
+    pub parent: Option<ProcessId>,
+    pub register_state: Registers,
+    pub program_status: SavedProgramStatus,
+    pub pc: VirtualAddress,
+}
+
+impl Thread {
+    /// Save the thread that was interrupted by an exception into this thread
+    /// by copying the SPSR and ELR registers
+    pub unsafe fn save(&mut self, regs: &Registers) {
+        self.register_state = *regs;
+        self.program_status = read_saved_program_status();
+        self.pc = read_exception_link_reg();
+    }
+
+    /// Restore this thread so that it will resume when the kernel finishes processesing an exception
+    pub unsafe fn restore(&self, regs: &mut Registers) {
+        write_exception_link_reg(self.pc);
+        write_saved_program_status(&self.program_status);
+        *regs = self.register_state;
+    }
 }
 
 static mut PROCESSES: OnceCell<CHashMapG<ProcessId, Process>> = OnceCell::new();
@@ -64,6 +84,14 @@ bitfield! {
     sp, set_sp: 0;
 }
 
+impl SavedProgramStatus {
+    pub fn default_at_el1() -> SavedProgramStatus {
+        let mut spsr = SavedProgramStatus(0);
+        spsr.set_el(1);
+        spsr
+    }
+}
+
 pub fn read_saved_program_status() -> SavedProgramStatus {
     let mut v: u64;
     unsafe {
@@ -72,8 +100,22 @@ pub fn read_saved_program_status() -> SavedProgramStatus {
     SavedProgramStatus(v)
 }
 
-pub fn write_saved_program_status(spsr: SavedProgramStatus) {
+pub fn write_saved_program_status(spsr: &SavedProgramStatus) {
     unsafe {
         core::arch::asm!("msr SPSR_EL1, {v}", v = in(reg) spsr.0);
+    }
+}
+
+pub fn read_exception_link_reg() -> VirtualAddress {
+    let mut v: usize;
+    unsafe {
+        core::arch::asm!("mrs {v}, ELR_EL1", v = out(reg) v);
+    }
+    VirtualAddress(v)
+}
+
+pub fn write_exception_link_reg(addr: VirtualAddress) {
+    unsafe {
+        core::arch::asm!("msr ELR_EL1, {v}", v = in(reg) addr.0);
     }
 }

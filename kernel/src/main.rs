@@ -24,12 +24,30 @@ use core::{arch::global_asm, panic::PanicInfo};
 
 use alloc::boxed::Box;
 
-pub type CHashMapG<K, V> = chashmap::CHashMap<K, V, hashbrown::hash_map::DefaultHashBuilder, spin::RwLock<()>>;
-pub type CHashMapGReadGuard<'a, K, V> = chashmap::ReadGuard<'a, K, V, hashbrown::hash_map::DefaultHashBuilder, spin::RwLock<()>>;
-pub type CHashMapGWriteGuard<'a, K, V> = chashmap::WriteGuard<'a, K, V, hashbrown::hash_map::DefaultHashBuilder, spin::RwLock<()>>;
+use crate::process::scheduler;
+
+pub type CHashMapG<K, V> =
+    chashmap::CHashMap<K, V, hashbrown::hash_map::DefaultHashBuilder, spin::RwLock<()>>;
+pub type CHashMapGReadGuard<'a, K, V> =
+    chashmap::ReadGuard<'a, K, V, hashbrown::hash_map::DefaultHashBuilder, spin::RwLock<()>>;
+pub type CHashMapGWriteGuard<'a, K, V> =
+    chashmap::WriteGuard<'a, K, V, hashbrown::hash_map::DefaultHashBuilder, spin::RwLock<()>>;
 
 global_asm!(include_str!("start.S"));
 
+pub fn test_thread_code_a() -> ! {
+    loop {
+        log::info!("hello from thread A!");
+        halt();
+    }
+}
+
+pub fn test_thread_code_b() -> ! {
+    loop {
+        log::info!("hello from thread B!");
+        halt();
+    }
+}
 
 #[inline]
 pub fn halt() -> ! {
@@ -74,9 +92,10 @@ pub extern "C" fn kmain() {
         memory::init_physical_memory_allocator(&dt);
         memory::paging::init_kernel_page_table();
 
-    /* --- Kernel heap is now available --- */
+        /* --- Kernel heap is now available --- */
 
         exception::init_interrupts(&dt);
+        process::scheduler::init_scheduler();
     }
 
     /*let mut test_map = PageTable::empty(false).expect("create page table");
@@ -156,8 +175,34 @@ pub extern "C" fn kmain() {
     log::info!("timer frequency = {}", timer::frequency());
     timer::write_timer_value(timer::frequency() >> 1);
 
-    exception::interrupt_handlers().insert(timer_irq, |id, _regs| {
+    // create a way unsafe ad-hoc thread
+    log::info!("{:x}", test_thread_code_b as usize);
+    process::threads().insert(
+        0xa,
+        process::Thread {
+            id: 0xa,
+            parent: None,
+            register_state: exception::Registers::default(),
+            program_status: process::SavedProgramStatus::default_at_el1(),
+            pc: memory::VirtualAddress(test_thread_code_a as usize),
+        },
+    );
+    process::threads().insert(
+        0xb,
+        process::Thread {
+            id: 0xb,
+            parent: None,
+            register_state: exception::Registers::default(),
+            program_status: process::SavedProgramStatus::default_at_el1(),
+            pc: memory::VirtualAddress(test_thread_code_b as usize),
+        },
+    );
+    process::scheduler::scheduler().add_thread(0xa);
+    process::scheduler::scheduler().add_thread(0xb);
+
+    exception::interrupt_handlers().insert(timer_irq, |id, regs| {
         log::info!("{id} timer interrupt! {}", timer::counter());
+        process::scheduler::run_scheduler(regs);
         timer::write_timer_value(timer::frequency() >> 1);
     });
 

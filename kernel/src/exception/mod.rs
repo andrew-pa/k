@@ -1,4 +1,4 @@
-use core::{arch::global_asm, fmt::Display, cell::OnceCell};
+use core::{arch::global_asm, cell::OnceCell, fmt::Display};
 
 use bitfield::bitfield;
 
@@ -47,8 +47,13 @@ pub unsafe fn init_interrupts(device_tree: &crate::dtb::DeviceTree) {
     // for now this is our only implementation
     let gic = gic::GenericInterruptController::in_device_tree(device_tree).expect("find/init GIC");
 
-    IC.set(Box::leak(Box::new(gic))).ok().expect("init interrupt controller once");
-    INTERRUPT_HANDLERS.set(Default::default()).ok().expect("init interrupts once");
+    IC.set(Box::leak(Box::new(gic)))
+        .ok()
+        .expect("init interrupt controller once");
+    INTERRUPT_HANDLERS
+        .set(Default::default())
+        .ok()
+        .expect("init interrupts once");
 }
 
 pub fn interrupt_controller() -> &'static dyn InterruptController {
@@ -85,7 +90,7 @@ pub fn write_interrupt_mask(m: InterruptMask) {
 
 global_asm!(include_str!("table.S"));
 
-#[derive(Debug)]
+#[derive(Debug, Default, Copy, Clone)]
 pub struct Registers {
     pub x: [usize; 30],
 }
@@ -153,7 +158,8 @@ unsafe extern "C" fn handle_system_error(regs: *mut Registers, esr: usize, far: 
 #[no_mangle]
 unsafe extern "C" fn handle_unimplemented_exception(regs: *mut Registers, esr: usize, far: usize) {
     panic!(
-        "unimplemented exception! ESR={esr:x}, FAR={far:x}, registers = {:?}",
+        "unimplemented exception! {}, FAR={far:x}, registers = {:?}",
+        ExceptionSyndromeRegister(esr as u64),
         regs.as_ref()
     );
 }

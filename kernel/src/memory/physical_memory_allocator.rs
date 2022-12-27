@@ -165,12 +165,15 @@ static mut PMA: OnceCell<Mutex<PhysicalMemoryAllocator>> = OnceCell::new();
 
 /// SAFETY: Not thread safe!
 pub unsafe fn init_physical_memory_allocator(device_tree: &DeviceTree) {
-    PMA.set(Mutex::new(PhysicalMemoryAllocator::init(device_tree))).ok().expect("init physical memory once");
+    PMA.set(Mutex::new(PhysicalMemoryAllocator::init(device_tree)))
+        .ok()
+        .expect("init physical memory once");
 }
 
 pub fn physical_memory_allocator() -> spin::MutexGuard<'static, PhysicalMemoryAllocator> {
     unsafe {
-        PMA.get().as_ref()
+        PMA.get()
+            .as_ref()
             .expect("physical memory allocator initalized")
             .lock()
     }
