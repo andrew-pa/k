@@ -145,6 +145,7 @@ impl core::ops::IndexMut<usize> for LevelTable {
 pub struct PageTable {
     /// true => this page table is for virtual addresses of prefix 0xffff, false => prefix must be 0x0000
     high_addresses: bool,
+    asid: u16,
     level0_table: *mut LevelTable,
     level0_phy_addr: PhysicalAddress,
 }
@@ -171,7 +172,8 @@ impl core::fmt::Debug for PageTable {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(
             f,
-            "PageTable@{} ({}) [\n",
+            "PageTable[{:x}]@{} ({}) [\n",
+            self.asid,
             self.level0_phy_addr,
             if self.high_addresses { "H" } else { "L" }
         )?;
@@ -218,9 +220,10 @@ impl core::fmt::Debug for PageTable {
 }
 
 impl PageTable {
-    pub unsafe fn at_address(high_addresses: bool, addr: PhysicalAddress) -> PageTable {
+    pub unsafe fn at_address(high_addresses: bool, addr: PhysicalAddress, asid: u16) -> PageTable {
         PageTable {
             high_addresses,
+            asid,
             level0_table: unsafe { addr.to_virtual_canonical().as_ptr() },
             level0_phy_addr: addr,
         }
@@ -232,15 +235,17 @@ impl PageTable {
 
         PageTable {
             high_addresses: true,
+            asid: 0,
             level0_table,
             level0_phy_addr: VirtualAddress::from(level0_table).to_physical_canonical(),
         }
     }
 
-    pub fn empty(high_addresses: bool) -> Result<PageTable, MemoryError> {
+    pub fn empty(high_addresses: bool, asid: u16) -> Result<PageTable, MemoryError> {
         let level0_phy_addr = Self::allocate_table()?;
         Ok(PageTable {
             high_addresses,
+            asid,
             level0_table: level0_phy_addr.0 as *mut LevelTable,
             level0_phy_addr,
         })
@@ -250,17 +255,21 @@ impl PageTable {
         high_addresses: bool,
         start_addr: PhysicalAddress,
         page_count: usize,
+        asid: u16,
     ) -> Result<PageTable, MapError> {
-        let mut p = PageTable::empty(high_addresses).map_err(MapError::Memory)?;
+        let mut p = PageTable::empty(high_addresses, asid).map_err(MapError::Memory)?;
         p.map_range(start_addr, VirtualAddress(start_addr.0), page_count, true)?;
         Ok(p)
     }
 
     pub unsafe fn activate(&self) {
-        // TODO: set ASID (address space ID), probably from a paramter, instead of setting it to 0
-        log::debug!("activating table @ {:x}", self.level0_phy_addr.0);
-        let v = self.level0_phy_addr.0; // CnP bit is set to zero by assumption rn, see D17.2.144
-                                        // for details about $x$
+        log::debug!(
+            "activating table @ {:x}, ASID {:x}",
+            self.level0_phy_addr.0,
+            self.asid
+        );
+        // CnP bit is set to zero by assumption rn, see D17.2.144
+        let v = ((self.asid as usize) << 48) | self.level0_phy_addr.0;
         log::debug!(
             "TTBR{}_EL1 ← {:16x}",
             if self.high_addresses { 1 } else { 0 },

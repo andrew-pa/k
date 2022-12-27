@@ -290,6 +290,7 @@ unsafe impl GlobalAlloc for KernelGlobalAlloc {
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         log::trace!("dealloc 0x{:x} {layout:?}", ptr as usize);
         // TODO: we never return physical memory back to the system once it has been allocated, it just goes back in the heap free pool
+        // TODO: we never use the allocated header value but we should probably check it
         self.add_free_block(
             ptr.offset(-(ALLOC_HEADER_SIZE as isize)),
             layout.size() + ALLOC_HEADER_SIZE,

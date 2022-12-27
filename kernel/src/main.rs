@@ -23,6 +23,7 @@ mod uart;
 use core::{arch::global_asm, panic::PanicInfo};
 
 use alloc::boxed::Box;
+use smallvec::SmallVec;
 
 use crate::process::scheduler;
 
@@ -45,7 +46,7 @@ fn fib(n: usize) -> usize {
 
 pub fn test_thread_code_a() -> ! {
     loop {
-        log::info!("hello from thread A! {}", fib(30));
+        // log::info!("hello from thread A! {}", fib(30));
     }
 }
 
@@ -59,29 +60,55 @@ fn create_test_threads() {
     // create a way unsafe ad-hoc thread
     let stack_a_start = {
         memory::physical_memory_allocator()
-            .alloc_contig(4 * 1024)
+            .alloc_contig(1024)
             .expect("allocate stack")
     };
+    let mut process_page_table =
+        memory::paging::PageTable::empty(false, 0x1a).expect("new page table");
+    let code_kva = memory::VirtualAddress(test_thread_code_a as usize);
+    let (_, _, _, _, _, po) = code_kva.to_parts();
+    log::debug!("code at {code_kva} in kernel, {po:x} in process");
+    process_page_table
+        .map_range(
+            unsafe { memory::VirtualAddress(code_kva.0 - po).to_physical_canonical() },
+            memory::VirtualAddress(0),
+            8,
+            true,
+        )
+        .unwrap();
+    process_page_table
+        .map_range(
+            stack_a_start,
+            memory::VirtualAddress(0x0000_ffff_0000_0000),
+            1024,
+            true,
+        )
+        .unwrap();
+    log::debug!("test process page table = {:#?}", process_page_table);
+    process::processes().insert(
+        0x1a,
+        process::Process {
+            id: 0x1a,
+            page_tables: process_page_table,
+            threads: SmallVec::from_elem(0xa, 1),
+        },
+    );
     process::threads().insert(
         0xa,
         process::Thread {
             id: 0xa,
-            parent: None,
+            parent: Some(0x1a),
             register_state: exception::Registers::default(),
-            program_status: process::SavedProgramStatus::default_at_el1(),
-            pc: memory::VirtualAddress(test_thread_code_a as usize),
-            sp: unsafe {
-                memory::VirtualAddress(
-                    stack_a_start.to_virtual_canonical().0 + 4 * 1024 * memory::PAGE_SIZE,
-                )
-            },
+            program_status: process::SavedProgramStatus(0),
+            pc: memory::VirtualAddress(po),
+            sp: memory::VirtualAddress(0x0000_ffff_0000_0000 + 1024 * memory::PAGE_SIZE),
             priority: process::ThreadPriority::Normal,
         },
     );
 
     let stack_b_start = {
         memory::physical_memory_allocator()
-            .alloc_contig(4 * 1024)
+            .alloc_contig(1024)
             .expect("allocate stack")
     };
     process::threads().insert(
