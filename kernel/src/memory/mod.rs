@@ -46,7 +46,7 @@ impl VirtualAddress {
         let lv1_index = ((0x1ff << 30) & self.0) >> 30;
         let lv2_index = ((0x1ff << 21) & self.0) >> 21;
         let lv3_index = ((0x1ff << 12) & self.0) >> 12;
-        let page_offset = self.0 & 0x3ff;
+        let page_offset = self.0 & 0xfff;
 
         (tag, lv0_index, lv1_index, lv2_index, lv3_index, page_offset)
     }

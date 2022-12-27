@@ -20,7 +20,7 @@ mod process;
 mod timer;
 mod uart;
 
-use core::{arch::global_asm, panic::PanicInfo};
+use core::{arch::global_asm, fmt::Write, panic::PanicInfo};
 
 use alloc::boxed::Box;
 use smallvec::SmallVec;
@@ -45,7 +45,11 @@ fn fib(n: usize) -> usize {
 }
 
 pub fn test_thread_code_a() -> ! {
+    let mut uart = uart::DebugUart {
+        base: (0x0000_fff0_0000_0000) as *mut u8,
+    };
     loop {
+        uart.write_char('A').unwrap();
         // log::info!("hello from thread A! {}", fib(30));
     }
 }
@@ -68,12 +72,17 @@ fn create_test_threads() {
     let code_kva = memory::VirtualAddress(test_thread_code_a as usize);
     let (_, _, _, _, _, po) = code_kva.to_parts();
     log::debug!("code at {code_kva} in kernel, {po:x} in process");
+    let pto = memory::paging::PageTableEntryOptions {
+        read_only: false,
+        el0_access: true,
+    };
     process_page_table
         .map_range(
             unsafe { memory::VirtualAddress(code_kva.0 - po).to_physical_canonical() },
             memory::VirtualAddress(0),
             8,
             true,
+            &pto,
         )
         .unwrap();
     process_page_table
@@ -82,6 +91,16 @@ fn create_test_threads() {
             memory::VirtualAddress(0x0000_ffff_0000_0000),
             1024,
             true,
+            &pto,
+        )
+        .unwrap();
+    process_page_table
+        .map_range(
+            memory::PhysicalAddress(0x0900_0000),
+            memory::VirtualAddress(0x0000_fff0_0000_0000),
+            1,
+            true,
+            &pto,
         )
         .unwrap();
     log::debug!("test process page table = {:#?}", process_page_table);
@@ -121,7 +140,7 @@ fn create_test_threads() {
             pc: memory::VirtualAddress(test_thread_code_b as usize),
             sp: unsafe {
                 memory::VirtualAddress(
-                    stack_b_start.to_virtual_canonical().0 + 4 * 1024 * memory::PAGE_SIZE,
+                    stack_b_start.to_virtual_canonical().0 + 1024 * memory::PAGE_SIZE,
                 )
             },
             priority: process::ThreadPriority::Normal,

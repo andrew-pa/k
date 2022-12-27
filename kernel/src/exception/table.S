@@ -92,17 +92,13 @@ _exception_vector_table:
     b _handle_system_error
 /* lower EL using AArch64 */
 .balign 0x80
-    mov x0, #0xa
-    b _handle_unimplemented
+    b _handle_synchronous
 .balign 0x80
-    mov x0, #0xb
-    b _handle_unimplemented
+    b _handle_interrupt
 .balign 0x80
-    mov x0, #0xc
-    b _handle_unimplemented
+    b _handle_fast_interrupt
 .balign 0x80
-    mov x0, #0xd
-    b _handle_unimplemented
+    b _handle_system_error
 /* lower EL using AArch32 */
 .balign 0x80
     b _handle_unimplemented

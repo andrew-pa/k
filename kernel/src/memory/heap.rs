@@ -7,6 +7,8 @@ use core::{
 
 use spin::Mutex;
 
+use crate::memory::paging::PageTableEntryOptions;
+
 use super::{VirtualAddress, PAGE_SIZE};
 
 const KERNEL_HEAP_START: VirtualAddress = VirtualAddress(0xffff_8000_0000_0000);
@@ -44,8 +46,14 @@ impl KernelGlobalAlloc {
                 .expect("allocate pages for kernel heap")
         };
         log::trace!("initial physical pages at {pages}");
-        pt.map_range(pages, KERNEL_HEAP_START, INIT_SIZE, true)
-            .expect("map kernel heap pages");
+        pt.map_range(
+            pages,
+            KERNEL_HEAP_START,
+            INIT_SIZE,
+            true,
+            &PageTableEntryOptions::default(),
+        )
+        .expect("map kernel heap pages");
         let block: *mut FreeBlock = KERNEL_HEAP_START.as_ptr();
         log::trace!("initial head block at 0x{:x}", block as usize);
         unsafe {
@@ -217,8 +225,14 @@ impl KernelGlobalAlloc {
                 .expect("allocate pages for kernel heap")
         };
         let old_heap_end = VirtualAddress(KERNEL_HEAP_START.0 + old_heap_size * PAGE_SIZE);
-        pt.map_range(pages, old_heap_end, num_pages, true)
-            .expect("map kernel heap pages");
+        pt.map_range(
+            pages,
+            old_heap_end,
+            num_pages,
+            true,
+            &PageTableEntryOptions::default(),
+        )
+        .expect("map kernel heap pages");
         let block: *mut FreeBlock = old_heap_end.as_ptr();
         let mut head = self.free_list_head.lock();
         unsafe {

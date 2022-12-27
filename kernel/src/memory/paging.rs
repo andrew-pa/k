@@ -21,7 +21,14 @@ bitfield! {
     res0, set_res0: 49, 48;
     address, set_address: 47, 12;
     //get_res0, set_res0: 12, 12; -- only needed for >4KB pages
-    u16, low_attrb, set_low_attrb: 11, 2;
+    // u16, low_attrb, set_low_attrb: 11, 2;
+    ng, set_ng: 11;
+    af, set_af: 10;
+    u8, sh, set_sh: 9, 8;
+    ap_read_only, set_ap_read_only: 7;
+    ap_el0_access, set_ap_el0_access: 6;
+    ns, set_ns: 5;
+    u8, attr_index, set_attr_index: 4, 2;
     get_type, set_type: 1;
     valid, set_valid: 0;
 }
@@ -39,9 +46,10 @@ impl PageTableEntry {
 
     /// Create a PageTableEntry describing a block output address
     pub fn block_entry(base_address: PhysicalAddress, level: u8) -> PageTableEntry {
-        let mut e = PageTableEntry(1 << 10);
+        let mut e = PageTableEntry(0);
         e.set_valid(true);
         e.set_type(false);
+        e.set_af(true);
         e.set_address(
             ((base_address.0 as u64)
                 & (match level {
@@ -57,9 +65,10 @@ impl PageTableEntry {
 
     /// Create a PageTableEntry describing a page output address
     pub fn page_entry(base_address: PhysicalAddress) -> PageTableEntry {
-        let mut e = PageTableEntry(1 << 10);
+        let mut e = PageTableEntry(0);
         e.set_valid(true);
         e.set_type(true);
+        e.set_af(true);
         // first 12 bits are zero because the page must be page aligned??
         e.set_address(base_address.0 as u64 >> 12);
         e
@@ -110,16 +119,32 @@ impl core::fmt::Debug for PageTableEntry {
         if self.valid() {
             write!(
                 f,
-                "{{{} ({:b}|{:b}.{:b}) @ 0x{:x}}}",
+                "{{{} ({:b}|{:b}.AF={},RO={},E0={}) @ 0x{:x}}}",
                 if self.get_type() { "E" } else { "B" },
                 self.high_attrb(),
                 self.res0(),
-                self.low_attrb(),
+                if self.af() { "1" } else { "0" },
+                if self.ap_read_only() { "1" } else { "0" },
+                if self.ap_el0_access() { "1" } else { "0" },
                 self.address()
             )
         } else {
             write!(f, "{{invalid}}")
         }
+    }
+}
+
+#[derive(Default)]
+pub struct PageTableEntryOptions {
+    pub read_only: bool,
+    pub el0_access: bool,
+}
+
+impl PageTableEntryOptions {
+    pub fn apply(&self, mut entry: PageTableEntry) -> PageTableEntry {
+        entry.set_ap_read_only(self.read_only);
+        entry.set_ap_el0_access(self.el0_access);
+        entry
     }
 }
 
@@ -256,9 +281,16 @@ impl PageTable {
         start_addr: PhysicalAddress,
         page_count: usize,
         asid: u16,
+        options: &PageTableEntryOptions,
     ) -> Result<PageTable, MapError> {
         let mut p = PageTable::empty(high_addresses, asid).map_err(MapError::Memory)?;
-        p.map_range(start_addr, VirtualAddress(start_addr.0), page_count, true)?;
+        p.map_range(
+            start_addr,
+            VirtualAddress(start_addr.0),
+            page_count,
+            true,
+            &options,
+        )?;
         Ok(p)
     }
 
@@ -302,6 +334,7 @@ impl PageTable {
         virt_start: VirtualAddress,
         page_count: usize,
         overwrite: bool,
+        options: &PageTableEntryOptions,
     ) -> Result<(), MapError> {
         // determine how big page_count is relative to the size of the higher level page table blocks and figure out how many new tables we'll need, if any
         let num_l3_tables = page_count.div_ceil(512);
@@ -370,10 +403,10 @@ impl PageTable {
                 } else {
                     assert!(!tr[i].valid());
                     if can_allocate_large_block && (page_count - page_index) >= large_block_size {
-                        tr[i] = PageTableEntry::block_entry(
+                        tr[i] = options.apply(PageTableEntry::block_entry(
                             PhysicalAddress(phy_start.0 + page_index * PAGE_SIZE),
                             lvl,
-                        );
+                        ));
                         page_index += large_block_size;
                         continue 'top;
                     } else {
@@ -386,9 +419,10 @@ impl PageTable {
             }
 
             unsafe {
-                table.as_mut().expect("final table ptr is valid")[i3] = PageTableEntry::page_entry(
-                    PhysicalAddress(phy_start.0 + page_index * PAGE_SIZE),
-                );
+                table.as_mut().expect("final table ptr is valid")[i3] =
+                    options.apply(PageTableEntry::page_entry(PhysicalAddress(
+                        phy_start.0 + page_index * PAGE_SIZE,
+                    )));
             }
             page_index += 1;
         }
