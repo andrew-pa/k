@@ -18,6 +18,13 @@ pub struct Process {
     pub threads: SmallVec<[ThreadId; 4]>,
 }
 
+#[derive(Copy, Clone, Debug)]
+pub enum ThreadPriority {
+    High = 0,
+    Normal = 1,
+    Low = 2,
+}
+
 pub struct Thread {
     pub id: ThreadId,
     /// None => kernel thread
@@ -26,6 +33,7 @@ pub struct Thread {
     pub program_status: SavedProgramStatus,
     pub pc: VirtualAddress,
     pub sp: VirtualAddress,
+    pub priority: ThreadPriority,
 }
 
 impl Thread {
@@ -46,6 +54,8 @@ impl Thread {
         *regs = self.register_state;
     }
 }
+
+pub const IDLE_THREAD: ThreadId = u32::MAX;
 
 static mut PROCESSES: OnceCell<CHashMapG<ProcessId, Process>> = OnceCell::new();
 static mut THREADS: OnceCell<CHashMapG<ThreadId, Thread>> = OnceCell::new();

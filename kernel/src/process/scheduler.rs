@@ -1,44 +1,55 @@
-use alloc::collections::VecDeque;
+use alloc::{collections::VecDeque, vec::Vec};
 use spin::{Mutex, MutexGuard};
 
 use super::*;
 
 pub struct ThreadScheduler {
-    queue: VecDeque<ThreadId>,
+    queues: [(Vec<ThreadId>, usize); 3],
+    current_thread: ThreadId,
 }
 
 impl ThreadScheduler {
-    pub fn new() -> ThreadScheduler {
+    pub fn new(first_thread: ThreadId) -> ThreadScheduler {
         ThreadScheduler {
-            queue: VecDeque::new(),
+            queues: [(Vec::new(), 0), (Vec::new(), 0), (Vec::new(), 0)],
+            current_thread: first_thread,
         }
     }
 
-    pub fn currently_running(&self) -> Option<ThreadId> {
-        self.queue.front().copied()
+    pub fn currently_running(&self) -> ThreadId {
+        self.current_thread
     }
 
     pub fn schedule_next_thread(&mut self) {
-        // TODO: a more sophisticated method to choose the next thread
-        self.queue.rotate_right(1);
+        for (threads, next_thread) in self.queues.iter_mut() {
+            if threads.len() == 0 {
+                continue;
+            }
+            // TODO: check thread state, is it waiting?
+            self.current_thread = threads[*next_thread];
+            *next_thread = (*next_thread + 1) % threads.len();
+            break;
+        }
     }
 
     pub fn add_thread(&mut self, thread: ThreadId) {
-        self.queue.push_back(thread);
+        let t = threads().get(&thread).unwrap();
+        self.queues[t.priority as usize].0.push(thread);
     }
 
     pub fn remove_thread(&mut self, thread: ThreadId) {
-        if let Some((i, _)) = self.queue.iter().enumerate().find(|(_, id)| **id == thread) {
-            self.queue.swap_remove_back(i);
-        }
+        let t = threads().get(&thread).unwrap();
+        self.queues[t.priority as usize]
+            .0
+            .retain(|id| *id != thread);
     }
 }
 
 // TODO: we will eventually need one of these per-CPU
 static mut SCHD: OnceCell<Mutex<ThreadScheduler>> = OnceCell::new();
 
-pub unsafe fn init_scheduler() {
-    SCHD.set(Mutex::new(ThreadScheduler::new()))
+pub unsafe fn init_scheduler(first_thread: ThreadId) {
+    SCHD.set(Mutex::new(ThreadScheduler::new(first_thread)))
         .ok()
         .expect("init scheduler");
 }
@@ -57,17 +68,18 @@ pub fn run_scheduler(current_regs: *mut Registers) {
             return;
         }
     };
-    if let Some(current) = scheduler.currently_running() {
+    {
+        let current = scheduler.currently_running();
         log::trace!("pausing thread {current}");
         unsafe {
-            threads()
-                .get_mut(&current)
-                .expect("scheduler has valid thread IDs")
-                .save(current_regs.as_ref().unwrap());
+            if let Some(mut t) = threads().get_mut(&current) {
+                t.save(current_regs.as_ref().unwrap());
+            }
         }
     }
     scheduler.schedule_next_thread();
-    if let Some(current) = scheduler.currently_running() {
+    {
+        let current = scheduler.currently_running();
         log::trace!("resuming thread {current}");
         let thread = threads()
             .get_mut(&current)

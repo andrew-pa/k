@@ -35,15 +35,23 @@ pub type CHashMapGWriteGuard<'a, K, V> =
 
 global_asm!(include_str!("start.S"));
 
+fn fib(n: usize) -> usize {
+    if n < 2 {
+        1
+    } else {
+        fib(n - 1) + fib(n - 2)
+    }
+}
+
 pub fn test_thread_code_a() -> ! {
     loop {
-        log::info!("hello from thread A!");
+        log::info!("hello from thread A! {}", fib(30));
     }
 }
 
 pub fn test_thread_code_b() -> ! {
     loop {
-        log::info!("hello from thread B!");
+        log::info!("hello from thread B! {}", fib(30));
     }
 }
 
@@ -93,7 +101,7 @@ pub extern "C" fn kmain() {
         /* --- Kernel heap is now available --- */
 
         exception::init_interrupts(&dt);
-        process::scheduler::init_scheduler();
+        process::scheduler::init_scheduler(process::IDLE_THREAD);
     }
 
     /*let mut test_map = PageTable::empty(false).expect("create page table");
@@ -180,7 +188,20 @@ pub extern "C" fn kmain() {
     log::info!("timer interrupts = {}", timer::interrupts_enabled());
     log::info!("timer compare value = {}", timer::read_compare_value());
     log::info!("timer frequency = {}", timer::frequency());
-    timer::write_timer_value(timer::frequency() >> 1);
+
+    // create idle thread
+    process::threads().insert(
+        process::IDLE_THREAD,
+        process::Thread {
+            id: process::IDLE_THREAD,
+            parent: None,
+            register_state: exception::Registers::default(),
+            program_status: process::SavedProgramStatus::default_at_el1(),
+            pc: memory::VirtualAddress(0),
+            sp: memory::VirtualAddress(0),
+            priority: process::ThreadPriority::Low,
+        },
+    );
 
     // create a way unsafe ad-hoc thread
     log::info!("{:x}", test_thread_code_b as usize);
@@ -202,6 +223,7 @@ pub extern "C" fn kmain() {
                     stack_a_start.to_virtual_canonical().0 + 4 * 1024 * memory::PAGE_SIZE,
                 )
             },
+            priority: process::ThreadPriority::Normal,
         },
     );
 
@@ -223,16 +245,19 @@ pub extern "C" fn kmain() {
                     stack_b_start.to_virtual_canonical().0 + 4 * 1024 * memory::PAGE_SIZE,
                 )
             },
+            priority: process::ThreadPriority::Normal,
         },
     );
     process::scheduler::scheduler().add_thread(0xa);
     process::scheduler::scheduler().add_thread(0xb);
 
     exception::interrupt_handlers().insert(timer_irq, |id, regs| {
-        log::info!("{id} timer interrupt! {}", timer::counter());
+        // log::info!("{id} timer interrupt! {}", timer::counter());
         process::scheduler::run_scheduler(regs);
-        timer::write_timer_value(timer::frequency() >> 1);
+        timer::write_timer_value(timer::frequency() >> 4);
     });
+
+    timer::write_timer_value(timer::frequency() >> 4);
 
     // enable all interrupts in DAIF process state mask
     exception::write_interrupt_mask(exception::InterruptMask(0));
