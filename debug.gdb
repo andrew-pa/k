@@ -1,4 +1,4 @@
-add-symbol-file kernel/target/aarch64-unknown-none/debug/kernel
+add-symbol-file target/aarch64-unknown-none/debug/kernel
 target remote localhost:1234
 break kernel::kmain
 # break _start
