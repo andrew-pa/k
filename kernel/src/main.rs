@@ -187,6 +187,7 @@ pub extern "C" fn kmain() {
     }
 
     let dt = unsafe { dtb::DeviceTree::at_address(0xffff_0000_4000_0000 as *mut u8) };
+    dt.log();
 
     unsafe {
         exception::install_exception_vector_table();
@@ -216,6 +217,11 @@ pub extern "C" fn kmain() {
     );
 
     create_test_threads();
+
+    exception::system_call_handlers().insert(0xabcd, |_, _| {
+        log::trace!("test system call {}", fib(31));
+    });
+    log::debug!("{:?}", exception::system_call_handlers());
 
     // initialize system timer and interrupt
     let props = timer::find_timer_properties(&dt);

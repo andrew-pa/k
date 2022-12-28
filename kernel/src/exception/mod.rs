@@ -37,9 +37,11 @@ pub trait InterruptController {
 }
 
 pub type InterruptHandler = fn(InterruptId, *mut Registers);
+pub type SyscallHandler = fn(u16, *mut Registers);
 
 static mut IC: OnceCell<&'static dyn InterruptController> = OnceCell::new();
 static mut INTERRUPT_HANDLERS: OnceCell<CHashMapG<InterruptId, InterruptHandler>> = OnceCell::new();
+static mut SYSTEM_CALL_HANDLERS: OnceCell<CHashMapG<u16, SyscallHandler>> = OnceCell::new();
 
 pub unsafe fn init_interrupts(device_tree: &crate::dtb::DeviceTree) {
     use alloc::boxed::Box;
@@ -54,6 +56,10 @@ pub unsafe fn init_interrupts(device_tree: &crate::dtb::DeviceTree) {
         .set(Default::default())
         .ok()
         .expect("init interrupts once");
+    SYSTEM_CALL_HANDLERS
+        .set(Default::default())
+        .ok()
+        .expect("init syscall table once");
 }
 
 pub fn interrupt_controller() -> &'static dyn InterruptController {
@@ -63,6 +69,10 @@ pub fn interrupt_controller() -> &'static dyn InterruptController {
 
 pub fn interrupt_handlers() -> &'static CHashMapG<InterruptId, InterruptHandler> {
     unsafe { INTERRUPT_HANDLERS.get().expect("init interrupts") }
+}
+
+pub fn system_call_handlers() -> &'static CHashMapG<u16, SyscallHandler> {
+    unsafe { SYSTEM_CALL_HANDLERS.get().expect("init syscall table") }
 }
 
 bitfield! {
@@ -158,11 +168,26 @@ impl Display for ExceptionSyndromeRegister {
 
 #[no_mangle]
 unsafe extern "C" fn handle_synchronous_exception(regs: *mut Registers, esr: usize, far: usize) {
-    panic!(
-        "synchronous exception! {}, FAR={far:x}, registers = {:?}",
-        ExceptionSyndromeRegister(esr as u64),
-        regs.as_ref()
-    );
+    let esr = ExceptionSyndromeRegister(esr as u64);
+
+    if esr.ec() == 0b010101 {
+        // system call
+        let id = esr.iss() as u16;
+        match system_call_handlers().get(&id) {
+            Some(h) => (*h)(id, regs),
+            None => log::warn!(
+                "unknown system call: id = 0x{:x}, registers = {:?}",
+                id,
+                regs.as_ref()
+            ),
+        }
+    } else {
+        panic!(
+            "synchronous exception! {}, FAR={far:x}, registers = {:?}",
+            esr,
+            regs.as_ref()
+        );
+    }
 }
 
 #[no_mangle]
