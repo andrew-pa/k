@@ -1,4 +1,4 @@
-use core::fmt::Debug;
+use core::{ffi::CStr, fmt::Debug};
 
 use byteorder::{BigEndian, ByteOrder};
 
@@ -72,10 +72,21 @@ pub struct DeviceTree {
 }
 
 #[derive(Debug)]
+pub enum StandardProperty<'dt> {
+    Compatible(StringList<'dt>),
+    AddressCells(u32),
+    SizeCells(u32),
+}
+
+#[derive(Debug)]
 pub enum StructureItem<'dt> {
     StartNode(&'dt str),
     EndNode,
-    Property { name: &'dt str, data: &'dt [u8] },
+    Property {
+        name: &'dt str,
+        data: &'dt [u8],
+        std_interp: Option<StandardProperty<'dt>>,
+    },
 }
 
 pub struct Cursor<'dt> {
@@ -84,6 +95,12 @@ pub struct Cursor<'dt> {
 }
 
 pub struct MemRegionIter<'dt> {
+    data: &'dt [u8],
+    current_offset: usize,
+}
+
+#[derive(Clone)]
+pub struct StringList<'dt> {
     data: &'dt [u8],
     current_offset: usize,
 }
@@ -187,7 +204,24 @@ impl<'dt> Iterator for Cursor<'dt> {
                     let data =
                         &self.dt.structure[self.current_offset..(self.current_offset + length)];
                     self.current_offset += pad_end_4b(length);
-                    return Some(StructureItem::Property { name, data });
+                    let std_interp = match name {
+                        "#address-cells" => {
+                            Some(StandardProperty::AddressCells(BigEndian::read_u32(data)))
+                        }
+                        "#size-cells" => {
+                            Some(StandardProperty::SizeCells(BigEndian::read_u32(data)))
+                        }
+                        "compatible" => Some(StandardProperty::Compatible(StringList {
+                            data,
+                            current_offset: 0,
+                        })),
+                        _ => None,
+                    };
+                    return Some(StructureItem::Property {
+                        name,
+                        data,
+                        std_interp,
+                    });
                 }
                 4 => continue,
                 9 => return None,
@@ -219,5 +253,29 @@ impl<'dt> Iterator for MemRegionIter<'dt> {
         } else {
             Some((addr, size))
         }
+    }
+}
+
+impl<'dt> Iterator for StringList<'dt> {
+    type Item = &'dt CStr;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.current_offset >= self.data.len() {
+            None
+        } else {
+            match CStr::from_bytes_until_nul(&self.data[self.current_offset..]) {
+                Ok(s) => {
+                    self.current_offset += s.to_bytes_with_nul().len();
+                    Some(s)
+                }
+                Err(e) => None,
+            }
+        }
+    }
+}
+
+impl<'dt> core::fmt::Debug for StringList<'dt> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_list().entries(self.clone()).finish()
     }
 }

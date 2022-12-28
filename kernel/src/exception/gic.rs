@@ -38,16 +38,11 @@ impl GenericInterruptController {
                     }
                 }
                 StructureItem::EndNode if found_node => break,
-                StructureItem::Property { name, data } if found_node => match name {
+                StructureItem::Property { name, data, .. } if found_node => match name {
                     "reg" => {
                         let mut r = MemRegionIter::for_data(data);
                         distributor_base = r.next();
                         cpu_base = r.next();
-                    }
-                    "compatible" => {
-                        if let Some(s) = CStr::from_bytes_with_nul(data).ok() {
-                            log::trace!("interrupt controller compatible = {:?}", s);
-                        }
                     }
                     _ => {}
                 },

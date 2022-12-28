@@ -104,15 +104,13 @@ pub fn set_enabled(enabled: bool) {
 }
 
 #[derive(Debug)]
-pub struct TimerProperties<'dt> {
+pub struct TimerProperties {
     pub interrupt: crate::exception::InterruptId,
-    pub compatible: &'dt core::ffi::CStr,
 }
 
 pub fn find_timer_properties(device_tree: &DeviceTree) -> TimerProperties {
     let mut found_node = false;
     let mut interrupt = None;
-    let mut compatible = None;
     let mut dt = device_tree.iter_structure();
 
     while let Some(n) = dt.next() {
@@ -128,7 +126,7 @@ pub fn find_timer_properties(device_tree: &DeviceTree) -> TimerProperties {
                 }
             }
             StructureItem::EndNode if found_node => break,
-            StructureItem::Property { name, data } if found_node => match name {
+            StructureItem::Property { name, data, .. } if found_node => match name {
                 "interrupts" => {
                     let mut i = 0;
                     while i < data.len() {
@@ -145,7 +143,6 @@ pub fn find_timer_properties(device_tree: &DeviceTree) -> TimerProperties {
                     // TODO: this is the actual IRQ that we get. why 30?! that's not in the device tree!
                     interrupt = Some(30);
                 }
-                "compatible" => compatible = Some(CStr::from_bytes_until_nul(data).unwrap()),
                 _ => {}
             },
             _ => {}
@@ -154,6 +151,5 @@ pub fn find_timer_properties(device_tree: &DeviceTree) -> TimerProperties {
 
     TimerProperties {
         interrupt: interrupt.expect("found timer interrupt"),
-        compatible: compatible.expect("found timer compatible string"),
     }
 }

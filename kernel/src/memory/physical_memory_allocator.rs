@@ -26,7 +26,7 @@ impl PhysicalMemoryAllocator {
                 _ => true,
             })
             .find_map(|i| match i {
-                StructureItem::Property { name, data } if name == "reg" => Some(data),
+                StructureItem::Property { name, data, .. } if name == "reg" => Some(data),
                 _ => None,
             })
             .expect("RAM properties in device tree");
