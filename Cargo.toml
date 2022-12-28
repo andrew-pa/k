@@ -1,2 +1,2 @@
 [workspace]
-members = ["kernel"]
+members = ["kernel", "chashmap", "owning-ref-rs"]

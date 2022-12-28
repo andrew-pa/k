@@ -1,5 +1,5 @@
 .build/
 .ninja_log
-kernel/target
+target/**
 ref/*.pdf
 

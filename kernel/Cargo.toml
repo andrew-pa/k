@@ -15,4 +15,4 @@ bitfield = "0.14"
 derive_more = "0.99"
 spin = "0.9"
 lock_api = "0.4"
-chashmap = { path = "../../nostd-chashmap/chashmap" }
+chashmap = { path = "../chashmap" }
