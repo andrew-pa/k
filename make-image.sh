@@ -1,7 +1,16 @@
 #!/bin/bash
 # ELF -> U-boot image
 
-GPREFIX=aarch64-elf-
+GPREFIX=aarch64-linux-gnu-
+
+if ! command -v ${GPREFIX}objcopy > /dev/null; then
+    GPREFIX=aarch64-elf-
+    if ! command -v ${GPREFIX}objcopy > /dev/null; then
+        echo "could not find ${GPREFIX}objcopy"
+        exit 1
+    fi
+fi
+
 # BIN_NAME=/tmp/$(uuidgen).bin
 BIN_NAME=./.build/k.img
 LOAD_ADDR=41000000

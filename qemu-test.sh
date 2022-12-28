@@ -5,7 +5,7 @@ qemu-system-aarch64 -machine virt -cpu cortex-a57 -nographic \
     -device nvme,drive=test,serial=foo \
 <<-END
     nvme scan
-    fatload nvme 0 0x44004400 kernel.img
-    bootm 44004400
+    fatload nvme 0 0x41000000 kernel.img
+    bootm 41000000
 END
 
