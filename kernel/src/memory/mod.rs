@@ -76,6 +76,11 @@ impl VirtualAddress {
     pub unsafe fn to_physical_canonical(self) -> PhysicalAddress {
         PhysicalAddress(self.0 - 0xffff_0000_0000_0000)
     }
+
+    pub fn offset(self, byte_offset: isize) -> VirtualAddress {
+        // TODO: is saturating right or should we panic on overflow?
+        VirtualAddress(self.0.saturating_add_signed(byte_offset))
+    }
 }
 
 impl<T> From<*mut T> for VirtualAddress {

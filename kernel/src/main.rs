@@ -17,11 +17,13 @@ mod exception;
 mod memory;
 mod process;
 
+mod bus;
 mod timer;
 mod uart;
 
 use core::{arch::global_asm, panic::PanicInfo};
 
+use hashbrown::HashMap;
 use smallvec::SmallVec;
 
 pub type CHashMapG<K, V> =
@@ -201,6 +203,9 @@ pub extern "C" fn kmain() {
     }
 
     log::info!("kernel systems initialized");
+
+    let pcie_drivers = HashMap::new();
+    bus::pcie::init(&dt, &pcie_drivers);
 
     // create idle thread
     process::threads().insert(

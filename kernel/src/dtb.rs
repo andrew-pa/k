@@ -147,6 +147,36 @@ impl DeviceTree {
         }
     }
 
+    pub fn process_properties_for_node<'s>(
+        &'s self,
+        node_name: &str,
+        mut f: impl FnMut(&'s str, &'s [u8], Option<StandardProperty<'s>>),
+    ) {
+        let mut found_node = false;
+        let mut dt = self.iter_structure();
+        while let Some(n) = dt.next() {
+            match n {
+                StructureItem::StartNode(name) if name.starts_with(node_name) => {
+                    found_node = true;
+                }
+                StructureItem::StartNode(_) if found_node => {
+                    while let Some(j) = dt.next() {
+                        if let StructureItem::EndNode = j {
+                            break;
+                        }
+                    }
+                }
+                StructureItem::EndNode if found_node => break,
+                StructureItem::Property {
+                    name,
+                    data,
+                    std_interp,
+                } if found_node => f(name, data, std_interp),
+                _ => {}
+            }
+        }
+    }
+
     pub fn iter_reserved_memory_regions(&self) -> MemRegionIter {
         MemRegionIter::for_data(self.mem_map)
     }
@@ -154,7 +184,7 @@ impl DeviceTree {
     pub fn log(&self) {
         log::debug!("Device tree:");
         for item in self.iter_structure() {
-            log::debug!("{item:?}");
+            log::debug!("{item:x?}");
         }
         log::debug!("-----------");
     }

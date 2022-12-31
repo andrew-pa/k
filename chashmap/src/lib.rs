@@ -46,13 +46,13 @@
 
 extern crate alloc;
 
-use owning_ref::{OwningHandle, OwningRef, StableAddress};
-use lock_api::{RwLock, RwLockReadGuard, RwLockWriteGuard, RawRwLock};
+use alloc::vec::Vec;
 use core::borrow::Borrow;
 use core::hash::{BuildHasher, Hash, Hasher};
 use core::sync::atomic::{self, AtomicUsize};
 use core::{cmp, fmt, iter, mem, ops};
-use alloc::vec::Vec;
+use lock_api::{RawRwLock, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use owning_ref::{OwningHandle, OwningRef, StableAddress};
 
 /// The atomic ordering used throughout the code.
 const ORDERING: atomic::Ordering = atomic::Ordering::Relaxed;
@@ -548,7 +548,7 @@ impl<K, V, S, R: RawRwLock> IntoIterator for Table<K, V, S, R> {
 }
 
 struct StableRwLockReadGuard<'a, R: RawRwLock, T>(RwLockReadGuard<'a, R, T>);
-unsafe impl<'a, R: RawRwLock, T> StableAddress for StableRwLockReadGuard<'a, R, T> { }
+unsafe impl<'a, R: RawRwLock, T> StableAddress for StableRwLockReadGuard<'a, R, T> {}
 impl<'a, R: RawRwLock, T> ops::Deref for StableRwLockReadGuard<'a, R, T> {
     type Target = T;
 
@@ -558,7 +558,7 @@ impl<'a, R: RawRwLock, T> ops::Deref for StableRwLockReadGuard<'a, R, T> {
 }
 
 struct StableRwLockWriteGuard<'a, R: RawRwLock, T>(RwLockWriteGuard<'a, R, T>);
-unsafe impl<'a, R: RawRwLock, T> StableAddress for StableRwLockWriteGuard<'a, R, T> { }
+unsafe impl<'a, R: RawRwLock, T> StableAddress for StableRwLockWriteGuard<'a, R, T> {}
 impl<'a, R: RawRwLock, T> ops::Deref for StableRwLockWriteGuard<'a, R, T> {
     type Target = T;
 
@@ -578,8 +578,12 @@ impl<'a, R: RawRwLock, T> ops::DerefMut for StableRwLockWriteGuard<'a, R, T> {
 /// on drop.
 pub struct ReadGuard<'a, K: 'a, V: 'a, S, R: RawRwLock> {
     /// The inner hecking long type.
-    inner: OwningRef<'a,
-        OwningHandle<StableRwLockReadGuard<'a, R, Table<K, V, S, R>>, StableRwLockReadGuard<'a, R, Bucket<K, V>>>,
+    inner: OwningRef<
+        'a,
+        OwningHandle<
+            StableRwLockReadGuard<'a, R, Table<K, V, S, R>>,
+            StableRwLockReadGuard<'a, R, Bucket<K, V>>,
+        >,
         V,
     >,
 }
@@ -612,7 +616,10 @@ impl<'a, K: fmt::Debug, V: fmt::Debug, S, R: RawRwLock> fmt::Debug for ReadGuard
 pub struct WriteGuard<'a, K: 'a, V: 'a, S, R: RawRwLock> {
     /// The inner hecking long type.
     inner: OwningHandle<
-        OwningHandle<StableRwLockReadGuard<'a, R, Table<K, V, S, R>>, StableRwLockWriteGuard<'a, R, Bucket<K, V>>>,
+        OwningHandle<
+            StableRwLockReadGuard<'a, R, Table<K, V, S, R>>,
+            StableRwLockWriteGuard<'a, R, Bucket<K, V>>,
+        >,
         &'a mut V,
     >,
 }
@@ -834,9 +841,10 @@ impl<K: PartialEq + Hash, V, S: BuildHasher, R: RawRwLock> CHashMap<K, V, S, R> 
         Q: Hash + PartialEq,
     {
         // Acquire the read lock and lookup in the table.
-        if let Ok(inner) = OwningRef::new(OwningHandle::new_with_fn(StableRwLockReadGuard(self.table.read()), |x| {
-            unsafe { &*x }.lookup(key)
-        }))
+        if let Ok(inner) = OwningRef::new(OwningHandle::new_with_fn(
+            StableRwLockReadGuard(self.table.read()),
+            |x| unsafe { &*x }.lookup(key),
+        ))
         .try_map(|x| x.value_ref())
         {
             // The bucket contains data.
@@ -859,7 +867,9 @@ impl<K: PartialEq + Hash, V, S: BuildHasher, R: RawRwLock> CHashMap<K, V, S, R> 
     {
         // Acquire the write lock and lookup in the table.
         if let Ok(inner) = OwningHandle::try_new(
-            OwningHandle::new_with_fn(StableRwLockReadGuard(self.table.read()), |x| unsafe { &*x }.lookup_mut(key)),
+            OwningHandle::new_with_fn(StableRwLockReadGuard(self.table.read()), |x| {
+                unsafe { &*x }.lookup_mut(key)
+            }),
             |x| {
                 if let &mut Bucket::Contains(_, ref mut val) =
                     unsafe { &mut *(x as *mut Bucket<K, V>) }
@@ -897,7 +907,7 @@ impl<K, V, S, R> CHashMap<K, V, S, R>
 where
     K: PartialEq + Hash,
     S: BuildHasher + Default,
-    R: RawRwLock
+    R: RawRwLock,
 {
     /// Insert a **new** entry.
     ///
@@ -1142,7 +1152,7 @@ impl<K, V, S: Default + BuildHasher, R: RawRwLock> Default for CHashMap<K, V, S,
     }
 }
 
-impl<K: Clone, V: Clone, S: Clone, R: RawRwLock+Clone> Clone for CHashMap<K, V, S, R> {
+impl<K: Clone, V: Clone, S: Clone, R: RawRwLock + Clone> Clone for CHashMap<K, V, S, R> {
     fn clone(&self) -> Self {
         CHashMap {
             table: RwLock::new(self.table.read().clone()),
