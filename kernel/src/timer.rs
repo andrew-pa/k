@@ -109,45 +109,29 @@ pub struct TimerProperties {
 }
 
 pub fn find_timer_properties(device_tree: &DeviceTree) -> TimerProperties {
-    let mut found_node = false;
     let mut interrupt = None;
-    let mut dt = device_tree.iter_structure();
 
-    while let Some(n) = dt.next() {
-        match n {
-            StructureItem::StartNode(name) if name.starts_with("timer") => {
-                found_node = true;
-            }
-            StructureItem::StartNode(_) if found_node => {
-                while let Some(j) = dt.next() {
-                    if let StructureItem::EndNode = j {
-                        break;
-                    }
+    device_tree.process_properties_for_node("timer", |name, data, _| {
+        match name {
+            "interrupts" => {
+                let mut i = 0;
+                while i < data.len() {
+                    let ty = BigEndian::read_u32(&data[i..]);
+                    i += 4;
+                    let irq = BigEndian::read_u32(&data[i..]);
+                    i += 4;
+                    let flags = BigEndian::read_u32(&data[i..]);
+                    i += 4;
+                    log::debug!("timer interrupt at {irq} with type={ty:x} and flags={flags:x}");
                 }
+                // TODO: this is the actual IRQ that we get. why 30?! that's not in the device tree!
+                // this may be because we're looking to get a PPI, and that means
+                // we need to add 16 to the IRQ which is 14 normally
+                interrupt = Some(30);
             }
-            StructureItem::EndNode if found_node => break,
-            StructureItem::Property { name, data, .. } if found_node => match name {
-                "interrupts" => {
-                    let mut i = 0;
-                    while i < data.len() {
-                        let ty = BigEndian::read_u32(&data[i..]);
-                        i += 4;
-                        let irq = BigEndian::read_u32(&data[i..]);
-                        i += 4;
-                        let flags = BigEndian::read_u32(&data[i..]);
-                        i += 4;
-                        log::debug!(
-                            "timer interrupt at {irq} with type={ty:x} and flags={flags:x}"
-                        );
-                    }
-                    // TODO: this is the actual IRQ that we get. why 30?! that's not in the device tree!
-                    interrupt = Some(30);
-                }
-                _ => {}
-            },
             _ => {}
         }
-    }
+    });
 
     TimerProperties {
         interrupt: interrupt.expect("found timer interrupt"),

@@ -11,7 +11,7 @@ use crate::memory::paging::PageTableEntryOptions;
 
 use super::{VirtualAddress, PAGE_SIZE};
 
-const KERNEL_HEAP_START: VirtualAddress = VirtualAddress(0xffff_8000_0000_0000);
+const KERNEL_HEAP_START: VirtualAddress = VirtualAddress(0xffff_ff00_0000_0000);
 const INIT_SIZE: usize = 8; // pages
 const ALLOC_HEADER_SIZE: usize = size_of::<usize>();
 
