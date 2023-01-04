@@ -18,11 +18,13 @@ mod memory;
 mod process;
 
 mod bus;
+mod storage;
 mod timer;
 mod uart;
 
 use core::{arch::global_asm, panic::PanicInfo};
 
+use alloc::boxed::Box;
 use hashbrown::HashMap;
 use smallvec::SmallVec;
 
@@ -191,6 +193,7 @@ pub extern "C" fn kmain() {
     let dt = unsafe { dtb::DeviceTree::at_address(0xffff_0000_4000_0000 as *mut u8) };
     dt.log();
 
+    // initialize virtual memory and interrupts
     unsafe {
         exception::install_exception_vector_table();
         memory::init_physical_memory_allocator(&dt);
@@ -204,7 +207,12 @@ pub extern "C" fn kmain() {
 
     log::info!("kernel systems initialized");
 
-    let pcie_drivers = HashMap::new();
+    // initialize PCIe bus and devices
+    let mut pcie_drivers = HashMap::new();
+    pcie_drivers.insert(
+        0x01080200,
+        storage::nvme::init_nvme_over_pcie as bus::pcie::DriverInitFn,
+    );
     bus::pcie::init(&dt, &pcie_drivers);
 
     // create idle thread

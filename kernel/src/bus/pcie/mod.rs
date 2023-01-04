@@ -3,6 +3,7 @@ use core::cell::OnceCell;
 use alloc::boxed::Box;
 use bitfield::Bit;
 use byteorder::{BigEndian, ByteOrder, LittleEndian};
+use derive_more::Display;
 use hashbrown::HashMap;
 
 use crate::{
@@ -117,13 +118,13 @@ impl BaseAddresses {
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash)]
-pub struct PciDeviceId {
+pub struct DeviceId {
     bus: u8,
     device: u8,
     function: u8,
 }
 
-impl PciDeviceId {
+impl DeviceId {
     fn new(bus: u8, device: u8, function: u8) -> Self {
         assert!(device < 32);
         assert!(function < 8);
@@ -135,7 +136,7 @@ impl PciDeviceId {
     }
 }
 
-impl core::fmt::Display for PciDeviceId {
+impl core::fmt::Display for DeviceId {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(
             f,
@@ -152,7 +153,7 @@ pub struct ConfigBlock {
 }
 
 impl ConfigBlock {
-    unsafe fn for_device(id: PciDeviceId) -> ConfigBlock {
+    unsafe fn for_device(id: DeviceId) -> ConfigBlock {
         let addr = PCI_ECAM_START.offset(
             ((id.bus as isize) * 256 + (id.device as isize) * 8 + (id.function as isize)) * 4096,
         );
@@ -218,12 +219,16 @@ impl<'d> Type0ConfigHeader<'d> {
 
 pub trait DeviceDriver {}
 
-static mut DEVICES: OnceCell<CHashMapG<PciDeviceId, Box<dyn DeviceDriver>>> = OnceCell::new();
+static mut DEVICES: OnceCell<CHashMapG<DeviceId, Box<dyn DeviceDriver>>> = OnceCell::new();
 
-pub fn init(
-    dt: &DeviceTree,
-    driver_registry: &HashMap<u32, fn(&ConfigBlock) -> Result<Box<dyn DeviceDriver>, &'static str>>,
-) {
+#[derive(Debug, Display)]
+pub enum Error {
+    Other(&'static str),
+}
+
+pub type DriverInitFn = fn(DeviceId, &ConfigBlock) -> Result<Box<dyn DeviceDriver>, Error>;
+
+pub fn init(dt: &DeviceTree, driver_registry: &HashMap<u32, DriverInitFn>) {
     let node = HostCtrlDeviceTreeNode::find_in_tree(dt).expect("find PCIe host in DeviceTree");
     let base = BaseAddresses::from_dt(&node);
     log::debug!("PCIe = {base:#x?}");
@@ -245,7 +250,7 @@ pub fn init(
     let devices = CHashMapG::new();
     for bus in 0..=255 {
         for device in 0..32 {
-            let addr = PciDeviceId::new(bus, device, 0);
+            let addr = DeviceId::new(bus, device, 0);
             let cfg = unsafe { ConfigBlock::for_device(addr) };
             if cfg.vendor_id() != 0xffff {
                 log::debug!(
@@ -259,7 +264,7 @@ pub fn init(
                     log::debug!("\tbar #{i} = {bar:x}");
                 }
                 if let Some(driver_init) = driver_registry.get(&(cfg.class() & !0xff)) {
-                    match driver_init(&cfg) {
+                    match driver_init(addr, &cfg) {
                         Ok(dd) => {
                             devices.insert(addr, dd);
                         }

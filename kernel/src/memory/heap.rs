@@ -80,7 +80,12 @@ impl KernelGlobalAlloc {
         let block = unsafe {
             let mut cur = *free_list_head;
             while let Some(cur_block) = cur.as_ref() {
-                if cur_block.size >= layout.size() + ALLOC_HEADER_SIZE {
+                let required_size = layout.size()
+                    + ALLOC_HEADER_SIZE
+                    + (cur as *mut u8)
+                        .offset(ALLOC_HEADER_SIZE as isize)
+                        .align_offset(layout.align());
+                if cur_block.size >= required_size {
                     break;
                 }
                 cur = cur_block.next;
@@ -277,9 +282,15 @@ unsafe impl GlobalAlloc for KernelGlobalAlloc {
         if let Some(mut block) = self.find_suitable_free_block(&layout) {
             // make it allocated, returning any extra back to the free list
             let p = block.as_ptr() as *mut u8;
+            let padding = p
+                .offset(ALLOC_HEADER_SIZE as isize)
+                .align_offset(layout.align());
             let total_block_size = unsafe { block.as_ref().size };
-            log::trace!("found block at {:x} of size {total_block_size}", p as usize);
-            let req_block_size = layout.size() + ALLOC_HEADER_SIZE;
+            log::trace!(
+                "found block at {:x} of size {total_block_size}, required padding = {padding}",
+                p as usize
+            );
+            let req_block_size = layout.size() + ALLOC_HEADER_SIZE + padding;
             if total_block_size - req_block_size > size_of::<FreeBlock>() {
                 // split the block
                 self.add_free_block(
@@ -294,6 +305,7 @@ unsafe impl GlobalAlloc for KernelGlobalAlloc {
             }
             // return ptr to new allocated block
             p.offset(ALLOC_HEADER_SIZE as isize)
+                .offset(padding as isize)
         } else {
             self.increase_heap_size(&layout);
             // try to allocate again
