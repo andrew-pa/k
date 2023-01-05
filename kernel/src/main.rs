@@ -215,6 +215,8 @@ pub extern "C" fn kmain() {
     );
     bus::pcie::init(&dt, &pcie_drivers);
 
+    panic!();
+
     // create idle thread
     process::threads().insert(
         process::IDLE_THREAD,
