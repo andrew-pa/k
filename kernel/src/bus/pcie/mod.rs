@@ -73,13 +73,13 @@ impl<'dt> HostCtrlDeviceTreeNode<'dt> {
 }
 
 #[derive(Debug)]
-struct BaseAddresses {
-    mmio: PhysicalAddress,
-    mmio_size: usize,
-    pio: PhysicalAddress,
-    pio_size: usize,
-    ecam: PhysicalAddress,
-    ecam_size: usize,
+pub struct BaseAddresses {
+    pub mmio: PhysicalAddress,
+    pub mmio_size: usize,
+    pub pio: PhysicalAddress,
+    pub pio_size: usize,
+    pub ecam: PhysicalAddress,
+    pub ecam_size: usize,
 }
 
 impl BaseAddresses {
@@ -117,6 +117,9 @@ impl BaseAddresses {
     }
 }
 
+pub const PCI_ECAM_START: VirtualAddress = VirtualAddress(0xffff_0001_0000_0000);
+pub const PCI_MMIO_START: VirtualAddress = VirtualAddress(0xffff_0002_0000_0000);
+
 #[derive(Copy, Clone, PartialEq, Eq, Hash)]
 pub struct DeviceId {
     bus: u8,
@@ -145,8 +148,6 @@ impl core::fmt::Display for DeviceId {
         )
     }
 }
-
-const PCI_ECAM_START: VirtualAddress = VirtualAddress(0xffff_0001_0000_0000);
 
 pub struct ConfigBlock {
     p: &'static mut [u8],
@@ -211,6 +212,16 @@ pub enum ConfigHeader<'d> {
     Type0(Type0ConfigHeader<'d>),
 }
 
+impl<'d> ConfigHeader<'d> {
+    pub fn as_type0(&self) -> Option<&Type0ConfigHeader<'d>> {
+        if let Self::Type0(v) = self {
+            Some(v)
+        } else {
+            None
+        }
+    }
+}
+
 impl<'d> Type0ConfigHeader<'d> {
     pub fn base_addresses(&self) -> impl Iterator<Item = u32> + '_ {
         self.p.chunks(4).take(5).map(|c| LittleEndian::read_u32(c))
@@ -226,7 +237,8 @@ pub enum Error {
     Other(&'static str),
 }
 
-pub type DriverInitFn = fn(DeviceId, &ConfigBlock) -> Result<Box<dyn DeviceDriver>, Error>;
+pub type DriverInitFn =
+    fn(DeviceId, &ConfigBlock, &BaseAddresses) -> Result<Box<dyn DeviceDriver>, Error>;
 
 pub fn init(dt: &DeviceTree, driver_registry: &HashMap<u32, DriverInitFn>) {
     let node = HostCtrlDeviceTreeNode::find_in_tree(dt).expect("find PCIe host in DeviceTree");
@@ -244,6 +256,15 @@ pub fn init(dt: &DeviceTree, driver_registry: &HashMap<u32, DriverInitFn>) {
             &memory::paging::PageTableEntryOptions::default(),
         )
         .expect("map ecam range");
+
+        pt.map_range(
+            base.mmio,
+            PCI_MMIO_START,
+            base.mmio_size / memory::PAGE_SIZE,
+            true,
+            &memory::paging::PageTableEntryOptions::default(),
+        )
+        .expect("map mmio range");
     }
 
     // scan the bus for devices and initialize drivers
@@ -264,7 +285,7 @@ pub fn init(dt: &DeviceTree, driver_registry: &HashMap<u32, DriverInitFn>) {
                     log::debug!("\tbar #{i} = {bar:x}");
                 }
                 if let Some(driver_init) = driver_registry.get(&(cfg.class() & !0xff)) {
-                    match driver_init(addr, &cfg) {
+                    match driver_init(addr, &cfg, &base) {
                         Ok(dd) => {
                             devices.insert(addr, dd);
                         }
