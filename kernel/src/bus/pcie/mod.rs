@@ -241,6 +241,11 @@ pub type DriverInitFn =
     fn(DeviceId, &ConfigBlock, &BaseAddresses) -> Result<Box<dyn DeviceDriver>, Error>;
 
 pub fn init(dt: &DeviceTree, driver_registry: &HashMap<u32, DriverInitFn>) {
+    assert!(
+        crate::exception::interrupt_controller().msi_supported(),
+        "MSIs must be supported for PCIe"
+    );
+
     let node = HostCtrlDeviceTreeNode::find_in_tree(dt).expect("find PCIe host in DeviceTree");
     let base = BaseAddresses::from_dt(&node);
     log::debug!("PCIe = {base:#x?}");

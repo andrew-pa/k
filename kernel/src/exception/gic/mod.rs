@@ -9,7 +9,7 @@ use bitvec::{
 };
 
 use crate::{
-    dtb::{DeviceTree, MemRegionIter},
+    dtb::{DeviceTree, MemRegionIter, StructureItem},
     memory::PhysicalAddress,
 };
 
@@ -28,33 +28,91 @@ trait MsiController {
     fn alloc_msi(&self) -> MsiDescriptor;
 }
 
+mod its;
+mod v2m;
+
 pub struct GenericInterruptController {
     distributor_base: *mut u32,
     cpu_base: *mut u32,
     msi_ctrl: Option<Box<dyn MsiController>>,
 }
 
-impl GenericInterruptController {
-    pub fn in_device_tree(device_tree: &DeviceTree) -> Option<GenericInterruptController> {
-        let mut distributor_base = None;
-        let mut cpu_base = None;
-
-        let found_node =
-            device_tree.process_properties_for_node("intc", |name, data, _| match name {
+fn find_regs_for_node<'i, 'a: 'i>(
+    dt: &'i mut impl Iterator<Item = StructureItem<'a>>,
+) -> Option<MemRegionIter> {
+    let mut regs = None;
+    while let Some(j) = dt.next() {
+        match j {
+            StructureItem::Property { name, data, .. } => match name {
                 "reg" => {
-                    let mut r = MemRegionIter::for_data(data);
-                    distributor_base = r.next();
-                    cpu_base = r.next();
+                    regs = Some(MemRegionIter::for_data(data));
                 }
                 _ => {}
-            });
+            },
+            StructureItem::EndNode => break,
+            _ => unimplemented!("unexpected item in node {:?}", j),
+        }
+    }
+    regs
+}
 
-        if !found_node || distributor_base.is_none() || cpu_base.is_none() {
+impl GenericInterruptController {
+    pub fn in_device_tree(device_tree: &DeviceTree) -> Option<GenericInterruptController> {
+        let mut gic_mem_regions = None;
+        let mut found_node = false;
+        let mut msi_ctrl = None;
+
+        let mut dt = device_tree.iter_structure();
+        while let Some(n) = dt.next() {
+            match n {
+                StructureItem::StartNode(name) if name.starts_with("intc") => {
+                    found_node = true;
+                }
+                StructureItem::StartNode(name) if name.starts_with("its") => {
+                    let regs = find_regs_for_node(&mut dt);
+                    let its_base = regs.and_then(|mut i| i.next()).expect("found ITS base");
+                    msi_ctrl = Some(Box::new(its::ItsMsiController::init(
+                        PhysicalAddress(its_base.0 as usize),
+                        its_base.1 as usize,
+                    )) as Box<dyn MsiController>);
+                }
+                StructureItem::StartNode(name) if name.starts_with("v2m") => {
+                    let regs = find_regs_for_node(&mut dt);
+                    let v2m_base = regs.and_then(|mut i| i.next()).expect("found v2m base");
+                    msi_ctrl = Some(Box::new(v2m::V2mMsiController::init(
+                        PhysicalAddress(v2m_base.0 as usize),
+                        v2m_base.1 as usize,
+                    )) as Box<dyn MsiController>);
+                }
+                StructureItem::StartNode(_) if found_node => {
+                    while let Some(j) = dt.next() {
+                        if let StructureItem::EndNode = j {
+                            break;
+                        }
+                    }
+                }
+                StructureItem::EndNode if found_node => break,
+                StructureItem::Property {
+                    name,
+                    data,
+                    std_interp: _,
+                } if found_node => match name {
+                    "reg" => {
+                        gic_mem_regions = Some(MemRegionIter::for_data(data));
+                    }
+                    _ => {}
+                },
+                _ => {}
+            }
+        }
+
+        if !found_node || gic_mem_regions.is_none() {
             return None;
         }
 
-        let distributor_base = PhysicalAddress(distributor_base.unwrap().0 as usize);
-        let cpu_base = PhysicalAddress(cpu_base.unwrap().0 as usize);
+        let mut gic_mem_regions = gic_mem_regions.take().unwrap();
+        let distributor_base = PhysicalAddress(gic_mem_regions.next().unwrap().0 as usize);
+        let cpu_base = PhysicalAddress(gic_mem_regions.next().unwrap().0 as usize);
 
         log::info!(
             "GIC: distributor @ {}, cpu interface @ {}",
@@ -67,7 +125,7 @@ impl GenericInterruptController {
             Self {
                 distributor_base: distributor_base.to_virtual_canonical().as_ptr(),
                 cpu_base: cpu_base.to_virtual_canonical().as_ptr(),
-                msi_ctrl: None,
+                msi_ctrl,
             }
         };
         s.init_distributor();
@@ -80,13 +138,13 @@ impl GenericInterruptController {
             // enable distributor
             self.distributor_base.offset(GICD_CTLR).write_volatile(0x1);
 
-            let typer = self.distributor_base.offset(GICD_TYPER).read_volatile();
-            log::info!("GICD_TYPER = {:032b}", typer);
-            if !typer.bit(16) {
-                panic!("GIC does not support message-based interrupts");
-            } else {
-                log::info!("GIC supports message-based interrupts");
-            }
+            // let typer = self.distributor_base.offset(GICD_TYPER).read_volatile();
+            // log::info!("GICD_TYPER = {:032b}", typer);
+            // if !typer.bit(16) {
+            //     panic!("GIC does not support message-based interrupts");
+            // } else {
+            //     log::info!("GIC supports message-based interrupts");
+            // }
         }
     }
 
