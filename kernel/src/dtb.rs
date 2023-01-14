@@ -151,7 +151,7 @@ impl DeviceTree {
         &'s self,
         node_name: &str,
         mut f: impl FnMut(&'s str, &'s [u8], Option<StandardProperty<'s>>),
-    ) {
+    ) -> bool {
         let mut found_node = false;
         let mut dt = self.iter_structure();
         while let Some(n) = dt.next() {
@@ -175,6 +175,7 @@ impl DeviceTree {
                 _ => {}
             }
         }
+        found_node
     }
 
     pub fn iter_reserved_memory_regions(&self) -> MemRegionIter {

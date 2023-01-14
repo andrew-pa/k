@@ -1,5 +1,7 @@
 use core::{ffi::CStr, mem::size_of};
 
+use alloc::boxed::Box;
+use bitfield::Bit;
 use bitvec::{
     index::BitIdx,
     order::Lsb0,
@@ -7,48 +9,45 @@ use bitvec::{
 };
 
 use crate::{
-    dtb::{DeviceTree, MemRegionIter, StructureItem},
+    dtb::{DeviceTree, MemRegionIter},
     memory::PhysicalAddress,
 };
 
-use super::{InterruptConfig, InterruptController, InterruptId};
+use super::{InterruptConfig, InterruptController, InterruptId, MsiDescriptor};
+
+/* Possible GIC MSI implementations:
+ * built-in MSI for GICv3 via writing SETSPI to generate an SPI with an InterruptId
+ * built-in MSI for GICv3 via writing GICR_SETLPIR to generate an LPI (at the redistributor level, just like ITS)
+ * use ITS in GICv3+, writing GITS_TRANSLATOR to generate an LPI
+ * use v2m in GICv2, doing goodness knows what because I can't find any documentation, appears to generate an SPI
+ * why are there four different ways to do this? it's not even that complicated of an idea, and
+ * ideally it would be directly well supported by the base GIC - for goodness' sake it's required for PCIe!
+ */
+
+trait MsiController {
+    fn alloc_msi(&self) -> MsiDescriptor;
+}
 
 pub struct GenericInterruptController {
     distributor_base: *mut u32,
     cpu_base: *mut u32,
+    msi_ctrl: Option<Box<dyn MsiController>>,
 }
 
 impl GenericInterruptController {
     pub fn in_device_tree(device_tree: &DeviceTree) -> Option<GenericInterruptController> {
-        let mut found_node = false;
         let mut distributor_base = None;
         let mut cpu_base = None;
-        let mut dt = device_tree.iter_structure();
 
-        while let Some(i) = dt.next() {
-            match i {
-                StructureItem::StartNode(name) if name.starts_with("intc") => {
-                    found_node = true;
+        let found_node =
+            device_tree.process_properties_for_node("intc", |name, data, _| match name {
+                "reg" => {
+                    let mut r = MemRegionIter::for_data(data);
+                    distributor_base = r.next();
+                    cpu_base = r.next();
                 }
-                StructureItem::StartNode(_) if found_node => {
-                    while let Some(j) = dt.next() {
-                        if let StructureItem::EndNode = j {
-                            break;
-                        }
-                    }
-                }
-                StructureItem::EndNode if found_node => break,
-                StructureItem::Property { name, data, .. } if found_node => match name {
-                    "reg" => {
-                        let mut r = MemRegionIter::for_data(data);
-                        distributor_base = r.next();
-                        cpu_base = r.next();
-                    }
-                    _ => {}
-                },
                 _ => {}
-            }
-        }
+            });
 
         if !found_node || distributor_base.is_none() || cpu_base.is_none() {
             return None;
@@ -68,6 +67,7 @@ impl GenericInterruptController {
             Self {
                 distributor_base: distributor_base.to_virtual_canonical().as_ptr(),
                 cpu_base: cpu_base.to_virtual_canonical().as_ptr(),
+                msi_ctrl: None,
             }
         };
         s.init_distributor();
@@ -79,6 +79,14 @@ impl GenericInterruptController {
         unsafe {
             // enable distributor
             self.distributor_base.offset(GICD_CTLR).write_volatile(0x1);
+
+            let typer = self.distributor_base.offset(GICD_TYPER).read_volatile();
+            log::info!("GICD_TYPER = {:032b}", typer);
+            if !typer.bit(16) {
+                panic!("GIC does not support message-based interrupts");
+            } else {
+                log::info!("GIC supports message-based interrupts");
+            }
         }
     }
 
@@ -256,12 +264,21 @@ impl InterruptController for GenericInterruptController {
             self.cpu_base.offset(GICC_DIR).write_volatile(id);
         }
     }
+
+    fn msi_supported(&self) -> bool {
+        self.msi_ctrl.is_some()
+    }
+
+    fn alloc_msi(&self) -> Option<MsiDescriptor> {
+        self.msi_ctrl.as_ref().map(|c| c.alloc_msi())
+    }
 }
 
 //// Offsets for GIC registers in units of words (u32)
 
 //// Distributor offsets
 const GICD_CTLR: isize = 0x0000 >> 2;
+const GICD_TYPER: isize = 0x0004 >> 2;
 const GICD_STATUSR: isize = 0x0010 >> 2;
 const GICD_SETSPI_NSR: isize = 0x0040 >> 2;
 const GICD_CLRSPI_NSR: isize = 0x0048 >> 2;

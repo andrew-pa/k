@@ -2,7 +2,7 @@ use core::{arch::global_asm, cell::OnceCell, fmt::Display};
 
 use bitfield::bitfield;
 
-use crate::{timer, CHashMapG};
+use crate::{memory::PhysicalAddress, timer, CHashMapG};
 
 pub type InterruptId = u32;
 
@@ -11,6 +11,12 @@ pub mod gic;
 pub enum InterruptConfig {
     Edge,
     Level,
+}
+
+pub struct MsiDescriptor {
+    register_addr: PhysicalAddress,
+    data_value: u64,
+    intid: InterruptId,
 }
 
 pub trait InterruptController {
@@ -34,6 +40,15 @@ pub trait InterruptController {
 
     fn ack_interrupt(&self) -> InterruptId;
     fn finish_interrupt(&self, id: InterruptId);
+
+    fn msi_supported(&self) -> bool {
+        false
+    }
+    // TODO: what happens if we run out of MSIs?
+    fn alloc_msi(&self) -> Option<MsiDescriptor> {
+        None
+    }
+    // TODO: free MSIs
 }
 
 pub type InterruptHandler = fn(InterruptId, *mut Registers);
