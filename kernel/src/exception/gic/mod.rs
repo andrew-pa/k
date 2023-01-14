@@ -1,7 +1,6 @@
 use core::{ffi::CStr, mem::size_of};
 
 use alloc::boxed::Box;
-use bitfield::Bit;
 use bitvec::{
     index::BitIdx,
     order::Lsb0,
@@ -25,7 +24,7 @@ use super::{InterruptConfig, InterruptController, InterruptId, MsiDescriptor};
  */
 
 trait MsiController {
-    fn alloc_msi(&self) -> MsiDescriptor;
+    fn alloc_msi(&mut self) -> MsiDescriptor;
 }
 
 mod its;
@@ -327,8 +326,8 @@ impl InterruptController for GenericInterruptController {
         self.msi_ctrl.is_some()
     }
 
-    fn alloc_msi(&self) -> Option<MsiDescriptor> {
-        self.msi_ctrl.as_ref().map(|c| c.alloc_msi())
+    fn alloc_msi(&mut self) -> Option<MsiDescriptor> {
+        self.msi_ctrl.as_mut().map(|c| c.alloc_msi())
     }
 }
 

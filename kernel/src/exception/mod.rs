@@ -1,6 +1,8 @@
 use core::{arch::global_asm, cell::OnceCell, fmt::Display};
 
+use alloc::boxed::Box;
 use bitfield::bitfield;
+use spin::{Mutex, MutexGuard};
 
 use crate::{memory::PhysicalAddress, timer, CHashMapG};
 
@@ -13,10 +15,11 @@ pub enum InterruptConfig {
     Level,
 }
 
+#[derive(Debug)]
 pub struct MsiDescriptor {
-    register_addr: PhysicalAddress,
-    data_value: u64,
-    intid: InterruptId,
+    pub register_addr: PhysicalAddress,
+    pub data_value: u64,
+    pub intid: InterruptId,
 }
 
 pub trait InterruptController {
@@ -45,8 +48,8 @@ pub trait InterruptController {
         false
     }
     // TODO: what happens if we run out of MSIs?
-    fn alloc_msi(&self) -> Option<MsiDescriptor> {
-        None
+    fn alloc_msi(&mut self) -> Option<MsiDescriptor> {
+        unimplemented!("MSIs not supported by interrupt controller");
     }
     // TODO: free MSIs
 }
@@ -54,17 +57,15 @@ pub trait InterruptController {
 pub type InterruptHandler = fn(InterruptId, *mut Registers);
 pub type SyscallHandler = fn(u16, *mut Registers);
 
-static mut IC: OnceCell<&'static dyn InterruptController> = OnceCell::new();
+static mut IC: OnceCell<Mutex<Box<dyn InterruptController>>> = OnceCell::new();
 static mut INTERRUPT_HANDLERS: OnceCell<CHashMapG<InterruptId, InterruptHandler>> = OnceCell::new();
 static mut SYSTEM_CALL_HANDLERS: OnceCell<CHashMapG<u16, SyscallHandler>> = OnceCell::new();
 
 pub unsafe fn init_interrupts(device_tree: &crate::dtb::DeviceTree) {
-    use alloc::boxed::Box;
-
     // for now this is our only implementation
     let gic = gic::GenericInterruptController::in_device_tree(device_tree).expect("find/init GIC");
 
-    IC.set(Box::leak(Box::new(gic)))
+    IC.set(Mutex::new(Box::new(gic)))
         .ok()
         .expect("init interrupt controller once");
     INTERRUPT_HANDLERS
@@ -77,9 +78,8 @@ pub unsafe fn init_interrupts(device_tree: &crate::dtb::DeviceTree) {
         .expect("init syscall table once");
 }
 
-pub fn interrupt_controller() -> &'static dyn InterruptController {
-    // SAFETY: this basically puts thread safety onto the IC implementation
-    unsafe { *IC.get().expect("interrupt controller initialized") }
+pub fn interrupt_controller() -> MutexGuard<'static, Box<dyn InterruptController>> {
+    unsafe { IC.get().expect("interrupt controller initialized").lock() }
 }
 
 pub fn interrupt_handlers() -> &'static CHashMapG<InterruptId, InterruptHandler> {

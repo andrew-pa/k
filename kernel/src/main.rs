@@ -215,7 +215,7 @@ pub extern "C" fn kmain() {
     );
     bus::pcie::init(&dt, &pcie_drivers);
 
-    panic!();
+    //panic!();
 
     // create idle thread
     process::threads().insert(
@@ -243,12 +243,14 @@ pub extern "C" fn kmain() {
     log::debug!("timer properties = {props:?}");
     let timer_irq = props.interrupt;
 
-    let ic = exception::interrupt_controller();
-    ic.set_target_cpu(timer_irq, 0x1);
-    ic.set_priority(timer_irq, 0);
-    ic.set_config(timer_irq, exception::InterruptConfig::Level);
-    ic.set_pending(timer_irq, false);
-    ic.set_enable(timer_irq, true);
+    {
+        let ic = exception::interrupt_controller();
+        ic.set_target_cpu(timer_irq, 0x1);
+        ic.set_priority(timer_irq, 0);
+        ic.set_config(timer_irq, exception::InterruptConfig::Level);
+        ic.set_pending(timer_irq, false);
+        ic.set_enable(timer_irq, true);
+    }
 
     timer::set_enabled(true);
     timer::set_interrupts_enabled(true);
@@ -270,6 +272,16 @@ pub extern "C" fn kmain() {
 
     // enable all interrupts in DAIF process state mask
     exception::write_interrupt_mask(exception::InterruptMask(0));
+
+    let msi = exception::interrupt_controller()
+        .alloc_msi()
+        .expect("alloc MSI");
+    log::debug!("allocated test MSI {msi:?}");
+    unsafe {
+        let msi_reg: *mut u32 = msi.register_addr.to_virtual_canonical().as_ptr();
+        log::debug!("writing at {:x}", msi_reg as usize);
+        msi_reg.write_volatile(msi.data_value as u32);
+    }
 
     log::info!("waiting for interrupts...");
     halt();
