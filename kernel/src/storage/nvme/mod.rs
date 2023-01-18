@@ -20,10 +20,10 @@ pub fn init_nvme_over_pcie(
 
     let hdr = config.header();
     let hdr = hdr.as_type0().unwrap();
-    let mut base_addresses = hdr.base_addresses();
-    let barl = base_addresses.next().unwrap();
-    let barh = base_addresses.next().unwrap();
 
+    let base_addresses = hdr.base_addresses();
+    let barl = base_addresses[0];
+    let barh = base_addresses[1];
     let base_address = (barl & 0xffff_fff0) as u64 | ((barh as u64) << 32);
 
     log::debug!(

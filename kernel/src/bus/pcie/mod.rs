@@ -150,7 +150,7 @@ impl core::fmt::Display for DeviceId {
 }
 
 pub struct ConfigBlock {
-    p: &'static mut [u8],
+    p: *mut u8,
 }
 
 impl ConfigBlock {
@@ -159,13 +159,11 @@ impl ConfigBlock {
             ((id.bus as isize) * 256 + (id.device as isize) * 8 + (id.function as isize)) * 4096,
         );
 
-        ConfigBlock {
-            p: core::slice::from_raw_parts_mut(addr.as_ptr(), 4096),
-        }
+        ConfigBlock { p: addr.as_ptr() }
     }
 
     fn read_word(&self, offset: usize) -> u16 {
-        LittleEndian::read_u16(&self.p[offset..offset + 2])
+        unsafe { (self.p.offset(offset as isize) as *mut u16).read_volatile() }
     }
 
     pub fn vendor_id(&self) -> u16 {
@@ -177,43 +175,126 @@ impl ConfigBlock {
     }
 
     pub fn class(&self) -> u32 {
-        LittleEndian::read_u32(&self.p[8..12])
+        unsafe { (self.p.offset(8) as *mut u32).read_volatile() }
     }
 
     pub fn cache_line_size(&self) -> u8 {
-        self.p[12]
+        unsafe { self.p.offset(12).read_volatile() }
     }
 
     pub fn master_latency_timer(&self) -> u8 {
-        self.p[13]
+        unsafe { self.p.offset(13).read_volatile() }
     }
 
     pub fn multifunction(&self) -> bool {
-        self.p[14].bit(7)
+        unsafe { self.p.offset(14).read_volatile().bit(7) }
     }
 
     pub fn self_test(&self) -> u8 {
-        self.p[15]
+        unsafe { self.p.offset(15).read_volatile() }
     }
 
     pub fn header(&self) -> ConfigHeader {
-        match self.p[14] & 0x7f {
-            0 => ConfigHeader::Type0(Type0ConfigHeader { p: &self.p[16..] }),
+        let header_type = unsafe { self.p.offset(14).read_volatile() };
+        match header_type & 0x7f {
+            0 => ConfigHeader::Type0(Type0ConfigHeader { p: self.p }),
             x => todo!("unknown header type {x:x}"),
         }
     }
 }
 
-pub struct Type0ConfigHeader<'d> {
-    p: &'d [u8],
+pub struct MsiXCapability {
+    block: *mut u8,
 }
 
-pub enum ConfigHeader<'d> {
-    Type0(Type0ConfigHeader<'d>),
+impl MsiXCapability {
+    pub fn enable(&self) {
+        unsafe {
+            let msg_ctrl = self.block.offset(3);
+            msg_ctrl.write_volatile(msg_ctrl.read_volatile() & 0x80);
+        }
+    }
+
+    pub fn table_size(&self) -> u16 {
+        unsafe {
+            let msg_ctrl = self.block.offset(2) as *mut u16;
+            (msg_ctrl.read_volatile() & 0x03ff) + 1
+        }
+    }
+
+    /// (which BAR to use, offset from that BAR)
+    pub fn table_address(&self) -> (usize, u32) {
+        let x = unsafe { (self.block.offset(4) as *mut u32).read_volatile() };
+        ((x & 0b11) as usize, x & !0b11)
+    }
+
+    /// (which BAR to use, offset from that BAR)
+    pub fn pending_bit_array_address(&self) -> (usize, u32) {
+        let x = unsafe { (self.block.offset(8) as *mut u32).read_volatile() };
+        ((x & 0b11) as usize, x & !0b11)
+    }
 }
 
-impl<'d> ConfigHeader<'d> {
-    pub fn as_type0(&self) -> Option<&Type0ConfigHeader<'d>> {
+impl core::fmt::Debug for MsiXCapability {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("MsiXCapability")
+            .field("block", &self.block)
+            .field("table size", &self.table_size())
+            .field("table address", &self.table_address())
+            .field("PBA address", &self.pending_bit_array_address())
+            .finish()
+    }
+}
+
+#[derive(Debug)]
+pub enum CapabilityBlock {
+    Msi,
+    MsiX(MsiXCapability),
+    Unknown { id: u8 },
+}
+
+impl CapabilityBlock {
+    fn at_address(block: *mut u8) -> CapabilityBlock {
+        match unsafe { block.read_volatile() } {
+            0x5 => CapabilityBlock::Msi,
+            0x11 => CapabilityBlock::MsiX(MsiXCapability { block }),
+            id => CapabilityBlock::Unknown { id },
+        }
+    }
+}
+
+struct CapabilityIter {
+    p: *mut u8,
+    next_block: u8,
+}
+
+impl<'d> Iterator for CapabilityIter {
+    type Item = CapabilityBlock;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.next_block == 0 {
+            None
+        } else {
+            let c = self.next_block;
+            unsafe {
+                let block = self.p.offset(c as isize);
+                self.next_block = block.offset(1).read_volatile() & 0b1111_1100;
+                Some(CapabilityBlock::at_address(block))
+            }
+        }
+    }
+}
+
+pub struct Type0ConfigHeader {
+    p: *mut u8,
+}
+
+pub enum ConfigHeader {
+    Type0(Type0ConfigHeader),
+}
+
+impl ConfigHeader {
+    pub fn as_type0(&self) -> Option<&Type0ConfigHeader> {
         if let Self::Type0(v) = self {
             Some(v)
         } else {
@@ -222,9 +303,21 @@ impl<'d> ConfigHeader<'d> {
     }
 }
 
-impl<'d> Type0ConfigHeader<'d> {
-    pub fn base_addresses(&self) -> impl Iterator<Item = u32> + '_ {
-        self.p.chunks(4).take(5).map(|c| LittleEndian::read_u32(c))
+impl Type0ConfigHeader {
+    pub fn base_addresses(&self) -> &[u32] {
+        unsafe { core::slice::from_raw_parts(self.p.offset(0x10) as *const u32, 5) }
+    }
+
+    pub fn capabilities(&self) -> impl Iterator<Item = CapabilityBlock> + '_ {
+        let status = unsafe { self.p.offset(0x6).read_volatile() };
+        CapabilityIter {
+            p: self.p,
+            next_block: if status.bit(4) {
+                unsafe { self.p.offset(0x34).read_volatile() & 0b1111_1100 }
+            } else {
+                0
+            },
+        }
     }
 }
 
@@ -286,8 +379,11 @@ pub fn init(dt: &DeviceTree, driver_registry: &HashMap<u32, DriverInitFn>) {
                     cfg.class()
                 );
                 let ConfigHeader::Type0(hdr) = cfg.header();
-                for (i, bar) in hdr.base_addresses().enumerate() {
+                for (i, bar) in hdr.base_addresses().iter().enumerate() {
                     log::debug!("\tbar #{i} = {bar:x}");
+                }
+                for cap in hdr.capabilities() {
+                    log::debug!("cap {cap:?}");
                 }
                 if let Some(driver_init) = driver_registry.get(&(cfg.class() & !0xff)) {
                     match driver_init(addr, &cfg, &base) {

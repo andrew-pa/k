@@ -6,7 +6,6 @@ use crate::{
 use super::MsiController;
 
 pub struct V2mMsiController {
-    base: *mut u32,
     register_addr: PhysicalAddress,
     spi_start: u32,
     num_spis: u32,
@@ -36,7 +35,6 @@ impl V2mMsiController {
             typer.num_spis()
         );
         Self {
-            base: basep,
             register_addr: PhysicalAddress(base.0.wrapping_add_signed(V2M_MSI_SETSPI_NS)),
             spi_start: typer.spi_start(),
             num_spis: typer.num_spis(),
@@ -72,6 +70,8 @@ impl MsiController for V2mMsiController {
  */
 const V2M_MSI_TYPER: isize = 0x008;
 const V2M_MSI_SETSPI_NS: isize = 0x040;
-const V2M_MIN_SPI: isize = 32;
-const V2M_MAX_SPI: isize = 1019;
 const V2M_MSI_IIDR: isize = 0xFCC;
+
+// Linux uses these to validate what comes out of the TYPER register
+// const V2M_MIN_SPI: isize = 32;
+// const V2M_MAX_SPI: isize = 1019;
