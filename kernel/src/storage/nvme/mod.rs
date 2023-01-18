@@ -40,5 +40,18 @@ pub fn init_nvme_over_pcie(
 
     log::info!("device supports NVMe version {nvme_version:x}");
 
+    let mut msix_table = None;
+
+    for cap in hdr.capabilities() {
+        match cap {
+            pcie::CapabilityBlock::MsiX(msix) => {
+                log::info!("NVMe device uses MSI-X: {msix:?}");
+                msix_table = Some(pcie::msix::MsiXTable::from_config(base_addresses, &msix));
+                break;
+            }
+            _ => {}
+        }
+    }
+
     Ok(Box::new(PcieDriver {}))
 }

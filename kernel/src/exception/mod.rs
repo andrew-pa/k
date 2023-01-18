@@ -18,7 +18,7 @@ pub enum InterruptConfig {
 #[derive(Debug)]
 pub struct MsiDescriptor {
     pub register_addr: PhysicalAddress,
-    pub data_value: u64,
+    pub data_value: u32,
     pub intid: InterruptId,
 }
 

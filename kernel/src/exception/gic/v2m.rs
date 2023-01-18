@@ -52,7 +52,7 @@ impl MsiController for V2mMsiController {
         self.next_spi += 1;
         MsiDescriptor {
             register_addr: self.register_addr,
-            data_value: intid as u64,
+            data_value: intid,
             intid,
         }
     }

@@ -203,53 +203,12 @@ impl ConfigBlock {
     }
 }
 
-pub struct MsiXCapability {
-    block: *mut u8,
-}
-
-impl MsiXCapability {
-    pub fn enable(&self) {
-        unsafe {
-            let msg_ctrl = self.block.offset(3);
-            msg_ctrl.write_volatile(msg_ctrl.read_volatile() & 0x80);
-        }
-    }
-
-    pub fn table_size(&self) -> u16 {
-        unsafe {
-            let msg_ctrl = self.block.offset(2) as *mut u16;
-            (msg_ctrl.read_volatile() & 0x03ff) + 1
-        }
-    }
-
-    /// (which BAR to use, offset from that BAR)
-    pub fn table_address(&self) -> (usize, u32) {
-        let x = unsafe { (self.block.offset(4) as *mut u32).read_volatile() };
-        ((x & 0b11) as usize, x & !0b11)
-    }
-
-    /// (which BAR to use, offset from that BAR)
-    pub fn pending_bit_array_address(&self) -> (usize, u32) {
-        let x = unsafe { (self.block.offset(8) as *mut u32).read_volatile() };
-        ((x & 0b11) as usize, x & !0b11)
-    }
-}
-
-impl core::fmt::Debug for MsiXCapability {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("MsiXCapability")
-            .field("block", &self.block)
-            .field("table size", &self.table_size())
-            .field("table address", &self.table_address())
-            .field("PBA address", &self.pending_bit_array_address())
-            .finish()
-    }
-}
+pub mod msix;
 
 #[derive(Debug)]
 pub enum CapabilityBlock {
     Msi,
-    MsiX(MsiXCapability),
+    MsiX(msix::MsiXCapability),
     Unknown { id: u8 },
 }
 
@@ -257,7 +216,7 @@ impl CapabilityBlock {
     fn at_address(block: *mut u8) -> CapabilityBlock {
         match unsafe { block.read_volatile() } {
             0x5 => CapabilityBlock::Msi,
-            0x11 => CapabilityBlock::MsiX(MsiXCapability { block }),
+            0x11 => CapabilityBlock::MsiX(msix::MsiXCapability::at_address(block)),
             id => CapabilityBlock::Unknown { id },
         }
     }
@@ -304,6 +263,9 @@ impl ConfigHeader {
 }
 
 impl Type0ConfigHeader {
+    // TODO: we should probably have more abstraction so we can consolidate figuring out
+    // 32-bit/64-bit BARs etc, rather than just returning a slice of u32s and making everyone else
+    // figure it out
     pub fn base_addresses(&self) -> &[u32] {
         unsafe { core::slice::from_raw_parts(self.p.offset(0x10) as *const u32, 5) }
     }
