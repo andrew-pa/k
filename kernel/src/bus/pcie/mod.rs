@@ -153,6 +153,14 @@ pub struct ConfigBlock {
     p: *mut u8,
 }
 
+// offsets in units of u8s from the start of configuration space
+const HEADER_VENDOR_ID: isize = 0x0;
+const HEADER_DEVICE_ID: isize = 0x2;
+const HEADER_COMMAND: isize = 0x4;
+const HEADER_STATUS: isize = 0x6;
+const HEADER_CLASS_CODE: isize = 0x8;
+const HEADER_TYPE_ID: isize = 0xe;
+
 impl ConfigBlock {
     unsafe fn for_device(id: DeviceId) -> ConfigBlock {
         let addr = PCI_ECAM_START.offset(
@@ -162,40 +170,28 @@ impl ConfigBlock {
         ConfigBlock { p: addr.as_ptr() }
     }
 
-    fn read_word(&self, offset: usize) -> u16 {
-        unsafe { (self.p.offset(offset as isize) as *mut u16).read_volatile() }
+    fn read_word(&self, offset: isize) -> u16 {
+        unsafe { (self.p.offset(offset) as *mut u16).read_volatile() }
     }
 
     pub fn vendor_id(&self) -> u16 {
-        self.read_word(0)
+        self.read_word(HEADER_VENDOR_ID)
     }
 
     pub fn device_id(&self) -> u16 {
-        self.read_word(2)
+        self.read_word(HEADER_DEVICE_ID)
     }
 
     pub fn class(&self) -> u32 {
-        unsafe { (self.p.offset(8) as *mut u32).read_volatile() }
-    }
-
-    pub fn cache_line_size(&self) -> u8 {
-        unsafe { self.p.offset(12).read_volatile() }
-    }
-
-    pub fn master_latency_timer(&self) -> u8 {
-        unsafe { self.p.offset(13).read_volatile() }
+        unsafe { (self.p.offset(HEADER_CLASS_CODE) as *mut u32).read_volatile() }
     }
 
     pub fn multifunction(&self) -> bool {
-        unsafe { self.p.offset(14).read_volatile().bit(7) }
-    }
-
-    pub fn self_test(&self) -> u8 {
-        unsafe { self.p.offset(15).read_volatile() }
+        unsafe { self.p.offset(HEADER_TYPE_ID).read_volatile().bit(7) }
     }
 
     pub fn header(&self) -> ConfigHeader {
-        let header_type = unsafe { self.p.offset(14).read_volatile() };
+        let header_type = unsafe { self.p.offset(HEADER_TYPE_ID).read_volatile() };
         match header_type & 0x7f {
             0 => ConfigHeader::Type0(Type0ConfigHeader { p: self.p }),
             x => todo!("unknown header type {x:x}"),
@@ -212,11 +208,14 @@ pub enum CapabilityBlock {
     Unknown { id: u8 },
 }
 
+const CAPABILITY_ID_MSI: u8 = 0x05;
+const CAPABILITY_ID_MSIX: u8 = 0x11;
+
 impl CapabilityBlock {
     fn at_address(block: *mut u8) -> CapabilityBlock {
         match unsafe { block.read_volatile() } {
-            0x5 => CapabilityBlock::Msi,
-            0x11 => CapabilityBlock::MsiX(msix::MsiXCapability::at_address(block)),
+            CAPABILITY_ID_MSI => CapabilityBlock::Msi,
+            CAPABILITY_ID_MSIX => CapabilityBlock::MsiX(msix::MsiXCapability::at_address(block)),
             id => CapabilityBlock::Unknown { id },
         }
     }
@@ -335,7 +334,7 @@ pub fn init(dt: &DeviceTree, driver_registry: &HashMap<u32, DriverInitFn>) {
             let cfg = unsafe { ConfigBlock::for_device(addr) };
             if cfg.vendor_id() != 0xffff {
                 log::debug!(
-                    "addr = {addr}, vendor = {:x}, device = {:x}, class={:08x}",
+                    "addr = {addr}, vendor = {:x}, device = {:x}, class = {:08x}",
                     cfg.vendor_id(),
                     cfg.device_id(),
                     cfg.class()
@@ -345,7 +344,7 @@ pub fn init(dt: &DeviceTree, driver_registry: &HashMap<u32, DriverInitFn>) {
                     log::debug!("\tbar #{i} = {bar:x}");
                 }
                 for cap in hdr.capabilities() {
-                    log::debug!("cap {cap:?}");
+                    log::debug!("\tcap {cap:?}");
                 }
                 if let Some(driver_init) = driver_registry.get(&(cfg.class() & !0xff)) {
                     match driver_init(addr, &cfg, &base) {

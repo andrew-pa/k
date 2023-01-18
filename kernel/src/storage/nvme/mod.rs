@@ -45,7 +45,7 @@ pub fn init_nvme_over_pcie(
     for cap in hdr.capabilities() {
         match cap {
             pcie::CapabilityBlock::MsiX(msix) => {
-                log::info!("NVMe device uses MSI-X: {msix:?}");
+                log::debug!("NVMe device uses MSI-X: {msix:?}");
                 msix_table = Some(pcie::msix::MsiXTable::from_config(base_addresses, &msix));
                 break;
             }

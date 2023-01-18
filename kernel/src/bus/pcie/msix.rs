@@ -1,36 +1,39 @@
 use bitfield::{bitfield, Bit, BitMut};
 
-use crate::memory::PhysicalAddress;
-
 pub struct MsiXCapability {
     block: *mut u8,
 }
 
+// byte offset from start of block
+const MSGCTRL: isize = 0x02;
+const TABLE_OFFSET: isize = 0x04;
+const PBA_OFFSET: isize = 0x08;
+
 impl MsiXCapability {
     pub fn enable(&self) {
         unsafe {
-            let msg_ctrl = self.block.offset(3);
+            let msg_ctrl = self.block.offset(MSGCTRL + 1); //only the high byte
             msg_ctrl.write_volatile(msg_ctrl.read_volatile() & 0x80);
         }
     }
 
     pub fn table_size(&self) -> u16 {
         unsafe {
-            let msg_ctrl = self.block.offset(2) as *mut u16;
+            let msg_ctrl = self.block.offset(MSGCTRL) as *mut u16;
             (msg_ctrl.read_volatile() & 0x03ff) + 1
         }
     }
 
     /// (which BAR to use, offset from that BAR)
     pub fn table_address(&self) -> (usize, u32) {
-        let x = unsafe { (self.block.offset(4) as *mut u32).read_volatile() };
-        ((x & 0b11) as usize, x & !0b11)
+        let x = unsafe { (self.block.offset(TABLE_OFFSET) as *mut u32).read_volatile() };
+        ((x & 0b111) as usize, x & !0b111)
     }
 
     /// (which BAR to use, offset from that BAR)
     pub fn pending_bit_array_address(&self) -> (usize, u32) {
-        let x = unsafe { (self.block.offset(8) as *mut u32).read_volatile() };
-        ((x & 0b11) as usize, x & !0b11)
+        let x = unsafe { (self.block.offset(PBA_OFFSET) as *mut u32).read_volatile() };
+        ((x & 0b111) as usize, x & !0b111)
     }
 
     pub fn at_address(block: *mut u8) -> MsiXCapability {

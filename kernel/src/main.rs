@@ -172,6 +172,17 @@ pub fn current_el() -> usize {
     current_el >> 2
 }
 
+pub fn mair() -> usize {
+    let mut x: usize;
+    unsafe {
+        core::arch::asm!(
+            "mrs {val}, MAIR_EL1",
+            val = out(reg) x
+        );
+    }
+    x >> 2
+}
+
 #[no_mangle]
 pub extern "C" fn kmain() {
     // make sure the BSS section is zeroed
@@ -180,7 +191,7 @@ pub extern "C" fn kmain() {
     }
 
     log::set_logger(&uart::DebugUartLogger).expect("set logger");
-    log::set_max_level(log::LevelFilter::Trace);
+    log::set_max_level(log::LevelFilter::Debug);
     log::info!("starting kernel!");
 
     let current_el = current_el();
@@ -215,6 +226,7 @@ pub extern "C" fn kmain() {
     );
     bus::pcie::init(&dt, &pcie_drivers);
 
+    log::info!("MAIR = 0x{:x}", mair());
     panic!();
 
     // create idle thread
