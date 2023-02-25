@@ -191,7 +191,7 @@ pub extern "C" fn kmain() {
     }
 
     log::set_logger(&uart::DebugUartLogger).expect("set logger");
-    log::set_max_level(log::LevelFilter::Debug);
+    log::set_max_level(log::LevelFilter::Trace);
     log::info!("starting kernel!");
 
     let current_el = current_el();
@@ -227,7 +227,7 @@ pub extern "C" fn kmain() {
     bus::pcie::init(&dt, &pcie_drivers);
 
     log::info!("MAIR = 0x{:x}", mair());
-    panic!();
+    panic!("stop before starting thread scheduler");
 
     // create idle thread
     process::threads().insert(

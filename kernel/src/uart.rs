@@ -32,11 +32,11 @@ impl log::Log for DebugUartLogger {
         };
         writeln!(
             uart,
-            "[{:<5} ({}:{}) {}] {}",
+            "[{:<5} {} {}.{}] {}",
             record.level(),
-            record.file().unwrap_or("unknown file"),
-            record.line().unwrap_or(0),
+            crate::timer::counter(),
             record.module_path().unwrap_or("unknown module"),
+            record.line().unwrap_or(0),
             record.args()
         )
         .unwrap();
