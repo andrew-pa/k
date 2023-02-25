@@ -262,11 +262,19 @@ impl ConfigHeader {
 }
 
 impl Type0ConfigHeader {
-    // TODO: we should probably have more abstraction so we can consolidate figuring out
-    // 32-bit/64-bit BARs etc, rather than just returning a slice of u32s and making everyone else
-    // figure it out
     pub fn base_addresses(&self) -> &[u32] {
         unsafe { core::slice::from_raw_parts(self.p.offset(0x10) as *const u32, 5) }
+    }
+
+    pub fn base_address(&self, index: usize) -> u64 {
+        let bars = self.base_addresses();
+        let barl = bars[index];
+        if barl.bit(2) {
+            let barh = bars[index + 1];
+            (barl & 0xffff_fff0) as u64 | ((barh as u64) << 32)
+        } else {
+            (barl & 0xffff_fff0) as u64
+        }
     }
 
     pub fn capabilities(&self) -> impl Iterator<Item = CapabilityBlock> + '_ {

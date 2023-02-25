@@ -1,5 +1,7 @@
 use bitfield::{bitfield, Bit, BitMut};
 
+use super::Type0ConfigHeader;
+
 pub struct MsiXCapability {
     block: *mut u8,
 }
@@ -58,15 +60,9 @@ pub struct MsiXTable {
 }
 
 impl MsiXTable {
-    pub fn from_config(bars: &[u32], caps: &MsiXCapability) -> MsiXTable {
+    pub fn from_config(header: &Type0ConfigHeader, caps: &MsiXCapability) -> MsiXTable {
         let (bar_ix, offset) = caps.table_address();
-        let barl = bars[bar_ix];
-        let base_address = if barl.bit(2) {
-            let barh = bars[bar_ix + 1];
-            (barl & 0xffff_fff0) as u64 | ((barh as u64) << 32)
-        } else {
-            (barl & 0xffff_fff0) as u64
-        } + offset as u64;
+        let base_address = header.base_address(bar_ix) + offset as u64;
 
         MsiXTable {
             base: base_address as *mut u32,
