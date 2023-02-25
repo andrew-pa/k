@@ -23,11 +23,11 @@ pub unsafe fn zero_bss_section() {
 // M1 Macs use 16kB pages though I think?? Switching is probably not that hard for a from-scratch project
 pub const PAGE_SIZE: usize = 4 * 1024;
 
-#[derive(Copy, Clone, Display, PartialEq, Eq)]
+#[derive(Copy, Clone, Display, PartialEq, Eq, PartialOrd, Ord)]
 #[display(fmt = "p:0x{:x}", _0)]
 pub struct PhysicalAddress(pub usize);
 
-#[derive(Copy, Clone, Display, PartialEq, Eq)]
+#[derive(Copy, Clone, Display, PartialEq, Eq, PartialOrd, Ord)]
 #[display(fmt = "v:0x{:x}", _0)]
 pub struct VirtualAddress(pub usize);
 
@@ -116,3 +116,8 @@ pub use physical_memory_allocator::{
 
 pub mod heap;
 pub mod paging;
+
+mod virtual_address_allocator;
+pub use virtual_address_allocator::{
+    init_virtual_address_allocator, virtual_address_allocator, VirtualAddressAllocator,
+};

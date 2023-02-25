@@ -221,6 +221,8 @@ impl KernelGlobalAlloc {
     fn increase_heap_size(&self, layout: &Layout) {
         let mut pt = super::paging::kernel_table();
         let num_pages = (layout.size() + ALLOC_HEADER_SIZE).div_ceil(PAGE_SIZE);
+        // WARN: until this function returns the heap will report that it is larger than it
+        // actually is, since we increase self.heap_size before actually mapping the pages
         let old_heap_size = self
             .heap_size
             .fetch_add(num_pages, core::sync::atomic::Ordering::AcqRel);

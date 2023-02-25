@@ -8,6 +8,7 @@
 #![feature(default_alloc_error_handler)]
 #![feature(cstr_from_bytes_until_nul)]
 #![feature(once_cell)]
+#![feature(linked_list_cursors)]
 
 extern crate alloc;
 
@@ -212,6 +213,7 @@ pub extern "C" fn kmain() {
 
         /* --- Kernel heap is now available --- */
 
+        memory::init_virtual_address_allocator();
         exception::init_interrupts(&dt);
         process::scheduler::init_scheduler(process::IDLE_THREAD);
     }

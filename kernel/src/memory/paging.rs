@@ -630,6 +630,7 @@ pub unsafe fn init_kernel_page_table() {
 /// | Virtual Address               | What's there               |
 /// |-------------------------------|----------------------------|
 /// | `0xffff_0000_0000_0000`, 2GiB | Identity mapped to first 2GiB of PA including kernel code/data |
+/// | `0xffff_0010_0000_0000`, 1TiB | Memory mapped with addresses from VirtualAddressAllocator |
 /// | `0xffff_ff00_0000_0000`, Flex | Kernel heap, allocated on demand |
 pub fn kernel_table() -> spin::MutexGuard<'static, PageTable> {
     unsafe {
