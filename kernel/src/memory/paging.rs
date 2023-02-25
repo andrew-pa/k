@@ -373,6 +373,7 @@ impl PageTable {
                     if let Some(existing_table) = tr[i].table_ref(lvl as u8) {
                         table = existing_table;
                     } else if tr[i].valid() {
+                        log::error!("table: {:?}", self);
                         return Err(MapError::RangeAlreadyMapped {
                             virt_start,
                             page_count,
@@ -455,7 +456,8 @@ impl PageTable {
                 }
             }
         }
-        todo!()
+        // TODO: there was a todo!() here but it is unclear why. Perhaps because this doesn't free
+        // the actual page table memory itself?
     }
 
     /// Compute the physical address of a virtual address the same way the MMU would. If accessing

@@ -20,6 +20,13 @@ const SUBMISSION_ENTRY_SIZE: usize = 64; //bytes
 const COMPLETION_ENTRY_SIZE: usize = 16; //bytes (at least)
 
 bitfield! {
+    struct ControllerCapabilities(u64);
+    impl Debug;
+    u8;
+    doorbell_stride, _: 35, 32;
+}
+
+bitfield! {
     struct ControllerConfigReg(u32);
     impl Debug;
     io_completion_queue_entry_size, set_io_completion_queue_entry_size: 23, 20;
@@ -34,8 +41,16 @@ bitfield! {
 bitfield! {
     struct AdminQueueAttributes(u32);
     impl Debug;
+    u16;
     completion_queue_size, set_completion_queue_size: 27, 16;
     submission_queue_size, set_submission_queue_size: 11, 0;
+}
+
+impl Copy for AdminQueueAttributes {}
+impl Clone for AdminQueueAttributes {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
 }
 
 pub struct PcieDriver {}
@@ -54,8 +69,13 @@ fn busy_wait_for_ready_bit(csts: *mut u8, value: bool) {
 
 impl PcieDriver {
     fn configure(base_address: VirtualAddress) -> Result<PcieDriver, crate::memory::MemoryError> {
-        let cap: u64 = unsafe { base_address.offset(REG_CAP).as_ptr::<u64>().read_volatile() };
-        log::debug!("CAP = {:b} {}", cap, cap.bit(36));
+        let cap: ControllerCapabilities = unsafe {
+            base_address
+                .offset(REG_CAP)
+                .as_ptr::<ControllerCapabilities>()
+                .read_volatile()
+        };
+        log::debug!("CAP = {:?}", cap);
 
         // reset the controller
         let cc: *mut ControllerConfigReg = base_address.offset(REG_CC).as_ptr();
@@ -72,29 +92,42 @@ impl PcieDriver {
         busy_wait_for_ready_bit(csts, false);
 
         // configure admin queues
+        let doorbell_base = base_address.offset(0x1000);
+
+        let mut admin_cq = queue::CompletionQueue::new(
+            0,
+            (PAGE_SIZE / COMPLETION_ENTRY_SIZE) as u16,
+            doorbell_base,
+            cap.doorbell_stride(),
+        )?;
+
+        let mut admin_sq = queue::SubmissionQueue::new(
+            0,
+            (PAGE_SIZE / SUBMISSION_ENTRY_SIZE) as u16,
+            doorbell_base,
+            cap.doorbell_stride(),
+            &mut admin_cq,
+        )?;
+
         let mut admin_queue_attrbs = AdminQueueAttributes(0);
         // make each queue exactly 1 page worth of entries
-        admin_queue_attrbs.set_submission_queue_size((PAGE_SIZE / SUBMISSION_ENTRY_SIZE) as u32);
-        admin_queue_attrbs.set_completion_queue_size((PAGE_SIZE / COMPLETION_ENTRY_SIZE) as u32);
+        admin_queue_attrbs.set_submission_queue_size(admin_cq.size());
+        admin_queue_attrbs.set_completion_queue_size(admin_sq.size());
         unsafe {
             base_address
                 .offset(REG_AQA)
                 .as_ptr::<AdminQueueAttributes>()
                 .write_volatile(admin_queue_attrbs);
         }
-        let (sq_addr, cq_addr) = {
-            let mut pma = physical_memory_allocator();
-            (pma.alloc()?, pma.alloc()?)
-        };
         unsafe {
             base_address
                 .offset(REG_ASQ)
                 .as_ptr::<u64>()
-                .write_volatile(sq_addr.0 as u64);
+                .write_volatile(admin_sq.address().0 as u64);
             base_address
                 .offset(REG_ACQ)
                 .as_ptr::<u64>()
-                .write_volatile(cq_addr.0 as u64);
+                .write_volatile(admin_cq.address().0 as u64);
         }
 
         // configure controller
@@ -117,7 +150,6 @@ impl PcieDriver {
         log::trace!("waiting for controller to become ready after enabling");
         busy_wait_for_ready_bit(csts, true);
 
-        // set up IO queues, interrupts, etc
         Ok(PcieDriver {})
     }
 }

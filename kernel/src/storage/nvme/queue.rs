@@ -3,7 +3,43 @@ use hashbrown::HashMap;
 use spin::Mutex;
 
 use super::*;
-use crate::memory::PhysicalAddress;
+use crate::memory::{
+    paging::{kernel_table, PageTableEntryOptions},
+    virtual_address_allocator, MemoryError, PhysicalAddress,
+};
+
+fn alloc_queue_memory(
+    entry_count: u16,
+    size: usize,
+) -> Result<(PhysicalAddress, VirtualAddress), MemoryError> {
+    let page_count = (entry_count as usize * size).div_ceil(PAGE_SIZE);
+    // make sure we know the physical address and also that the pages are allocated
+    // continuously in physical memory so we can not bother with queue PRP lists
+    let base_address_phy = physical_memory_allocator().alloc_contig(page_count)?;
+    let base_address_vir = virtual_address_allocator().alloc(page_count)?;
+    kernel_table()
+        .map_range(
+            base_address_phy,
+            base_address_vir,
+            page_count,
+            true,
+            &PageTableEntryOptions::default(),
+        )
+        .expect("map NVMe queue memory should succeed because VA came from VA allocator");
+    Ok((base_address_phy, base_address_vir))
+}
+
+fn dealloc_queue_memory(
+    entry_count: u16,
+    size: usize,
+    base_address: PhysicalAddress,
+    base_ptr: *mut u8,
+) {
+    let page_count = (entry_count as usize * size).div_ceil(PAGE_SIZE);
+    kernel_table().unmap_range(base_ptr.into(), page_count);
+    virtual_address_allocator().free(base_ptr.into(), page_count);
+    physical_memory_allocator().free_pages(base_address, page_count);
+}
 
 pub struct Command<'sq> {
     parent: &'sq mut SubmissionQueue,
@@ -33,6 +69,40 @@ pub struct SubmissionQueue {
 }
 
 impl SubmissionQueue {
+    pub(super) fn new(
+        id: QueueId,
+        entry_count: u16,
+        doorbell_base: VirtualAddress,
+        doorbell_stride: u8,
+        associated_completion_queue: &mut CompletionQueue,
+    ) -> Result<SubmissionQueue, MemoryError> {
+        let tail_doorbell =
+            doorbell_base.offset((2 * (id as isize)) * (4 << doorbell_stride as isize));
+        let head: Arc<Mutex<u16>> = Arc::default();
+        associated_completion_queue
+            .assoc_submit_queue_heads
+            .insert(id, head.clone());
+        let (base_address_phy, base_address_vir) =
+            alloc_queue_memory(entry_count, SUBMISSION_ENTRY_SIZE)?;
+        Ok(SubmissionQueue {
+            id,
+            base_address: base_address_phy,
+            entry_count,
+            base_ptr: base_address_vir.as_ptr(),
+            tail: 0,
+            tail_doorbell: tail_doorbell.as_ptr(),
+            head,
+        })
+    }
+
+    pub fn size(&self) -> u16 {
+        self.entry_count
+    }
+
+    pub fn address(&self) -> PhysicalAddress {
+        self.base_address
+    }
+
     pub fn full(&self) -> bool {
         *self.head.lock() == self.tail + 1
     }
@@ -51,6 +121,17 @@ impl SubmissionQueue {
                 parent: self,
             })
         }
+    }
+}
+
+impl Drop for SubmissionQueue {
+    fn drop(&mut self) {
+        dealloc_queue_memory(
+            self.entry_count,
+            SUBMISSION_ENTRY_SIZE,
+            self.base_address,
+            self.base_ptr,
+        );
     }
 }
 
@@ -94,6 +175,36 @@ pub struct CompletionQueue {
 }
 
 impl CompletionQueue {
+    pub(super) fn new(
+        id: QueueId,
+        entry_count: u16,
+        doorbell_base: VirtualAddress,
+        doorbell_stride: u8,
+    ) -> Result<CompletionQueue, MemoryError> {
+        let head_doorbell =
+            doorbell_base.offset((2 * (id as isize) + 1) * (4 << doorbell_stride as isize));
+        let (base_address_phy, base_address_vir) =
+            alloc_queue_memory(entry_count, COMPLETION_ENTRY_SIZE)?;
+        Ok(CompletionQueue {
+            id,
+            base_address: base_address_phy,
+            entry_count,
+            base_ptr: base_address_vir.as_ptr(),
+            head: 0,
+            head_doorbell: head_doorbell.as_ptr(),
+            current_phase: true,
+            assoc_submit_queue_heads: HashMap::new(),
+        })
+    }
+
+    pub fn size(&self) -> u16 {
+        self.entry_count
+    }
+
+    pub fn address(&self) -> PhysicalAddress {
+        self.base_address
+    }
+
     pub fn pop(&mut self) -> Option<Completion> {
         let cmp = unsafe {
             let ptr = self
@@ -123,10 +234,16 @@ impl CompletionQueue {
         }
     }
 
-    pub fn associate(&mut self, submit_queue: &SubmissionQueue) {
-        self.assoc_submit_queue_heads
-            .insert(submit_queue.id, submit_queue.head.clone());
-    }
-
     // TODO: could easily implement peek()
+}
+
+impl Drop for CompletionQueue {
+    fn drop(&mut self) {
+        dealloc_queue_memory(
+            self.entry_count,
+            COMPLETION_ENTRY_SIZE,
+            self.base_address,
+            self.base_ptr,
+        );
+    }
 }

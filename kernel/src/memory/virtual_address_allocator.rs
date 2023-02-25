@@ -43,6 +43,7 @@ impl VirtualAddressAllocator {
 
     /// Warning: if you don't free exactly as many pages as you allocated, this will leak any left-over pages
     pub fn free(&mut self, address: VirtualAddress, page_count: usize) {
+        log::trace!("freeing {page_count} pages at {address}");
         let end_address = address.offset((PAGE_SIZE * page_count) as isize);
         let mut cur = self.free_list.cursor_front_mut();
         while let Some(block) = cur.current() {
@@ -62,6 +63,7 @@ impl VirtualAddressAllocator {
                 });
                 return;
             }
+            cur.move_next();
         }
         self.free_list.push_back(FreeBlock {
             address,

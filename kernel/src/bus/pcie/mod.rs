@@ -117,6 +117,7 @@ impl BaseAddresses {
     }
 }
 
+// TODO: replace this with an allocation from VirtualAddressAllocator
 pub const PCI_ECAM_START: VirtualAddress = VirtualAddress(0xffff_0001_0000_0000);
 pub const PCI_MMIO_START: VirtualAddress = VirtualAddress(0xffff_0002_0000_0000);
 
