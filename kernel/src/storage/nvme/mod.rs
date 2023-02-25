@@ -1,9 +1,11 @@
 use crate::{
     bus::pcie,
-    memory::{physical_memory_allocator, VirtualAddress, PAGE_SIZE},
+    memory::{physical_memory_allocator, PhysicalAddress, VirtualAddress, PAGE_SIZE},
 };
 use alloc::boxed::Box;
 use bitfield::{bitfield, Bit};
+
+mod queue;
 
 // PCIe Register offsets (in bytes)
 const REG_CAP: isize = 0x00;
