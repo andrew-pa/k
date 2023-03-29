@@ -5,6 +5,7 @@ use crate::{
 use alloc::boxed::Box;
 use bitfield::{bitfield, Bit};
 
+mod command;
 mod queue;
 
 // PCIe Register offsets (in bytes)
@@ -68,30 +69,35 @@ fn busy_wait_for_ready_bit(csts: *mut u8, value: bool) {
 }
 
 impl PcieDriver {
-    fn configure(base_address: VirtualAddress) -> Result<PcieDriver, crate::memory::MemoryError> {
+    fn configure(
+        pcie_addr: pcie::DeviceId,
+        base_address: VirtualAddress,
+    ) -> Result<PcieDriver, crate::memory::MemoryError> {
         let cap: ControllerCapabilities = unsafe {
             base_address
                 .offset(REG_CAP)
                 .as_ptr::<ControllerCapabilities>()
                 .read_volatile()
         };
-        log::debug!("CAP = {:?}", cap);
+        log::trace!("CAP = {:?}", cap);
 
         // reset the controller
         let cc: *mut ControllerConfigReg = base_address.offset(REG_CC).as_ptr();
         unsafe {
             let mut r = cc.read_volatile();
-            log::debug!("initial controller config = {:?}", r);
+            log::trace!("initial controller config = {:?}", r);
             r.set_enable(false);
             cc.write_volatile(r);
         }
 
-        // wait for CSTS.RDY = 0
-        log::trace!("waiting for controller to become ready to configure");
+        // see §7.6.1 for details on how to initialize the controller
+
+        // 2. wait for CSTS.RDY = 0
+        log::debug!("waiting for controller to become ready to configure");
         let csts: *mut u8 = base_address.offset(REG_CSTS).as_ptr();
         busy_wait_for_ready_bit(csts, false);
 
-        // configure admin queues
+        // 3. configure admin queues
         let doorbell_base = base_address.offset(0x1000);
 
         let mut admin_cq = queue::CompletionQueue::new(
@@ -108,6 +114,18 @@ impl PcieDriver {
             cap.doorbell_stride(),
             &mut admin_cq,
         )?;
+
+        unsafe {
+            log::trace!(
+                "old admin queue addresses: rx@{:x}, tx@{:x}; new attribs={:?}",
+                base_address.offset(REG_ACQ).as_ptr::<u64>().read_volatile(),
+                base_address.offset(REG_ASQ).as_ptr::<u64>().read_volatile(),
+                base_address
+                    .offset(REG_AQA)
+                    .as_ptr::<AdminQueueAttributes>()
+                    .read_volatile()
+            );
+        }
 
         let mut admin_queue_attrbs = AdminQueueAttributes(0);
         // make each queue exactly 1 page worth of entries
@@ -129,8 +147,14 @@ impl PcieDriver {
                 .as_ptr::<u64>()
                 .write_volatile(admin_cq.address().0 as u64);
         }
+        log::trace!(
+            "new admin queue addresses: rx@{}, tx@{}; new attribs={:?}",
+            admin_cq.address(),
+            admin_sq.address(),
+            admin_queue_attrbs
+        );
 
-        // configure controller
+        // 4. configure controller
         unsafe {
             let mut r = ControllerConfigReg(0);
             r.set_arbitration_mechanism(0b000); // round robin, no weights
@@ -143,12 +167,34 @@ impl PcieDriver {
 
             // set CC.EN = 1 to enable controller
             r.set_enable(true);
+            log::trace!("new controller config = {:?}", r);
             cc.write_volatile(r);
         }
 
-        // wait for CSTS.RDY = 1
-        log::trace!("waiting for controller to become ready after enabling");
+        // 6. wait for CSTS.RDY = 1
+        log::debug!("waiting for controller to become ready after enabling");
         busy_wait_for_ready_bit(csts, true);
+
+        // 7. send Identify commands
+        admin_sq
+            .begin()
+            .expect("queue just created, can not be full")
+            .set_command_id(0)
+            .identify(0, command::IdentifyStructure::Controller)
+            .submit();
+
+        let c = admin_cq.busy_wait_for_completion();
+        log::debug!("ID ctrl completion: {c:?}");
+
+        // >>>>>>>>>>>>>>>>>>>>>>>>>>>> LEFT OFF HERE <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+        // step 7
+        // TODO:
+        // - implement command generation code
+        // - send Identify command and parse results
+        // - set up interrupts??
+        // - create IO queues
+
+        log::info!("NVMe device at {pcie_addr} initialized!");
 
         Ok(PcieDriver {})
     }
@@ -200,5 +246,7 @@ pub fn init_nvme_over_pcie(
     }
 
     // TODO: error handling
-    Ok(Box::new(PcieDriver::configure(base_vaddress).unwrap()))
+    Ok(Box::new(
+        PcieDriver::configure(addr, base_vaddress).unwrap(),
+    ))
 }

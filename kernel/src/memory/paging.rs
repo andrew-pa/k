@@ -361,6 +361,7 @@ impl PageTable {
         }
 
         if !overwrite {
+            // TODO: this appears to simply not work at all, but it is of dubious importance
             // TODO: this always takes linear time in the number of pages although the actual allocation
             // doesn't. They could probably both have the same runtime though with some cleverness.
             let mut page_index = 0;

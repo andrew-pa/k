@@ -1,4 +1,5 @@
 use alloc::sync::Arc;
+use bitfield::{BitRange, BitRangeMut};
 use hashbrown::HashMap;
 use spin::Mutex;
 
@@ -22,7 +23,7 @@ fn alloc_queue_memory(
             base_address_phy,
             base_address_vir,
             page_count,
-            true,
+            true, // TODO: right now this crashes, probably because the overwrite check is broken
             &PageTableEntryOptions::default(),
         )
         .expect("map NVMe queue memory should succeed because VA came from VA allocator");
@@ -44,7 +45,7 @@ fn dealloc_queue_memory(
 pub struct Command<'sq> {
     parent: &'sq mut SubmissionQueue,
     new_tail: u16,
-    ptr: *mut u8,
+    pub cmd: &'sq mut [u32],
 }
 
 impl<'sq> Command<'sq> {
@@ -53,6 +54,38 @@ impl<'sq> Command<'sq> {
         unsafe {
             self.parent.tail_doorbell.write_volatile(self.parent.tail);
         }
+    }
+
+    // low-level accessors
+
+    pub fn set_command_id(self, id: u16) -> Command<'sq> {
+        self.cmd[0].set_bit_range(31, 16, id);
+        self
+    }
+
+    pub fn set_opcode(self, op: u8) -> Command<'sq> {
+        self.cmd[0].set_bit_range(7, 0, op);
+        self
+    }
+
+    pub fn set_namespace_id(self, id: u32) -> Command<'sq> {
+        self.cmd[1] = id;
+        self
+    }
+
+    pub fn set_metadata_ptr(self, ptr: u64) -> Command<'sq> {
+        self.cmd[4] = ptr as u32;
+        self.cmd[5] = (ptr >> 32) as u32;
+        self
+    }
+
+    pub fn set_data_ptr(self) -> Command<'sq> {
+        todo!()
+    }
+
+    pub fn set_dword(self, idx: usize, data: u32) -> Command<'sq> {
+        self.cmd[idx] = data;
+        self
     }
 }
 
@@ -107,16 +140,22 @@ impl SubmissionQueue {
         *self.head.lock() == self.tail + 1
     }
 
+    /// Start a new command in the queue. Returns None if the queue is already full
     pub fn begin(&mut self) -> Option<Command> {
         if self.full() {
             None
         } else {
-            let ptr = unsafe {
-                self.base_ptr
-                    .offset(((self.tail as usize) * SUBMISSION_ENTRY_SIZE) as isize)
+            let cmd = unsafe {
+                core::slice::from_raw_parts_mut(
+                    self.base_ptr
+                        .offset(((self.tail as usize) * SUBMISSION_ENTRY_SIZE) as isize)
+                        as *mut u32,
+                    16,
+                )
             };
+            cmd.fill(0);
             Some(Command {
-                ptr,
+                cmd,
                 new_tail: (self.tail + 1) % self.entry_count,
                 parent: self,
             })
@@ -137,6 +176,7 @@ impl Drop for SubmissionQueue {
 
 bitfield! {
     pub struct CompletionStatus(u16);
+    impl Debug;
     u8;
     do_not_retry, _: 15;
     more, _: 14;
@@ -153,7 +193,7 @@ impl Clone for CompletionStatus {
 }
 
 #[repr(C)]
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Completion {
     cmd: u32,
     res: u32,
@@ -231,6 +271,14 @@ impl CompletionQueue {
             Some(cmp.clone())
         } else {
             None
+        }
+    }
+
+    pub fn busy_wait_for_completion(&mut self) -> Completion {
+        loop {
+            if let Some(c) = self.pop() {
+                return c;
+            }
         }
     }
 
