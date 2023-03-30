@@ -1,6 +1,9 @@
 use crate::{
     bus::pcie,
-    memory::{physical_memory_allocator, PhysicalAddress, VirtualAddress, PAGE_SIZE},
+    memory::{
+        alloc_memory_buffer_with_known_physical_address, physical_memory_allocator,
+        PhysicalAddress, VirtualAddress, PAGE_SIZE,
+    },
 };
 use alloc::boxed::Box;
 use bitfield::{bitfield, Bit};
@@ -25,6 +28,7 @@ bitfield! {
     impl Debug;
     u8;
     doorbell_stride, _: 35, 32;
+    timeout, _: 31, 24;
 }
 
 bitfield! {
@@ -61,8 +65,11 @@ impl pcie::DeviceDriver for PcieDriver {}
 fn busy_wait_for_ready_bit(csts: *mut u8, value: bool) {
     unsafe {
         loop {
-            if csts.read_volatile().bit(0) == value {
+            let csts_v = csts.read_volatile();
+            if csts_v.bit(0) == value {
                 break;
+            } else if csts_v.bit(1) {
+                panic!("NVMe fatal error");
             }
         }
     }
@@ -81,6 +88,10 @@ impl PcieDriver {
         };
         log::trace!("CAP = {:?}", cap);
 
+        let csts: *mut u8 = base_address.offset(REG_CSTS).as_ptr();
+        log::debug!("checking to see if the controller was ever ready");
+        busy_wait_for_ready_bit(csts, true);
+
         // reset the controller
         let cc: *mut ControllerConfigReg = base_address.offset(REG_CC).as_ptr();
         unsafe {
@@ -94,7 +105,6 @@ impl PcieDriver {
 
         // 2. wait for CSTS.RDY = 0
         log::debug!("waiting for controller to become ready to configure");
-        let csts: *mut u8 = base_address.offset(REG_CSTS).as_ptr();
         busy_wait_for_ready_bit(csts, false);
 
         // 3. configure admin queues
@@ -173,18 +183,37 @@ impl PcieDriver {
 
         // 6. wait for CSTS.RDY = 1
         log::debug!("waiting for controller to become ready after enabling");
+        // tell the MMU that this region is volatile and shouldn't be cached
         busy_wait_for_ready_bit(csts, true);
+        log::debug!("controller ready!");
 
         // 7. send Identify commands
+        // the identify structure returns a 4KiB structure which is fortunatly only a single
+        // page
+        let (id_res_address_phy, id_res_address_vir) =
+            alloc_memory_buffer_with_known_physical_address(1, &Default::default())?;
+
+        log::trace!("sending identify command to controller");
         admin_sq
             .begin()
             .expect("queue just created, can not be full")
-            .set_command_id(0)
+            .set_command_id(0xabcd)
             .identify(0, command::IdentifyStructure::Controller)
+            .set_data_ptr_single(id_res_address_phy)
             .submit();
 
+        log::trace!("waiting for identify command completion");
+        // TODO: tracing in qemu suggests the completion is actually enqueued, but apparently this
+        // doesn't work. Maybe we need to ack the interrupt?
         let c = admin_cq.busy_wait_for_completion();
         log::debug!("ID ctrl completion: {c:?}");
+        let id_res: *mut u16 = id_res_address_vir.as_ptr();
+        unsafe {
+            log::info!(
+                "nvme controller PCIe vendor id = {:x}",
+                id_res.read_volatile()
+            );
+        }
 
         // >>>>>>>>>>>>>>>>>>>>>>>>>>>> LEFT OFF HERE <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
         // step 7

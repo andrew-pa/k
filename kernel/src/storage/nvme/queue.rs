@@ -5,8 +5,9 @@ use spin::Mutex;
 
 use super::*;
 use crate::memory::{
-    paging::{kernel_table, PageTableEntryOptions},
-    virtual_address_allocator, MemoryError, PhysicalAddress,
+    alloc_memory_buffer_with_known_physical_address,
+    dealloc_memory_buffer_with_known_physical_address, paging::PageTableEntryOptions, MemoryError,
+    PhysicalAddress,
 };
 
 fn alloc_queue_memory(
@@ -16,18 +17,7 @@ fn alloc_queue_memory(
     let page_count = (entry_count as usize * size).div_ceil(PAGE_SIZE);
     // make sure we know the physical address and also that the pages are allocated
     // continuously in physical memory so we can not bother with queue PRP lists
-    let base_address_phy = physical_memory_allocator().alloc_contig(page_count)?;
-    let base_address_vir = virtual_address_allocator().alloc(page_count)?;
-    kernel_table()
-        .map_range(
-            base_address_phy,
-            base_address_vir,
-            page_count,
-            true, // TODO: right now this crashes, probably because the overwrite check is broken
-            &PageTableEntryOptions::default(),
-        )
-        .expect("map NVMe queue memory should succeed because VA came from VA allocator");
-    Ok((base_address_phy, base_address_vir))
+    alloc_memory_buffer_with_known_physical_address(page_count, &PageTableEntryOptions::default())
 }
 
 fn dealloc_queue_memory(
@@ -37,9 +27,7 @@ fn dealloc_queue_memory(
     base_ptr: *mut u8,
 ) {
     let page_count = (entry_count as usize * size).div_ceil(PAGE_SIZE);
-    kernel_table().unmap_range(base_ptr.into(), page_count);
-    virtual_address_allocator().free(base_ptr.into(), page_count);
-    physical_memory_allocator().free_pages(base_address, page_count);
+    dealloc_memory_buffer_with_known_physical_address(page_count, base_address, base_ptr.into())
 }
 
 pub struct Command<'sq> {
@@ -58,32 +46,34 @@ impl<'sq> Command<'sq> {
 
     // low-level accessors
 
-    pub fn set_command_id(self, id: u16) -> Command<'sq> {
+    pub fn set_command_id(mut self, id: u16) -> Command<'sq> {
         self.cmd[0].set_bit_range(31, 16, id);
         self
     }
 
-    pub fn set_opcode(self, op: u8) -> Command<'sq> {
+    pub fn set_opcode(mut self, op: u8) -> Command<'sq> {
         self.cmd[0].set_bit_range(7, 0, op);
         self
     }
 
-    pub fn set_namespace_id(self, id: u32) -> Command<'sq> {
+    pub fn set_namespace_id(mut self, id: u32) -> Command<'sq> {
         self.cmd[1] = id;
         self
     }
 
-    pub fn set_metadata_ptr(self, ptr: u64) -> Command<'sq> {
+    pub fn set_metadata_ptr(mut self, ptr: u64) -> Command<'sq> {
         self.cmd[4] = ptr as u32;
         self.cmd[5] = (ptr >> 32) as u32;
         self
     }
 
-    pub fn set_data_ptr(self) -> Command<'sq> {
-        todo!()
+    pub fn set_data_ptr_single(mut self, ptr: PhysicalAddress) -> Command<'sq> {
+        self.cmd[6] = ptr.0 as u32;
+        self.cmd[7] = (ptr.0 >> 32) as u32;
+        self
     }
 
-    pub fn set_dword(self, idx: usize, data: u32) -> Command<'sq> {
+    pub fn set_dword(mut self, idx: usize, data: u32) -> Command<'sq> {
         self.cmd[idx] = data;
         self
     }
@@ -195,12 +185,17 @@ impl Clone for CompletionStatus {
 #[repr(C)]
 #[derive(Clone, Debug)]
 pub struct Completion {
+    /// command specfic field
     cmd: u32,
+    /// reserved field
     res: u32,
-    sqid: QueueId,
+    /// new head pointer for submission queue `sqid`
     head: u16,
-    status: CompletionStatus,
+    // ID of the submission queue that submitted the command
+    sqid: QueueId,
+    /// command identifier specified by host
     id: u16,
+    status: CompletionStatus,
 }
 
 pub struct CompletionQueue {
@@ -247,6 +242,19 @@ impl CompletionQueue {
 
     pub fn pop(&mut self) -> Option<Completion> {
         let cmp = unsafe {
+            let sl = (self
+                .base_ptr
+                .offset((self.head as usize * COMPLETION_ENTRY_SIZE) as isize)
+                as *mut [u32; 4])
+                .read_volatile();
+            log::trace!(
+                "cmp raw:\n0: {:8x}\n1: {:8x}\n2: {:8x}\n3: {:8x}",
+                sl[0],
+                sl[1],
+                sl[2],
+                sl[3]
+            );
+
             let ptr = self
                 .base_ptr
                 .offset((self.head as usize * COMPLETION_ENTRY_SIZE) as isize)
@@ -254,6 +262,7 @@ impl CompletionQueue {
 
             ptr.as_ref().unwrap()
         };
+        log::trace!("read cmp: {cmp:?}");
         if cmp.status.phase_tag() == self.current_phase {
             self.head += 1;
             if self.head > self.entry_count {

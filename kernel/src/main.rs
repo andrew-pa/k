@@ -197,6 +197,7 @@ pub extern "C" fn kmain() {
 
     let current_el = current_el();
     log::info!("current EL = {current_el}");
+    log::info!("MAIR = 0x{:x}", mair());
 
     if current_el != 1 {
         todo!("switch from {current_el} to EL1 at boot");
@@ -228,7 +229,6 @@ pub extern "C" fn kmain() {
     );
     bus::pcie::init(&dt, &pcie_drivers);
 
-    log::info!("MAIR = 0x{:x}", mair());
     panic!("stop before starting thread scheduler");
 
     // create idle thread

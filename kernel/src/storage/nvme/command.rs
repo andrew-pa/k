@@ -1,5 +1,6 @@
 use super::queue::Command;
 
+#[repr(u8)]
 pub enum IdentifyStructure {
     Namespace = 0x00,
     Controller = 0x01,

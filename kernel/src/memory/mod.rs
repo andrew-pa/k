@@ -36,6 +36,11 @@ impl PhysicalAddress {
     pub unsafe fn to_virtual_canonical(self) -> VirtualAddress {
         VirtualAddress(self.0 + 0xffff_0000_0000_0000)
     }
+
+    pub fn is_page_aligned(&self) -> bool {
+        // self.0.trailing_zeros() == PAGE_SIZE.ilog2()
+        self.0 & !(PAGE_SIZE - 1) == 0
+    }
 }
 
 impl VirtualAddress {
@@ -121,3 +126,31 @@ mod virtual_address_allocator;
 pub use virtual_address_allocator::{
     init_virtual_address_allocator, virtual_address_allocator, VirtualAddressAllocator,
 };
+
+pub fn alloc_memory_buffer_with_known_physical_address(
+    page_count: usize,
+    page_table_options: &paging::PageTableEntryOptions,
+) -> Result<(PhysicalAddress, VirtualAddress), MemoryError> {
+    let base_address_phy = physical_memory_allocator().alloc_contig(page_count)?;
+    let base_address_vir = virtual_address_allocator().alloc(page_count)?;
+    paging::kernel_table()
+        .map_range(
+            base_address_phy,
+            base_address_vir,
+            page_count,
+            true, // TODO: right now this crashes, probably because the overwrite check is broken
+            page_table_options,
+        )
+        .expect("map NVMe queue memory should succeed because VA came from VA allocator");
+    Ok((base_address_phy, base_address_vir))
+}
+
+pub fn dealloc_memory_buffer_with_known_physical_address(
+    page_count: usize,
+    base_p_address: PhysicalAddress,
+    base_v_address: VirtualAddress,
+) {
+    paging::kernel_table().unmap_range(base_v_address, page_count);
+    virtual_address_allocator().free(base_v_address, page_count);
+    physical_memory_allocator().free_pages(base_p_address, page_count);
+}
