@@ -127,6 +127,11 @@ pub use virtual_address_allocator::{
     init_virtual_address_allocator, virtual_address_allocator, VirtualAddressAllocator,
 };
 
+mod physical_buffer;
+pub use physical_buffer::PhysicalBuffer;
+
+// TODO: replace this with a PhysicalBuffer type that owns the buffer and deallocs on drop
+// TODO: could also have a PhysicalBox<T> type for typed physically accessible memory
 pub fn alloc_memory_buffer_with_known_physical_address(
     page_count: usize,
     page_table_options: &paging::PageTableEntryOptions,
