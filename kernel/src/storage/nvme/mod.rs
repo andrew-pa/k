@@ -1,9 +1,6 @@
 use crate::{
     bus::pcie,
-    memory::{
-        alloc_memory_buffer_with_known_physical_address, physical_memory_allocator,
-        PhysicalAddress, VirtualAddress, PAGE_SIZE,
-    },
+    memory::{PhysicalBuffer, VirtualAddress, PAGE_SIZE},
 };
 use alloc::boxed::Box;
 use bitfield::{bitfield, Bit};
@@ -190,8 +187,7 @@ impl PcieDriver {
         // 7. send Identify commands
         // the identify structure returns a 4KiB structure which is fortunatly only a single
         // page
-        let (id_res_address_phy, id_res_address_vir) =
-            alloc_memory_buffer_with_known_physical_address(1, &Default::default())?;
+        let id_res_buf = PhysicalBuffer::alloc(1, &Default::default())?;
 
         log::trace!("sending identify command to controller");
         admin_sq
@@ -199,15 +195,13 @@ impl PcieDriver {
             .expect("queue just created, can not be full")
             .set_command_id(0xabcd)
             .identify(0, command::IdentifyStructure::Controller)
-            .set_data_ptr_single(id_res_address_phy)
+            .set_data_ptr_single(id_res_buf.physical_address())
             .submit();
 
         log::trace!("waiting for identify command completion");
-        // TODO: tracing in qemu suggests the completion is actually enqueued, but apparently this
-        // doesn't work. Maybe we need to ack the interrupt?
         let c = admin_cq.busy_wait_for_completion();
         log::debug!("ID ctrl completion: {c:?}");
-        let id_res: *mut u16 = id_res_address_vir.as_ptr();
+        let id_res: *mut u16 = id_res_buf.virtual_address().as_ptr();
         unsafe {
             log::info!(
                 "nvme controller PCIe vendor id = {:x}",
@@ -222,6 +216,7 @@ impl PcieDriver {
         // - send Identify command and parse results
         // - set up interrupts??
         // - create IO queues
+        // could implement async/await in the kernel (has been done: https://os.phil-opp.com/async-await/ so it is possible)
 
         log::info!("NVMe device at {pcie_addr} initialized!");
 

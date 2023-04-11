@@ -1,34 +1,10 @@
 use alloc::sync::Arc;
-use bitfield::{BitRange, BitRangeMut};
+use bitfield::BitRangeMut;
 use hashbrown::HashMap;
 use spin::Mutex;
 
 use super::*;
-use crate::memory::{
-    alloc_memory_buffer_with_known_physical_address,
-    dealloc_memory_buffer_with_known_physical_address, paging::PageTableEntryOptions, MemoryError,
-    PhysicalAddress,
-};
-
-fn alloc_queue_memory(
-    entry_count: u16,
-    size: usize,
-) -> Result<(PhysicalAddress, VirtualAddress), MemoryError> {
-    let page_count = (entry_count as usize * size).div_ceil(PAGE_SIZE);
-    // make sure we know the physical address and also that the pages are allocated
-    // continuously in physical memory so we can not bother with queue PRP lists
-    alloc_memory_buffer_with_known_physical_address(page_count, &PageTableEntryOptions::default())
-}
-
-fn dealloc_queue_memory(
-    entry_count: u16,
-    size: usize,
-    base_address: PhysicalAddress,
-    base_ptr: *mut u8,
-) {
-    let page_count = (entry_count as usize * size).div_ceil(PAGE_SIZE);
-    dealloc_memory_buffer_with_known_physical_address(page_count, base_address, base_ptr.into())
-}
+use crate::memory::{paging::PageTableEntryOptions, MemoryError, PhysicalAddress, PhysicalBuffer};
 
 pub struct Command<'sq> {
     parent: &'sq mut SubmissionQueue,
@@ -83,9 +59,8 @@ pub type QueueId = u16;
 
 pub struct SubmissionQueue {
     id: QueueId,
-    base_address: PhysicalAddress,
+    queue_memory: PhysicalBuffer,
     entry_count: u16,
-    base_ptr: *mut u8,
     tail: u16,
     tail_doorbell: *mut u16,
     head: Arc<Mutex<u16>>,
@@ -105,13 +80,11 @@ impl SubmissionQueue {
         associated_completion_queue
             .assoc_submit_queue_heads
             .insert(id, head.clone());
-        let (base_address_phy, base_address_vir) =
-            alloc_queue_memory(entry_count, SUBMISSION_ENTRY_SIZE)?;
+        let page_count = (entry_count as usize * SUBMISSION_ENTRY_SIZE).div_ceil(PAGE_SIZE);
         Ok(SubmissionQueue {
             id,
-            base_address: base_address_phy,
+            queue_memory: PhysicalBuffer::alloc(page_count, &PageTableEntryOptions::default())?,
             entry_count,
-            base_ptr: base_address_vir.as_ptr(),
             tail: 0,
             tail_doorbell: tail_doorbell.as_ptr(),
             head,
@@ -123,7 +96,7 @@ impl SubmissionQueue {
     }
 
     pub fn address(&self) -> PhysicalAddress {
-        self.base_address
+        self.queue_memory.physical_address()
     }
 
     pub fn full(&self) -> bool {
@@ -137,9 +110,10 @@ impl SubmissionQueue {
         } else {
             let cmd = unsafe {
                 core::slice::from_raw_parts_mut(
-                    self.base_ptr
+                    self.queue_memory
+                        .virtual_address()
                         .offset(((self.tail as usize) * SUBMISSION_ENTRY_SIZE) as isize)
-                        as *mut u32,
+                        .as_ptr::<u32>(),
                     16,
                 )
             };
@@ -150,17 +124,6 @@ impl SubmissionQueue {
                 parent: self,
             })
         }
-    }
-}
-
-impl Drop for SubmissionQueue {
-    fn drop(&mut self) {
-        dealloc_queue_memory(
-            self.entry_count,
-            SUBMISSION_ENTRY_SIZE,
-            self.base_address,
-            self.base_ptr,
-        );
     }
 }
 
@@ -200,9 +163,8 @@ pub struct Completion {
 
 pub struct CompletionQueue {
     id: QueueId,
-    base_address: PhysicalAddress,
+    queue_memory: PhysicalBuffer,
     entry_count: u16,
-    base_ptr: *mut u8,
     head: u16,
     head_doorbell: *mut u16,
     current_phase: bool,
@@ -218,13 +180,11 @@ impl CompletionQueue {
     ) -> Result<CompletionQueue, MemoryError> {
         let head_doorbell =
             doorbell_base.offset((2 * (id as isize) + 1) * (4 << doorbell_stride as isize));
-        let (base_address_phy, base_address_vir) =
-            alloc_queue_memory(entry_count, COMPLETION_ENTRY_SIZE)?;
+        let page_count = (entry_count as usize * COMPLETION_ENTRY_SIZE).div_ceil(PAGE_SIZE);
         Ok(CompletionQueue {
             id,
-            base_address: base_address_phy,
+            queue_memory: PhysicalBuffer::alloc(page_count, &PageTableEntryOptions::default())?,
             entry_count,
-            base_ptr: base_address_vir.as_ptr(),
             head: 0,
             head_doorbell: head_doorbell.as_ptr(),
             current_phase: true,
@@ -237,16 +197,17 @@ impl CompletionQueue {
     }
 
     pub fn address(&self) -> PhysicalAddress {
-        self.base_address
+        self.queue_memory.physical_address()
     }
 
     pub fn pop(&mut self) -> Option<Completion> {
         let cmp = unsafe {
             let sl = (self
-                .base_ptr
+                .queue_memory
+                .virtual_address()
                 .offset((self.head as usize * COMPLETION_ENTRY_SIZE) as isize)
-                as *mut [u32; 4])
-                .read_volatile();
+                .as_ptr::<[u32; 4]>())
+            .read_volatile();
             log::trace!(
                 "cmp raw:\n0: {:8x}\n1: {:8x}\n2: {:8x}\n3: {:8x}",
                 sl[0],
@@ -256,9 +217,10 @@ impl CompletionQueue {
             );
 
             let ptr = self
-                .base_ptr
+                .queue_memory
+                .virtual_address()
                 .offset((self.head as usize * COMPLETION_ENTRY_SIZE) as isize)
-                as *mut Completion;
+                .as_ptr::<Completion>();
 
             ptr.as_ref().unwrap()
         };
@@ -292,15 +254,4 @@ impl CompletionQueue {
     }
 
     // TODO: could easily implement peek()
-}
-
-impl Drop for CompletionQueue {
-    fn drop(&mut self) {
-        dealloc_queue_memory(
-            self.entry_count,
-            COMPLETION_ENTRY_SIZE,
-            self.base_address,
-            self.base_ptr,
-        );
-    }
 }

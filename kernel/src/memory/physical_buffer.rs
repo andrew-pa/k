@@ -3,6 +3,8 @@ use super::{
     VirtualAddress, PAGE_SIZE,
 };
 
+// TODO: could also have a PhysicalBox<T> type for typed physically accessible memory
+
 /// PhysicalBuffer is an owned, contiguous region of memory with a known physical address that is
 /// also mapped into the kernel's virtual address space
 pub struct PhysicalBuffer {
