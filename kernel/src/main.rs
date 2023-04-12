@@ -5,8 +5,6 @@
 #![feature(lang_items)]
 #![feature(is_some_and)]
 #![feature(allocator_api)]
-#![feature(default_alloc_error_handler)]
-#![feature(cstr_from_bytes_until_nul)]
 #![feature(once_cell)]
 #![feature(linked_list_cursors)]
 
@@ -17,6 +15,7 @@ mod dtb;
 mod exception;
 mod memory;
 mod process;
+mod tasks;
 
 mod bus;
 mod storage;
@@ -156,9 +155,14 @@ fn create_test_threads() {
 }
 
 #[inline]
+pub fn wait_for_interrupt() {
+    unsafe { core::arch::asm!("wfi", options(nomem, nostack)) }
+}
+
+#[inline]
 pub fn halt() -> ! {
     loop {
-        unsafe { core::arch::asm!("wfi", options(nomem, nostack)) }
+        wait_for_interrupt();
     }
 }
 
@@ -216,6 +220,7 @@ pub extern "C" fn kmain() {
 
         memory::init_virtual_address_allocator();
         exception::init_interrupts(&dt);
+        tasks::init_executor();
         process::scheduler::init_scheduler(process::IDLE_THREAD);
     }
 
@@ -229,7 +234,7 @@ pub extern "C" fn kmain() {
     );
     bus::pcie::init(&dt, &pcie_drivers);
 
-    panic!("stop before starting thread scheduler");
+    // panic!("stop before starting thread scheduler");
 
     // create idle thread
     process::threads().insert(
@@ -245,7 +250,7 @@ pub extern "C" fn kmain() {
         },
     );
 
-    create_test_threads();
+    // create_test_threads();
 
     exception::system_call_handlers().insert(0xabcd, |_, _| {
         log::trace!("test system call {}", fib(31));
@@ -272,7 +277,7 @@ pub extern "C" fn kmain() {
     exception::interrupt_handlers().insert(timer_irq, |id, regs| {
         log::trace!("{id} timer interrupt! {}", timer::counter());
         process::scheduler::run_scheduler(regs);
-        timer::write_timer_value(timer::frequency() >> 5);
+        timer::write_timer_value(timer::frequency() >> 4);
     });
 
     {
@@ -297,8 +302,17 @@ pub extern "C" fn kmain() {
         msi_reg.write_volatile(msi.data_value as u32);
     }
 
-    log::info!("waiting for interrupts...");
-    halt();
+    tasks::spawn(async {
+        log::info!("task!");
+        for i in 0..100 {
+            tasks::spawn(async move {
+                log::info!("nested task {i}!");
+            })
+        }
+    });
+
+    log::info!("running task executor...");
+    tasks::run_executor()
 }
 
 #[panic_handler]

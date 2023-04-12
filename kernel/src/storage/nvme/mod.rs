@@ -212,10 +212,12 @@ impl PcieDriver {
         // >>>>>>>>>>>>>>>>>>>>>>>>>>>> LEFT OFF HERE <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
         // step 7
         // TODO:
-        // - implement command generation code
-        // - send Identify command and parse results
-        // - set up interrupts??
+        // + implement command generation code
+        // ~ send Identify command and parse results (is there anything useful in here??)
+        // - set up interrupts
         // - create IO queues
+        // - find somewhere to keep block devices & define block device interface
+        // - impl block device interface for NVMe
         // could implement async/await in the kernel (has been done: https://os.phil-opp.com/async-await/ so it is possible)
 
         log::info!("NVMe device at {pcie_addr} initialized!");

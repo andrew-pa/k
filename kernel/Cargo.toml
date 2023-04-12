@@ -15,4 +15,5 @@ bitfield = "0.14"
 derive_more = "0.99"
 spin = "0.9"
 lock_api = "0.4"
+crossbeam = { version = "0.8", features = ["alloc"], default-features = false }
 chashmap = { path = "../chashmap" }

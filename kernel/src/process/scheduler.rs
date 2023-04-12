@@ -91,6 +91,7 @@ pub fn run_scheduler(current_regs: *mut Registers) {
         let thread = threads()
             .get_mut(&current)
             .expect("scheduler has valid thread IDs");
+        // log::trace!("resuming thread {current} @ {}", thread.pc);
 
         unsafe {
             if let Some(proc) = thread.parent.and_then(|id| processes().get(&id)) {
