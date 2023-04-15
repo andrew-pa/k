@@ -74,6 +74,7 @@ pub fn run_scheduler(current_regs: *mut Registers) {
         unsafe {
             if let Some(mut t) = threads().get_mut(&current) {
                 t.save(current_regs.as_ref().unwrap());
+                log::trace!("pausing thread {current} @ {}", t.pc);
                 if let Some(proc) = t.parent.and_then(|id| processes().get(&id)) {
                     Some(proc.page_tables.asid)
                 } else {
@@ -91,7 +92,7 @@ pub fn run_scheduler(current_regs: *mut Registers) {
         let thread = threads()
             .get_mut(&current)
             .expect("scheduler has valid thread IDs");
-        // log::trace!("resuming thread {current} @ {}", thread.pc);
+        log::trace!("resuming thread {current} @ {}", thread.pc);
 
         unsafe {
             if let Some(proc) = thread.parent.and_then(|id| processes().get(&id)) {

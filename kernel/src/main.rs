@@ -304,7 +304,7 @@ pub extern "C" fn kmain() {
 
     tasks::spawn(async {
         log::info!("task!");
-        for i in 0..100 {
+        for i in 0..3 {
             tasks::spawn(async move {
                 log::info!("nested task {i}!");
             })
