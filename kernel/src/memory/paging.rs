@@ -391,7 +391,7 @@ impl PageTable {
         'top: while page_index < page_count {
             let page_start = VirtualAddress(virt_start.0 + page_index * PAGE_SIZE);
             let (tag, i0, i1, i2, i3, po) = page_start.to_parts();
-            log::trace!("mapping page {page_start}=[{tag:x}:{i0:x}:{i1:x}:{i2:x}:{i3:x}:{po:x}], {} pages left", page_count - page_index);
+            // log::trace!("mapping page {page_start}=[{tag:x}:{i0:x}:{i1:x}:{i2:x}:{i3:x}:{po:x}], {} pages left", page_count - page_index);
             let mut table = self.level0_table;
             // TODO: surely there is a clean way to generate this slice with iterators?
             for (lvl, i, can_allocate_large_block, large_block_size) in [

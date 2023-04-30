@@ -281,9 +281,9 @@ pub extern "C" fn kmain() {
     });
 
     {
-        let kernel_map = memory::paging::kernel_table();
-        log::debug!("kernel table {:#?}", kernel_map);
-        memory::heap::log_heap_info(log::Level::Debug);
+        // let kernel_map = memory::paging::kernel_table();
+        // log::debug!("kernel table {:#?}", kernel_map);
+        // memory::heap::log_heap_info(log::Level::Debug);
     }
 
     // set timer to go off after we halt

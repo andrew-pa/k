@@ -86,6 +86,10 @@ impl VirtualAddress {
         // TODO: is saturating right or should we panic on overflow?
         VirtualAddress(self.0.saturating_add_signed(byte_offset))
     }
+
+    pub fn align_offset(&self, alignment: usize) -> usize {
+        self.as_ptr::<u8>().align_offset(alignment)
+    }
 }
 
 impl<T> From<*mut T> for VirtualAddress {
