@@ -1,10 +1,7 @@
 use core::{
     alloc::{GlobalAlloc, Layout},
-    cmp::Ordering,
-    marker::PhantomData,
     mem::size_of,
-    ptr::{null_mut, NonNull},
-    sync::atomic::AtomicUsize,
+    ptr::null_mut,
 };
 
 use spin::Mutex;
@@ -420,7 +417,7 @@ impl KernelGlobalAlloc {
 unsafe impl GlobalAlloc for KernelGlobalAlloc {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         log::trace!("alloc {layout:?}");
-        self.log_heap_info(log::Level::Trace);
+        // self.log_heap_info(log::Level::Trace);
         // find and remove a free block that is >= size
         if let Some(block) = self.find_suitable_free_block(&layout) {
             // make it allocated, returning any extra back to the free list
@@ -449,6 +446,11 @@ unsafe impl GlobalAlloc for KernelGlobalAlloc {
                 };
             }
             // return ptr to new allocated block
+            log::trace!(
+                "new allocated block @ {}, size = {}",
+                block.address,
+                actual_block_size
+            );
             block
                 .address
                 .as_ptr::<u8>()

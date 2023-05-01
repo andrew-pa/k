@@ -228,10 +228,12 @@ pub extern "C" fn kmain() {
 
     // initialize PCIe bus and devices
     let mut pcie_drivers = HashMap::new();
-    pcie_drivers.insert(
-        0x01080200,
-        storage::nvme::init_nvme_over_pcie as bus::pcie::DriverInitFn,
-    );
+    // TODO: TODO: TODO: somehow the NVMe driver is corrupting memory, and somehow it's NOT the
+    // identify command response!?
+    // pcie_drivers.insert(
+    //     0x01080200,
+    //     storage::nvme::init_nvme_over_pcie as bus::pcie::DriverInitFn,
+    // );
     bus::pcie::init(&dt, &pcie_drivers);
 
     // panic!("stop before starting thread scheduler");
