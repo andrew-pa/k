@@ -248,12 +248,14 @@ pub struct Type0ConfigHeader {
     p: *mut u8,
 }
 
+#[non_exhaustive]
 pub enum ConfigHeader {
     Type0(Type0ConfigHeader),
 }
 
 impl ConfigHeader {
     pub fn as_type0(&self) -> Option<&Type0ConfigHeader> {
+        #[allow(irrefutable_let_patterns)]
         if let Self::Type0(v) = self {
             Some(v)
         } else {

@@ -3,37 +3,18 @@
 #![recursion_limit = "256"]
 #![feature(int_roundings)]
 #![feature(lang_items)]
-#![feature(is_some_and)]
 #![feature(allocator_api)]
-#![feature(once_cell)]
 #![feature(linked_list_cursors)]
+#![feature(custom_test_frameworks)]
+#![test_runner(kernel::test_runner)]
+#![allow(unused)]
 
 extern crate alloc;
 
-mod dtb;
-
-mod exception;
-mod memory;
-mod process;
-mod tasks;
-
-mod bus;
-mod storage;
-mod timer;
-mod uart;
-
 use core::{arch::global_asm, panic::PanicInfo};
 
-use alloc::boxed::Box;
 use hashbrown::HashMap;
 use smallvec::SmallVec;
-
-pub type CHashMapG<K, V> =
-    chashmap::CHashMap<K, V, hashbrown::hash_map::DefaultHashBuilder, spin::RwLock<()>>;
-pub type CHashMapGReadGuard<'a, K, V> =
-    chashmap::ReadGuard<'a, K, V, hashbrown::hash_map::DefaultHashBuilder, spin::RwLock<()>>;
-pub type CHashMapGWriteGuard<'a, K, V> =
-    chashmap::WriteGuard<'a, K, V, hashbrown::hash_map::DefaultHashBuilder, spin::RwLock<()>>;
 
 global_asm!(include_str!("start.S"));
 
@@ -154,39 +135,7 @@ fn create_test_threads() {
     process::scheduler::scheduler().add_thread(0xb);
 }
 
-#[inline]
-pub fn wait_for_interrupt() {
-    unsafe { core::arch::asm!("wfi", options(nomem, nostack)) }
-}
-
-#[inline]
-pub fn wait_for_interrupts() -> ! {
-    loop {
-        wait_for_interrupt();
-    }
-}
-
-pub fn current_el() -> usize {
-    let mut current_el: usize;
-    unsafe {
-        core::arch::asm!(
-            "mrs {val}, CurrentEL",
-            val = out(reg) current_el
-        );
-    }
-    current_el >> 2
-}
-
-pub fn mair() -> usize {
-    let mut x: usize;
-    unsafe {
-        core::arch::asm!(
-            "mrs {val}, MAIR_EL1",
-            val = out(reg) x
-        );
-    }
-    x >> 2
-}
+use kernel::*;
 
 #[no_mangle]
 pub extern "C" fn kmain() {
@@ -228,8 +177,6 @@ pub extern "C" fn kmain() {
 
     // initialize PCIe bus and devices
     let mut pcie_drivers = HashMap::new();
-    // TODO: TODO: TODO: somehow the NVMe driver is corrupting memory, and somehow it's NOT the
-    // identify command response!?
     pcie_drivers.insert(
         0x01080200,
         storage::nvme::init_nvme_over_pcie as bus::pcie::DriverInitFn,
@@ -315,22 +262,6 @@ pub extern "C" fn kmain() {
 
     log::info!("running task executor...");
     tasks::run_executor()
-}
-
-#[panic_handler]
-fn panic_handler(info: &PanicInfo) -> ! {
-    use core::fmt::Write;
-    let mut uart = uart::DebugUart {
-        base: 0xffff_0000_0900_0000 as *mut u8,
-    };
-    let _ = uart.write_fmt(format_args!("\npanic! {info}\n"));
-    // prevent anything from getting scheduled after a kernel panic
-    exception::write_interrupt_mask(exception::InterruptMask(1));
-    timer::set_enabled(false);
-    timer::set_interrupts_enabled(false);
-    loop {
-        wait_for_interrupt();
-    }
 }
 
 /* TODO:
