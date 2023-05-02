@@ -351,7 +351,6 @@ impl KernelGlobalAlloc {
                 // insert the block here to maintain sorted order
                 // we know that no merges will be possible past this point
                 BlockAdjacency::NotAdjacent => {
-                    log::trace!("NA {} < {}", new_block.address, block.address);
                     if new_block.address < block.address {
                         break;
                     }
@@ -360,7 +359,6 @@ impl KernelGlobalAlloc {
             cursor.move_next();
         }
         // insert the new block as it was unmergable (possibly at the end)
-        log::trace!("GA {}", new_block.address);
         cursor.insert_before_current(new_block);
     }
 
@@ -417,7 +415,7 @@ impl KernelGlobalAlloc {
 unsafe impl GlobalAlloc for KernelGlobalAlloc {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         log::trace!("alloc {layout:?}");
-        // self.log_heap_info(log::Level::Trace);
+        self.log_heap_info(log::Level::Trace);
         // find and remove a free block that is >= size
         if let Some(block) = self.find_suitable_free_block(&layout) {
             // make it allocated, returning any extra back to the free list

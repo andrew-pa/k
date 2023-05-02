@@ -5,6 +5,8 @@ use crate::{
 use alloc::boxed::Box;
 use bitfield::{bitfield, Bit};
 
+use self::queue::{CompletionQueue, SubmissionQueue};
+
 mod command;
 mod queue;
 
@@ -55,7 +57,10 @@ impl Clone for AdminQueueAttributes {
     }
 }
 
-pub struct PcieDriver {}
+pub struct PcieDriver {
+    admin_cq: CompletionQueue,
+    admin_sq: SubmissionQueue,
+}
 
 impl pcie::DeviceDriver for PcieDriver {}
 
@@ -107,14 +112,15 @@ impl PcieDriver {
         // 3. configure admin queues
         let doorbell_base = base_address.offset(0x1000);
 
-        let mut admin_cq = queue::CompletionQueue::new(
+        // make each queue exactly 1 page worth of entries
+        let mut admin_cq = CompletionQueue::new(
             0,
             (PAGE_SIZE / COMPLETION_ENTRY_SIZE) as u16,
             doorbell_base,
             cap.doorbell_stride(),
         )?;
 
-        let mut admin_sq = queue::SubmissionQueue::new(
+        let mut admin_sq = SubmissionQueue::new(
             0,
             (PAGE_SIZE / SUBMISSION_ENTRY_SIZE) as u16,
             doorbell_base,
@@ -135,7 +141,6 @@ impl PcieDriver {
         }
 
         let mut admin_queue_attrbs = AdminQueueAttributes(0);
-        // make each queue exactly 1 page worth of entries
         admin_queue_attrbs.set_submission_queue_size(admin_cq.size());
         admin_queue_attrbs.set_completion_queue_size(admin_sq.size());
         unsafe {
@@ -222,7 +227,7 @@ impl PcieDriver {
 
         log::info!("NVMe device at {pcie_addr} initialized!");
 
-        Ok(PcieDriver {})
+        Ok(PcieDriver { admin_cq, admin_sq })
     }
 }
 

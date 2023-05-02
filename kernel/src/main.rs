@@ -160,7 +160,7 @@ pub fn wait_for_interrupt() {
 }
 
 #[inline]
-pub fn halt() -> ! {
+pub fn wait_for_interrupts() -> ! {
     loop {
         wait_for_interrupt();
     }
@@ -230,10 +230,10 @@ pub extern "C" fn kmain() {
     let mut pcie_drivers = HashMap::new();
     // TODO: TODO: TODO: somehow the NVMe driver is corrupting memory, and somehow it's NOT the
     // identify command response!?
-    // pcie_drivers.insert(
-    //     0x01080200,
-    //     storage::nvme::init_nvme_over_pcie as bus::pcie::DriverInitFn,
-    // );
+    pcie_drivers.insert(
+        0x01080200,
+        storage::nvme::init_nvme_over_pcie as bus::pcie::DriverInitFn,
+    );
     bus::pcie::init(&dt, &pcie_drivers);
 
     // panic!("stop before starting thread scheduler");
@@ -324,7 +324,13 @@ fn panic_handler(info: &PanicInfo) -> ! {
         base: 0xffff_0000_0900_0000 as *mut u8,
     };
     let _ = uart.write_fmt(format_args!("\npanic! {info}\n"));
-    halt();
+    // prevent anything from getting scheduled after a kernel panic
+    exception::write_interrupt_mask(exception::InterruptMask(1));
+    timer::set_enabled(false);
+    timer::set_interrupts_enabled(false);
+    loop {
+        wait_for_interrupt();
+    }
 }
 
 /* TODO:

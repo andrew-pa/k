@@ -127,6 +127,16 @@ impl SubmissionQueue {
     }
 }
 
+// TODO: WARN: if these queues get dropped while they are still active, the NVMe driver may try to
+// write to them, which will corrupt memory if reallocated elsewhere.
+// Ideally an IO queue would automatically send a destroy command on the admin queue when dropped
+// but, what about the admin queues themselves?
+impl Drop for SubmissionQueue {
+    fn drop(&mut self) {
+        todo!("dropping an NVMe queue w/o informing the driver is unsafe")
+    }
+}
+
 bitfield! {
     pub struct CompletionStatus(u16);
     impl Debug;
@@ -254,4 +264,11 @@ impl CompletionQueue {
     }
 
     // TODO: could easily implement peek()
+}
+
+// TODO: WARN: see drop impl for SubmissionQueue
+impl Drop for CompletionQueue {
+    fn drop(&mut self) {
+        todo!("dropping NVMe queue is unsafe w/o informing the driver")
+    }
 }
