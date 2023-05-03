@@ -110,8 +110,10 @@ impl Executor {
 // TODO: we will eventually need one of these per-CPU
 static mut EXEC: OnceCell<Executor> = OnceCell::new();
 
-pub unsafe fn init_executor() {
-    EXEC.set(Executor::new()).ok().expect("init executor");
+pub fn init_executor() {
+    unsafe {
+        EXEC.set(Executor::new()).ok().expect("init executor");
+    }
 }
 
 // TODO: also will eventually need to be per-CPU?

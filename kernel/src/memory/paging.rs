@@ -623,10 +623,12 @@ pub unsafe fn flush_tlb_for_asid(asid: u16) {
 
 static mut KERNEL_TABLE: OnceCell<Mutex<PageTable>> = OnceCell::new();
 
-pub unsafe fn init_kernel_page_table() {
-    KERNEL_TABLE
-        .set(Mutex::new(PageTable::kernel_table()))
-        .expect("init kernel page table once");
+pub fn init_kernel_page_table() {
+    unsafe {
+        KERNEL_TABLE
+            .set(Mutex::new(PageTable::kernel_table()))
+            .expect("init kernel page table once");
+    }
 }
 
 /// Kernel memory map:

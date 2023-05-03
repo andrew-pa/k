@@ -61,21 +61,23 @@ static mut IC: OnceCell<Mutex<Box<dyn InterruptController>>> = OnceCell::new();
 static mut INTERRUPT_HANDLERS: OnceCell<CHashMapG<InterruptId, InterruptHandler>> = OnceCell::new();
 static mut SYSTEM_CALL_HANDLERS: OnceCell<CHashMapG<u16, SyscallHandler>> = OnceCell::new();
 
-pub unsafe fn init_interrupts(device_tree: &crate::dtb::DeviceTree) {
+pub fn init_interrupts(device_tree: &crate::dtb::DeviceTree) {
     // for now this is our only implementation
     let gic = gic::GenericInterruptController::in_device_tree(device_tree).expect("find/init GIC");
 
-    IC.set(Mutex::new(Box::new(gic)))
-        .ok()
-        .expect("init interrupt controller once");
-    INTERRUPT_HANDLERS
-        .set(Default::default())
-        .ok()
-        .expect("init interrupts once");
-    SYSTEM_CALL_HANDLERS
-        .set(Default::default())
-        .ok()
-        .expect("init syscall table once");
+    unsafe {
+        IC.set(Mutex::new(Box::new(gic)))
+            .ok()
+            .expect("init interrupt controller once");
+        INTERRUPT_HANDLERS
+            .set(Default::default())
+            .ok()
+            .expect("init interrupts once");
+        SYSTEM_CALL_HANDLERS
+            .set(Default::default())
+            .ok()
+            .expect("init syscall table once");
+    }
 }
 
 pub fn interrupt_controller() -> MutexGuard<'static, Box<dyn InterruptController>> {

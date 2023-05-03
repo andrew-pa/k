@@ -29,43 +29,41 @@ pub extern "C" fn kmain() {
     // initialize virtual memory and interrupts
     unsafe {
         exception::install_exception_vector_table();
-        memory::init_physical_memory_allocator(&dt);
-        memory::paging::init_kernel_page_table();
-
-        /* --- Kernel heap is now available --- */
-
-        memory::init_virtual_address_allocator();
-        exception::init_interrupts(&dt);
-        tasks::init_executor();
-        process::scheduler::init_scheduler(process::IDLE_THREAD);
     }
+
+    memory::init_physical_memory_allocator(&dt);
+    memory::paging::init_kernel_page_table();
+
+    /* --- Kernel heap is now available --- */
+
+    memory::init_virtual_address_allocator();
+    exception::init_interrupts(&dt);
+    tasks::init_executor();
+    process::scheduler::init_scheduler(process::IDLE_THREAD);
 
     log::info!("kernel systems initialized");
 
     // initialize PCIe bus and devices
     let mut pcie_drivers = HashMap::new();
     pcie_drivers.insert(
-        0x01080200,
+        0x01080200, // MassStorage:NVM:NVMe I/O controller
         storage::nvme::init_nvme_over_pcie as bus::pcie::DriverInitFn,
     );
     bus::pcie::init(&dt, &pcie_drivers);
 
     // create idle thread
-    process::threads().insert(
-        process::IDLE_THREAD,
-        process::Thread::idle_thread()
-    );
+    process::threads().insert(process::IDLE_THREAD, process::Thread::idle_thread());
 
     // initialize system timer and interrupt
     init::configure_time_slicing(&dt);
-
-    // enable all interrupts in DAIF process state mask
-    exception::write_interrupt_mask(exception::InterruptMask::all_enabled());
 
     #[cfg(test)]
     tasks::spawn(async {
         test_main();
     });
+
+    // enable all interrupts in DAIF process state mask
+    exception::write_interrupt_mask(exception::InterruptMask::all_enabled());
 
     log::info!("running task executor...");
     tasks::run_executor()

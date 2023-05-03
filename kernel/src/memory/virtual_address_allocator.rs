@@ -74,15 +74,17 @@ impl VirtualAddressAllocator {
 
 static mut VAA: OnceCell<Mutex<VirtualAddressAllocator>> = OnceCell::new();
 
-pub unsafe fn init_virtual_address_allocator() {
-    VAA.set(Mutex::new(VirtualAddressAllocator {
-        free_list: LinkedList::from([FreeBlock {
-            address: START_ADDRESS,
-            size: TOTAL_SIZE,
-        }]),
-    }))
-    .ok()
-    .expect("init virtual address allocator once");
+pub fn init_virtual_address_allocator() {
+    unsafe {
+        VAA.set(Mutex::new(VirtualAddressAllocator {
+            free_list: LinkedList::from([FreeBlock {
+                address: START_ADDRESS,
+                size: TOTAL_SIZE,
+            }]),
+        }))
+        .ok()
+        .expect("init virtual address allocator once");
+    }
 }
 
 pub fn virtual_address_allocator() -> spin::MutexGuard<'static, VirtualAddressAllocator> {

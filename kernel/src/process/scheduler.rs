@@ -48,10 +48,12 @@ impl ThreadScheduler {
 // TODO: we will eventually need one of these per-CPU
 static mut SCHD: OnceCell<Mutex<ThreadScheduler>> = OnceCell::new();
 
-pub unsafe fn init_scheduler(first_thread: ThreadId) {
-    SCHD.set(Mutex::new(ThreadScheduler::new(first_thread)))
-        .ok()
-        .expect("init scheduler");
+pub fn init_scheduler(first_thread: ThreadId) {
+    unsafe {
+        SCHD.set(Mutex::new(ThreadScheduler::new(first_thread)))
+            .ok()
+            .expect("init scheduler");
+    }
 }
 
 // TODO: also will eventually need to be per-CPU?
