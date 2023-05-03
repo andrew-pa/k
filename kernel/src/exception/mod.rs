@@ -90,6 +90,7 @@ pub fn system_call_handlers() -> &'static CHashMapG<u16, SyscallHandler> {
     unsafe { SYSTEM_CALL_HANDLERS.get().expect("init syscall table") }
 }
 
+/// disabled => true, enabled => false
 bitfield! {
     pub struct InterruptMask(u64);
     u8;
@@ -97,6 +98,21 @@ bitfield! {
     pub sys_error, set_sys_error: 8;
     pub irq, set_irq: 7;
     pub frq, set_frq: 6;
+}
+
+impl InterruptMask {
+    pub fn all_enabled() -> InterruptMask {
+        InterruptMask(0)
+    }
+
+    pub fn all_disabled() -> InterruptMask {
+        let mut s = InterruptMask(0);
+        s.set_debug(true);
+        s.set_frq(true);
+        s.set_irq(true);
+        s.set_sys_error(true);
+        s
+    }
 }
 
 pub fn read_interrupt_mask() -> InterruptMask {

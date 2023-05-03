@@ -53,6 +53,18 @@ impl Thread {
         write_saved_program_status(&self.program_status);
         *regs = self.register_state;
     }
+
+    pub fn idle_thread() -> Self {
+        Thread {
+            id: IDLE_THREAD,
+            parent: None,
+            register_state: Registers::default(),
+            program_status: SavedProgramStatus::initial_for_el1(),
+            pc: VirtualAddress(0),
+            sp: VirtualAddress(0),
+            priority: ThreadPriority::Low,
+        }
+    }
 }
 
 pub const IDLE_THREAD: ThreadId = 0;

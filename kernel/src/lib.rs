@@ -45,9 +45,7 @@ pub fn wait_for_interrupt() {
 
 /// disable interrupts and loop forever
 pub fn halt() -> ! {
-    exception::write_interrupt_mask(exception::InterruptMask(1));
-    timer::set_enabled(false);
-    timer::set_interrupts_enabled(false);
+    exception::write_interrupt_mask(exception::InterruptMask::all_disabled());
     loop {
         wait_for_interrupt();
     }
@@ -73,14 +71,6 @@ pub fn mair() -> usize {
         );
     }
     x >> 2
-}
-
-fn print_panic(info: &core::panic::PanicInfo) {
-    use core::fmt::Write;
-    let mut uart = uart::DebugUart {
-        base: 0xffff_0000_0900_0000 as *mut u8,
-    };
-    let _ = uart.write_fmt(format_args!("\npanic! {info}\n"));
 }
 
 #[panic_handler]

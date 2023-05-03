@@ -14,123 +14,6 @@ use core::{arch::global_asm, panic::PanicInfo};
 use hashbrown::HashMap;
 use smallvec::SmallVec;
 
-fn fib(n: usize) -> usize {
-    if n < 2 {
-        1
-    } else {
-        fib(n - 1) + fib(n - 2)
-    }
-}
-
-pub unsafe fn test_thread_code_a() -> ! {
-    loop {
-        // log::info!("hello from thread A! {}", fib(30));
-        // it is impossible to do anything interesting here without mapping the entire kernel
-        core::arch::asm!(
-            "mov x0, #0x0000fff000000000",
-            "mov x1, #65",
-            "str x1, [x0]",
-            "svc #0xabcd"
-        )
-    }
-}
-
-pub fn test_thread_code_b() -> ! {
-    loop {
-        log::info!("hello from thread B! {}", fib(30));
-    }
-}
-
-fn create_test_threads() {
-    // create a way unsafe ad-hoc thread
-    let stack_a_start = {
-        memory::physical_memory_allocator()
-            .alloc_contig(1024)
-            .expect("allocate stack")
-    };
-    let mut process_page_table =
-        memory::paging::PageTable::empty(false, 0x1a).expect("new page table");
-    let code_kva = memory::VirtualAddress(test_thread_code_a as usize);
-    let (_, _, _, _, _, po) = code_kva.to_parts();
-    log::debug!("code at {code_kva} in kernel, {po:x} in process");
-    let pto = memory::paging::PageTableEntryOptions {
-        read_only: false,
-        el0_access: true,
-    };
-    process_page_table
-        .map_range(
-            unsafe { memory::VirtualAddress(code_kva.0 - po).to_physical_canonical() },
-            memory::VirtualAddress(0),
-            8,
-            true,
-            &pto,
-        )
-        .unwrap();
-    process_page_table
-        .map_range(
-            stack_a_start,
-            memory::VirtualAddress(0x0000_ffff_0000_0000),
-            1024,
-            true,
-            &pto,
-        )
-        .unwrap();
-    process_page_table
-        .map_range(
-            memory::PhysicalAddress(0x0900_0000),
-            memory::VirtualAddress(0x0000_fff0_0000_0000),
-            1,
-            true,
-            &pto,
-        )
-        .unwrap();
-    log::debug!("test process page table = {:#?}", process_page_table);
-    process::processes().insert(
-        0x1a,
-        process::Process {
-            id: 0x1a,
-            page_tables: process_page_table,
-            threads: SmallVec::from_elem(0xa, 1),
-        },
-    );
-    process::threads().insert(
-        0xa,
-        process::Thread {
-            id: 0xa,
-            parent: Some(0x1a),
-            register_state: exception::Registers::default(),
-            program_status: process::SavedProgramStatus::initial_for_el0(),
-            pc: memory::VirtualAddress(po),
-            sp: memory::VirtualAddress(0x0000_ffff_0000_0000 + 1024 * memory::PAGE_SIZE),
-            priority: process::ThreadPriority::Normal,
-        },
-    );
-
-    let stack_b_start = {
-        memory::physical_memory_allocator()
-            .alloc_contig(1024)
-            .expect("allocate stack")
-    };
-    process::threads().insert(
-        0xb,
-        process::Thread {
-            id: 0xb,
-            parent: None,
-            register_state: exception::Registers::default(),
-            program_status: process::SavedProgramStatus::initial_for_el1(),
-            pc: memory::VirtualAddress(test_thread_code_b as usize),
-            sp: unsafe {
-                memory::VirtualAddress(
-                    stack_b_start.to_virtual_canonical().0 + 1024 * memory::PAGE_SIZE,
-                )
-            },
-            priority: process::ThreadPriority::Normal,
-        },
-    );
-    process::scheduler::scheduler().add_thread(0xa);
-    process::scheduler::scheduler().add_thread(0xb);
-}
-
 use kernel::*;
 
 #[no_mangle]
@@ -142,7 +25,6 @@ pub extern "C" fn kmain() {
     init::init_logging(log::LevelFilter::Debug);
 
     let dt = unsafe { dtb::DeviceTree::at_address(0xffff_0000_4000_0000 as *mut u8) };
-    dt.log();
 
     // initialize virtual memory and interrupts
     unsafe {
@@ -168,82 +50,17 @@ pub extern "C" fn kmain() {
     );
     bus::pcie::init(&dt, &pcie_drivers);
 
-    // panic!("stop before starting thread scheduler");
-
     // create idle thread
     process::threads().insert(
         process::IDLE_THREAD,
-        process::Thread {
-            id: process::IDLE_THREAD,
-            parent: None,
-            register_state: exception::Registers::default(),
-            program_status: process::SavedProgramStatus::initial_for_el1(),
-            pc: memory::VirtualAddress(0),
-            sp: memory::VirtualAddress(0),
-            priority: process::ThreadPriority::Low,
-        },
+        process::Thread::idle_thread()
     );
 
-    // create_test_threads();
-
-    exception::system_call_handlers().insert(0xabcd, |_, _| {
-        log::trace!("test system call {}", fib(31));
-    });
-    log::debug!("{:?}", exception::system_call_handlers());
-
     // initialize system timer and interrupt
-    let props = timer::find_timer_properties(&dt);
-    log::debug!("timer properties = {props:?}");
-    let timer_irq = props.interrupt;
-
-    {
-        let ic = exception::interrupt_controller();
-        ic.set_target_cpu(timer_irq, 0x1);
-        ic.set_priority(timer_irq, 0);
-        ic.set_config(timer_irq, exception::InterruptConfig::Level);
-        ic.set_pending(timer_irq, false);
-        ic.set_enable(timer_irq, true);
-    }
-
-    timer::set_enabled(true);
-    timer::set_interrupts_enabled(true);
-
-    exception::interrupt_handlers().insert(timer_irq, |id, regs| {
-        log::trace!("{id} timer interrupt! {}", timer::counter());
-        process::scheduler::run_scheduler(regs);
-        timer::write_timer_value(timer::frequency() >> 4);
-    });
-
-    {
-        // let kernel_map = memory::paging::kernel_table();
-        // log::debug!("kernel table {:#?}", kernel_map);
-        // memory::heap::log_heap_info(log::Level::Debug);
-    }
-
-    // set timer to go off after we halt
-    timer::write_timer_value(timer::frequency() >> 4);
+    init::configure_time_slicing(&dt);
 
     // enable all interrupts in DAIF process state mask
-    exception::write_interrupt_mask(exception::InterruptMask(0));
-
-    let msi = exception::interrupt_controller()
-        .alloc_msi()
-        .expect("alloc MSI");
-    log::debug!("allocated test MSI {msi:?}");
-    unsafe {
-        let msi_reg: *mut u32 = msi.register_addr.to_virtual_canonical().as_ptr();
-        log::debug!("writing at {:x}", msi_reg as usize);
-        msi_reg.write_volatile(msi.data_value as u32);
-    }
-
-    tasks::spawn(async {
-        log::info!("task!");
-        for i in 0..3 {
-            tasks::spawn(async move {
-                log::info!("nested task {i}!");
-            })
-        }
-    });
+    exception::write_interrupt_mask(exception::InterruptMask::all_enabled());
 
     #[cfg(test)]
     tasks::spawn(async {
