@@ -7,16 +7,12 @@
 #![feature(linked_list_cursors)]
 #![feature(custom_test_frameworks)]
 #![test_runner(kernel::test_runner)]
+#![reexport_test_harness_main = "test_main"]
 #![allow(unused)]
 
-extern crate alloc;
-
 use core::{arch::global_asm, panic::PanicInfo};
-
 use hashbrown::HashMap;
 use smallvec::SmallVec;
-
-global_asm!(include_str!("start.S"));
 
 fn fib(n: usize) -> usize {
     if n < 2 {
@@ -143,18 +139,7 @@ pub extern "C" fn kmain() {
     unsafe {
         memory::zero_bss_section();
     }
-
-    log::set_logger(&uart::DebugUartLogger).expect("set logger");
-    log::set_max_level(log::LevelFilter::Trace);
-    log::info!("starting kernel!");
-
-    let current_el = current_el();
-    log::info!("current EL = {current_el}");
-    log::info!("MAIR = 0x{:x}", mair());
-
-    if current_el != 1 {
-        todo!("switch from {current_el} to EL1 at boot");
-    }
+    init::init_logging(log::LevelFilter::Debug);
 
     let dt = unsafe { dtb::DeviceTree::at_address(0xffff_0000_4000_0000 as *mut u8) };
     dt.log();
@@ -258,6 +243,11 @@ pub extern "C" fn kmain() {
                 log::info!("nested task {i}!");
             })
         }
+    });
+
+    #[cfg(test)]
+    tasks::spawn(async {
+        test_main();
     });
 
     log::info!("running task executor...");
