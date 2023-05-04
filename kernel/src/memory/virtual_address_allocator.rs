@@ -22,6 +22,15 @@ pub struct VirtualAddressAllocator {
 }
 
 impl VirtualAddressAllocator {
+    pub fn new(start_address: VirtualAddress, total_size: usize) -> VirtualAddressAllocator {
+        VirtualAddressAllocator {
+            free_list: LinkedList::from([FreeBlock {
+                address: start_address,
+                size: total_size,
+            }]),
+        }
+    }
+
     pub fn alloc(&mut self, page_count: usize) -> Result<VirtualAddress, MemoryError> {
         let mut cur = self.free_list.cursor_front_mut();
         while let Some(block) = cur.current() {
@@ -76,12 +85,10 @@ static mut VAA: OnceCell<Mutex<VirtualAddressAllocator>> = OnceCell::new();
 
 pub fn init_virtual_address_allocator() {
     unsafe {
-        VAA.set(Mutex::new(VirtualAddressAllocator {
-            free_list: LinkedList::from([FreeBlock {
-                address: START_ADDRESS,
-                size: TOTAL_SIZE,
-            }]),
-        }))
+        VAA.set(Mutex::new(VirtualAddressAllocator::new(
+            START_ADDRESS,
+            TOTAL_SIZE,
+        )))
         .ok()
         .expect("init virtual address allocator once");
     }

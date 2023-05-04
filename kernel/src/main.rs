@@ -24,7 +24,7 @@ pub extern "C" fn kmain() {
     }
     init::init_logging(log::LevelFilter::Debug);
 
-    let dt = unsafe { dtb::DeviceTree::at_address(0xffff_0000_4000_0000 as *mut u8) };
+    let dt = unsafe { dtb::DeviceTree::at_address(memory::VirtualAddress(0xffff_0000_4000_0000)) };
 
     // initialize virtual memory and interrupts
     unsafe {

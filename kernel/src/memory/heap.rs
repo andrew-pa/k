@@ -31,7 +31,9 @@ struct FreeBlock {
 }
 
 enum BlockAdjacency {
+    /// end of self is beginning of other
     Before,
+    /// beginning of self is end of other
     After,
     NotAdjacent,
 }
@@ -97,15 +99,8 @@ impl FreeList {
         c
     }
 
-    fn increase_size(&mut self, new_block: FreeBlock) {
-        log::trace!("increasing heap size {new_block:?}");
-        self.heap_size_in_bytes += new_block.size;
-        // insert at the end
-        FreeListCursor {
-            current: null_mut(),
-            parent: self,
-        }
-        .insert_before_current(new_block);
+    fn increase_size(&mut self, new_size: usize) {
+        self.heap_size_in_bytes += new_size;
     }
 }
 
@@ -334,7 +329,7 @@ impl KernelGlobalAlloc {
         let mut free_list = self.free_list.lock();
         let mut cursor = free_list.cursor();
         while let Some(block) = cursor.current() {
-            match block.check_adjacency(&new_block) {
+            match new_block.check_adjacency(&block) {
                 // merge block if it is adjacent
                 // TODO: it's possible that the resulting block is now adjacent
                 // with its neighbors
@@ -364,8 +359,9 @@ impl KernelGlobalAlloc {
 
     fn increase_heap_size(&self, layout: &Layout) {
         let mut free_list = self.free_list.lock();
-        let num_new_pages =
-            (free_list.heap_size_in_bytes + free_list.heap_size_in_bytes / 2).div_ceil(PAGE_SIZE);
+        let num_new_pages = (free_list.heap_size_in_bytes + free_list.heap_size_in_bytes / 2)
+            .max(layout.size())
+            .div_ceil(PAGE_SIZE);
         let pages = {
             let mut pma = super::physical_memory_allocator();
             pma.alloc_contig(num_new_pages)
@@ -383,7 +379,10 @@ impl KernelGlobalAlloc {
             )
             .expect("map kernel heap pages");
         }
-        free_list.increase_size(FreeBlock {
+        log::trace!("increasing heap size by {}b", num_new_pages * PAGE_SIZE);
+        free_list.increase_size(num_new_pages * PAGE_SIZE);
+        drop(free_list);
+        self.add_free_block(FreeBlock {
             address: old_heap_end,
             size: num_new_pages * PAGE_SIZE,
         });
@@ -463,6 +462,7 @@ unsafe impl GlobalAlloc for KernelGlobalAlloc {
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         log::trace!("dealloc 0x{:x} {layout:?}", ptr as usize);
+        self.log_heap_info(log::Level::Trace);
         if ptr.is_null() {
             log::warn!("attempted to free nullptr with layout {layout:?}");
             return;
@@ -489,7 +489,8 @@ unsafe impl GlobalAlloc for KernelGlobalAlloc {
         self.add_free_block(FreeBlock {
             address: VirtualAddress::from(header),
             size: block_size,
-        })
+        });
+        self.log_heap_info(log::Level::Trace);
     }
 }
 

@@ -2,6 +2,8 @@ use core::{ffi::CStr, fmt::Debug};
 
 use byteorder::{BigEndian, ByteOrder};
 
+use crate::memory::VirtualAddress;
+
 const EXPECTED_MAGIC: u32 = 0xd00d_feed;
 
 const FDT_BEGIN_NODE: u8 = 0x01;
@@ -106,7 +108,8 @@ pub struct StringList<'dt> {
 }
 
 impl DeviceTree {
-    pub unsafe fn at_address(addr: *mut u8) -> DeviceTree {
+    pub unsafe fn at_address(addr: VirtualAddress) -> DeviceTree {
+        let addr = addr.as_ptr();
         let header = BlobHeader {
             buf: core::slice::from_raw_parts(addr, 64),
         };
