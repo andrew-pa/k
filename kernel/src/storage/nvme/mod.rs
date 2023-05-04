@@ -118,6 +118,7 @@ impl PcieDriver {
             (PAGE_SIZE / COMPLETION_ENTRY_SIZE) as u16,
             doorbell_base,
             cap.doorbell_stride(),
+            None,
         )?;
 
         let mut admin_sq = SubmissionQueue::new(
@@ -126,6 +127,7 @@ impl PcieDriver {
             doorbell_base,
             cap.doorbell_stride(),
             &mut admin_cq,
+            None,
         )?;
 
         unsafe {

@@ -64,6 +64,7 @@ pub struct SubmissionQueue {
     tail: u16,
     tail_doorbell: *mut u16,
     head: Arc<Mutex<u16>>,
+    parent: Option<Arc<Mutex<SubmissionQueue>>>,
 }
 
 impl SubmissionQueue {
@@ -73,6 +74,7 @@ impl SubmissionQueue {
         doorbell_base: VirtualAddress,
         doorbell_stride: u8,
         associated_completion_queue: &mut CompletionQueue,
+        parent: Option<Arc<Mutex<SubmissionQueue>>>,
     ) -> Result<SubmissionQueue, MemoryError> {
         let tail_doorbell =
             doorbell_base.offset((2 * (id as isize)) * (4 << doorbell_stride as isize));
@@ -88,6 +90,7 @@ impl SubmissionQueue {
             tail: 0,
             tail_doorbell: tail_doorbell.as_ptr(),
             head,
+            parent,
         })
     }
 
@@ -133,7 +136,16 @@ impl SubmissionQueue {
 // but, what about the admin queues themselves?
 impl Drop for SubmissionQueue {
     fn drop(&mut self) {
-        todo!("dropping an NVMe queue w/o informing the driver is unsafe")
+        let mut parent = self
+            .parent
+            .as_ref()
+            .expect("dropping an NVMe queue w/o informing the driver is unsafe")
+            .lock();
+        parent
+            .begin()
+            .expect("admin queue has space")
+            .delete_io_submission_queue(self.id)
+            .submit();
     }
 }
 
@@ -179,6 +191,7 @@ pub struct CompletionQueue {
     head_doorbell: *mut u16,
     current_phase: bool,
     assoc_submit_queue_heads: HashMap<QueueId, Arc<Mutex<u16>>>,
+    parent: Option<Arc<Mutex<SubmissionQueue>>>,
 }
 
 impl CompletionQueue {
@@ -187,6 +200,7 @@ impl CompletionQueue {
         entry_count: u16,
         doorbell_base: VirtualAddress,
         doorbell_stride: u8,
+        parent: Option<Arc<Mutex<SubmissionQueue>>>,
     ) -> Result<CompletionQueue, MemoryError> {
         let head_doorbell =
             doorbell_base.offset((2 * (id as isize) + 1) * (4 << doorbell_stride as isize));
@@ -199,6 +213,7 @@ impl CompletionQueue {
             head_doorbell: head_doorbell.as_ptr(),
             current_phase: true,
             assoc_submit_queue_heads: HashMap::new(),
+            parent,
         })
     }
 
@@ -269,6 +284,17 @@ impl CompletionQueue {
 // TODO: WARN: see drop impl for SubmissionQueue
 impl Drop for CompletionQueue {
     fn drop(&mut self) {
-        todo!("dropping NVMe queue is unsafe w/o informing the driver")
+        // TODO: we need to make sure all associated submission queues are dropped before
+        // we drop the completion queue
+        let mut parent = self
+            .parent
+            .as_ref()
+            .expect("dropping an NVMe queue w/o informing the driver is unsafe")
+            .lock();
+        parent
+            .begin()
+            .expect("admin queue has space")
+            .delete_io_completion_queue(self.id)
+            .submit();
     }
 }
