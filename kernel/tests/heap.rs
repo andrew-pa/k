@@ -56,6 +56,5 @@ pub extern "C" fn kmain() {
     let dt = unsafe { dtb::DeviceTree::at_address(memory::VirtualAddress(0xffff_0000_4000_0000)) };
     memory::init_physical_memory_allocator(&dt);
     memory::paging::init_kernel_page_table();
-
     test_main();
 }

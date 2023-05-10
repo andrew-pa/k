@@ -389,25 +389,27 @@ impl KernelGlobalAlloc {
     }
 
     fn log_heap_info(&self, level: log::Level) {
-        let mut free_list = self.free_list.lock();
-        log::log!(
-            level,
-            "total heap size = {} pages ({} bytes)",
-            free_list.heap_size_in_bytes.div_ceil(PAGE_SIZE),
-            free_list.heap_size_in_bytes
-        );
-        let mut free_size = 0;
-        let mut cur = free_list.cursor();
-        while let Some(cur_block) = cur.current() {
-            log::log!(level, "{:?}", cur_block);
-            free_size += cur_block.size;
-            cur.move_next();
+        if log::log_enabled!(level) {
+            let mut free_list = self.free_list.lock();
+            log::log!(
+                level,
+                "total heap size = {} pages ({} bytes)",
+                free_list.heap_size_in_bytes.div_ceil(PAGE_SIZE),
+                free_list.heap_size_in_bytes
+            );
+            let mut free_size = 0;
+            let mut cur = free_list.cursor();
+            while let Some(cur_block) = cur.current() {
+                log::log!(level, "{:?}", cur_block);
+                free_size += cur_block.size;
+                cur.move_next();
+            }
+            log::log!(
+                level,
+                "total free = {free_size}b, total allocated = {}b",
+                free_list.heap_size_in_bytes - free_size
+            );
         }
-        log::log!(
-            level,
-            "total free = {free_size}b, total allocated = {}b",
-            free_list.heap_size_in_bytes - free_size
-        );
     }
 }
 
