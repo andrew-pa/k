@@ -1,9 +1,10 @@
 use crate::{
-    bus::pcie,
+    bus::pcie::{self, msix::MsiXTable},
     memory::{PhysicalBuffer, VirtualAddress, PAGE_SIZE},
 };
-use alloc::boxed::Box;
+use alloc::{boxed::Box, sync::Arc};
 use bitfield::{bitfield, Bit};
+use spin::Mutex;
 
 use self::queue::{CompletionQueue, SubmissionQueue};
 
@@ -58,8 +59,8 @@ impl Clone for AdminQueueAttributes {
 }
 
 pub struct PcieDriver {
-    admin_cq: CompletionQueue,
-    admin_sq: SubmissionQueue,
+    admin_cq: Arc<Mutex<CompletionQueue>>,
+    admin_sq: Arc<Mutex<SubmissionQueue>>,
 }
 
 impl pcie::DeviceDriver for PcieDriver {}
@@ -81,6 +82,7 @@ impl PcieDriver {
     fn configure(
         pcie_addr: pcie::DeviceId,
         base_address: VirtualAddress,
+        msix_table: MsiXTable,
     ) -> Result<PcieDriver, crate::memory::MemoryError> {
         let cap: ControllerCapabilities = unsafe {
             base_address
@@ -113,21 +115,17 @@ impl PcieDriver {
         let doorbell_base = base_address.offset(0x1000);
 
         // make each queue exactly 1 page worth of entries
-        let mut admin_cq = CompletionQueue::new(
-            0,
+        let mut admin_cq = CompletionQueue::new_admin(
             (PAGE_SIZE / COMPLETION_ENTRY_SIZE) as u16,
             doorbell_base,
             cap.doorbell_stride(),
-            None,
         )?;
 
-        let mut admin_sq = SubmissionQueue::new(
-            0,
+        let mut admin_sq = SubmissionQueue::new_admin(
             (PAGE_SIZE / SUBMISSION_ENTRY_SIZE) as u16,
             doorbell_base,
             cap.doorbell_stride(),
             &mut admin_cq,
-            None,
         )?;
 
         unsafe {
@@ -178,7 +176,6 @@ impl PcieDriver {
             // required and maximum values from the Identify result, but we haven't sent that yet
             r.set_io_submission_queue_entry_size(SUBMISSION_ENTRY_SIZE.ilog2());
             r.set_io_completion_queue_entry_size(COMPLETION_ENTRY_SIZE.ilog2());
-
             // set CC.EN = 1 to enable controller
             r.set_enable(true);
             log::trace!("new controller config = {:?}", r);
@@ -211,10 +208,49 @@ impl PcieDriver {
         let id_res: *mut u16 = id_res_buf.virtual_address().as_ptr();
         unsafe {
             log::info!(
-                "nvme controller PCIe vendor id = {:x}",
-                id_res.read_volatile()
+                "nvme controller PCIe vendor id = {:x}, sqes/cqes={:x}",
+                id_res.read_volatile(),
+                id_res.offset(512 / 2).read_volatile()
             );
         }
+
+        let admin_sq = Arc::new(Mutex::new(admin_sq));
+
+        // create IO queues
+        // allocate MSI for IO completion queue
+        let msi = {
+            let mut ic = crate::exception::interrupt_controller();
+            ic.alloc_msi().expect("MSI support for NVMe")
+        };
+        let ivx = 1u16;
+        msix_table.write(ivx as usize, &msi);
+        log::trace!("creating IO completion queue");
+        let mut io_cq = CompletionQueue::new_io(
+            1,
+            (2 * PAGE_SIZE / COMPLETION_ENTRY_SIZE) as u16,
+            doorbell_base,
+            cap.doorbell_stride(),
+            admin_sq.clone(),
+            &mut admin_cq,
+            ivx,
+            true,
+        )
+        .expect("create IO completion queue");
+
+        log::trace!("creating IO submission queue");
+        let mut io_sq = SubmissionQueue::new_io(
+            1,
+            (2 * PAGE_SIZE / SUBMISSION_ENTRY_SIZE) as u16,
+            doorbell_base,
+            cap.doorbell_stride(),
+            &mut io_cq,
+            admin_sq.clone(),
+            &mut admin_cq,
+            command::QueuePriority::Medium,
+        )
+        .expect("create IO submission queue");
+
+        let admin_cq = Arc::new(Mutex::new(admin_cq));
 
         // >>>>>>>>>>>>>>>>>>>>>>>>>>>> LEFT OFF HERE <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
         // step 7
@@ -280,6 +316,11 @@ pub fn init_nvme_over_pcie(
 
     // TODO: error handling
     Ok(Box::new(
-        PcieDriver::configure(addr, base_vaddress).unwrap(),
+        PcieDriver::configure(
+            addr,
+            base_vaddress,
+            msix_table.expect("MSI-X is only current supported MSI scheme for NVMe driver"),
+        )
+        .unwrap(),
     ))
 }

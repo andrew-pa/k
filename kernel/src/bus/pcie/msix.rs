@@ -84,7 +84,7 @@ impl MsiXTable {
         }
     }
 
-    pub fn write(&self, index: usize, msi: crate::exception::MsiDescriptor) {
+    pub fn write(&self, index: usize, msi: &crate::exception::MsiDescriptor) {
         assert!(index < self.size);
         self.set_mask(index, true);
         unsafe {

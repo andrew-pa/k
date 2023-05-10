@@ -29,13 +29,12 @@ impl V2mMsiController {
         // TODO: SAFETY: assume that this is in low memory that has already been mapped
         let basep: *mut u32 = unsafe { base.to_virtual_canonical().as_ptr() };
         let iidr = unsafe { basep.offset(V2M_MSI_IIDR >> 2).read_volatile() };
-        let mut typer = V2mMsiTypeRegister(unsafe { basep.offset(V2M_MSI_TYPER >> 2).read_volatile() });
+        let mut typer =
+            V2mMsiTypeRegister(unsafe { basep.offset(V2M_MSI_TYPER >> 2).read_volatile() });
         // TODO: why is this value not what it says in the QEMU headers?
         // perhaps there is a fixed offset for SPIs
         typer.set_spi_start(48);
-        log::info!(
-            "V2m IIDR = 0x{iidr:x}, TYPER={typer:x?}"
-        );
+        log::info!("V2m IIDR = 0x{iidr:x}, TYPER={typer:x?}");
         Self {
             register_addr: PhysicalAddress(base.0.wrapping_add_signed(V2M_MSI_SETSPI_NS)),
             spi_start: typer.spi_start(),

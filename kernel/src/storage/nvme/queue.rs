@@ -1,9 +1,10 @@
 use alloc::sync::Arc;
 use bitfield::BitRangeMut;
+use derive_more::Display;
 use hashbrown::HashMap;
 use spin::Mutex;
 
-use super::*;
+use super::{command::QueuePriority, *};
 use crate::memory::{paging::PageTableEntryOptions, MemoryError, PhysicalAddress, PhysicalBuffer};
 
 pub struct Command<'sq> {
@@ -57,6 +58,22 @@ impl<'sq> Command<'sq> {
 
 pub type QueueId = u16;
 
+#[derive(Debug, Display)]
+pub enum QueueCreateError {
+    Memory(MemoryError),
+    Generic(u8),
+    InvalidQueueId,
+    InvalidQueueSize,
+    InvalidInterruptVectorIndex,
+    InvalidCompletionQueueId,
+}
+
+impl From<MemoryError> for QueueCreateError {
+    fn from(value: MemoryError) -> Self {
+        Self::Memory(value)
+    }
+}
+
 pub struct SubmissionQueue {
     id: QueueId,
     queue_memory: PhysicalBuffer,
@@ -68,7 +85,7 @@ pub struct SubmissionQueue {
 }
 
 impl SubmissionQueue {
-    pub(super) fn new(
+    fn new(
         id: QueueId,
         entry_count: u16,
         doorbell_base: VirtualAddress,
@@ -92,6 +109,66 @@ impl SubmissionQueue {
             head,
             parent,
         })
+    }
+
+    pub(super) fn new_admin(
+        entry_count: u16,
+        doorbell_base: VirtualAddress,
+        doorbell_stride: u8,
+        associated_completion_queue: &mut CompletionQueue,
+    ) -> Result<Self, MemoryError> {
+        Self::new(
+            0,
+            entry_count,
+            doorbell_base,
+            doorbell_stride,
+            associated_completion_queue,
+            None,
+        )
+    }
+
+    pub(super) fn new_io(
+        id: QueueId,
+        entry_count: u16,
+        doorbell_base: VirtualAddress,
+        doorbell_stride: u8,
+        associated_completion_queue: &mut CompletionQueue,
+        parent: Arc<Mutex<SubmissionQueue>>,
+        parent_cq: &mut CompletionQueue,
+        priority: QueuePriority,
+    ) -> Result<Self, QueueCreateError> {
+        assert!(id > 0);
+        let mut s = Self::new(
+            id,
+            entry_count,
+            doorbell_base,
+            doorbell_stride,
+            associated_completion_queue,
+            Some(parent.clone()),
+        )?;
+        // TODO: for now all queues are physically continuous
+        parent
+            .lock()
+            .begin()
+            .expect("admin queue full")
+            .create_io_submission_queue(
+                id,
+                s.size(),
+                associated_completion_queue.id,
+                priority,
+                true,
+            )
+            .set_data_ptr_single(s.address())
+            .submit();
+        let cmpl = parent_cq.busy_wait_for_completion();
+        match (cmpl.status.status_code_type(), cmpl.status.status_code()) {
+            (0, 0) => Ok(s),
+            (0, g) => Err(QueueCreateError::Generic(g)),
+            (1, 1) => Err(QueueCreateError::InvalidCompletionQueueId),
+            (1, 2) => Err(QueueCreateError::InvalidQueueId),
+            (1, 8) => Err(QueueCreateError::InvalidQueueSize),
+            (_, _) => panic!("unexpected IO submission queue completion: {cmpl:?}"),
+        }
     }
 
     pub fn size(&self) -> u16 {
@@ -195,7 +272,7 @@ pub struct CompletionQueue {
 }
 
 impl CompletionQueue {
-    pub(super) fn new(
+    fn new(
         id: QueueId,
         entry_count: u16,
         doorbell_base: VirtualAddress,
@@ -215,6 +292,52 @@ impl CompletionQueue {
             assoc_submit_queue_heads: HashMap::new(),
             parent,
         })
+    }
+
+    pub(super) fn new_admin(
+        entry_count: u16,
+        doorbell_base: VirtualAddress,
+        doorbell_stride: u8,
+    ) -> Result<Self, MemoryError> {
+        Self::new(0, entry_count, doorbell_base, doorbell_stride, None)
+    }
+
+    pub(super) fn new_io(
+        id: QueueId,
+        entry_count: u16,
+        doorbell_base: VirtualAddress,
+        doorbell_stride: u8,
+        parent: Arc<Mutex<SubmissionQueue>>,
+        parent_cq: &mut CompletionQueue,
+        interrupt_index: u16,
+        interrupt_enabled: bool,
+    ) -> Result<Self, QueueCreateError> {
+        assert!(id > 0);
+        let mut s = Self::new(
+            id,
+            entry_count,
+            doorbell_base,
+            doorbell_stride,
+            Some(parent.clone()),
+        )?;
+        // TODO: for now all queues are physically continuous
+        parent
+            .lock()
+            .begin()
+            .expect("admin queue full")
+            .create_io_completion_queue(id, s.size(), interrupt_index, interrupt_enabled, true)
+            .set_data_ptr_single(s.address())
+            .submit();
+        let cmpl = parent_cq.busy_wait_for_completion();
+        log::debug!("create IO CompletionQueue completion={cmpl:?}");
+        match (cmpl.status.status_code_type(), cmpl.status.status_code()) {
+            (0, 0) => Ok(s),
+            (0, g) => Err(QueueCreateError::Generic(g)),
+            (1, 1) => Err(QueueCreateError::InvalidQueueId),
+            (1, 2) => Err(QueueCreateError::InvalidQueueSize),
+            (1, 8) => Err(QueueCreateError::InvalidInterruptVectorIndex),
+            (_, _) => panic!("unexpected IO submission queue completion: {cmpl:?}"),
+        }
     }
 
     pub fn size(&self) -> u16 {
