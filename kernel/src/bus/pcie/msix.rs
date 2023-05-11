@@ -15,7 +15,7 @@ impl MsiXCapability {
     pub fn enable(&self) {
         unsafe {
             let msg_ctrl = self.block.offset(MSGCTRL + 1); //only the high byte
-            msg_ctrl.write_volatile(msg_ctrl.read_volatile() & 0x80);
+            msg_ctrl.write_volatile(msg_ctrl.read_volatile() | 0x80);
         }
     }
 

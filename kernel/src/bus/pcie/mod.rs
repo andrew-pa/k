@@ -313,7 +313,7 @@ pub fn init(dt: &DeviceTree, driver_registry: &HashMap<u32, DriverInitFn>) {
 
     let node = HostCtrlDeviceTreeNode::find_in_tree(dt).expect("find PCIe host in DeviceTree");
     let base = BaseAddresses::from_dt(&node);
-    log::debug!("PCIe = {base:#x?}");
+    log::debug!("PCIe = {base:x?}");
 
     // map ECAM registers into memory
     {

@@ -197,7 +197,7 @@ impl PcieDriver {
         admin_sq
             .begin()
             .expect("queue just created, can not be full")
-            .set_command_id(0xabcd)
+            .set_command_id(0xa000)
             .identify(0, command::IdentifyStructure::Controller)
             .set_data_ptr_single(id_res_buf.physical_address())
             .submit();
@@ -212,6 +212,30 @@ impl PcieDriver {
                 id_res.read_volatile(),
                 id_res.offset(512 / 2).read_volatile()
             );
+        }
+
+        log::trace!("requesting active namespace list");
+        admin_sq
+            .begin()
+            .expect("queue just created, can not be full")
+            .set_command_id(0xa001)
+            .identify(0, command::IdentifyStructure::ActiveNamespaceList)
+            .set_namespace_id(0)
+            .set_data_ptr_single(id_res_buf.physical_address())
+            .submit();
+
+        log::trace!("waiting for command completion");
+        let c = admin_cq.busy_wait_for_completion();
+        log::debug!("ID active namespace list completion: {c:?}");
+        let id_res: *mut u32 = id_res_buf.virtual_address().as_ptr();
+        unsafe {
+            for i in 0..1024 {
+                let val = id_res.offset(i).read();
+                if val == 0 {
+                    break;
+                }
+                log::debug!("active namespace {val:x}");
+            }
         }
 
         let admin_sq = Arc::new(Mutex::new(admin_sq));
@@ -255,13 +279,10 @@ impl PcieDriver {
         // >>>>>>>>>>>>>>>>>>>>>>>>>>>> LEFT OFF HERE <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
         // step 7
         // TODO:
-        // + implement command generation code
         // ~ send Identify command and parse results (is there anything useful in here??)
         // - set up interrupts
-        // - create IO queues
         // - find somewhere to keep block devices & define block device interface
         // - impl block device interface for NVMe
-        // could implement async/await in the kernel (has been done: https://os.phil-opp.com/async-await/ so it is possible)
 
         log::info!("NVMe device at {pcie_addr} initialized!");
 

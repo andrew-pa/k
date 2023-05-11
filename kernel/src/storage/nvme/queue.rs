@@ -161,6 +161,7 @@ impl SubmissionQueue {
             .set_data_ptr_single(s.address())
             .submit();
         let cmpl = parent_cq.busy_wait_for_completion();
+        log::trace!("create IO SubmissionQueue completion={cmpl:?}");
         match (cmpl.status.status_code_type(), cmpl.status.status_code()) {
             (0, 0) => Ok(s),
             (0, g) => Err(QueueCreateError::Generic(g)),
@@ -329,7 +330,7 @@ impl CompletionQueue {
             .set_data_ptr_single(s.address())
             .submit();
         let cmpl = parent_cq.busy_wait_for_completion();
-        log::debug!("create IO CompletionQueue completion={cmpl:?}");
+        log::trace!("create IO CompletionQueue completion={cmpl:?}");
         match (cmpl.status.status_code_type(), cmpl.status.status_code()) {
             (0, 0) => Ok(s),
             (0, g) => Err(QueueCreateError::Generic(g)),

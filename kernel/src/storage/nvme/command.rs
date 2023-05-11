@@ -4,6 +4,7 @@ use super::queue::{Command, QueueId};
 pub enum IdentifyStructure {
     Namespace = 0x00,
     Controller = 0x01,
+    ActiveNamespaceList = 0x02,
 }
 
 #[repr(u8)]
