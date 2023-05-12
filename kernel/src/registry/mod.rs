@@ -1,16 +1,21 @@
 use core::cell::OnceCell;
 
 use crate::io::BlockStore;
-use alloc::{boxed::Box, vec::Vec};
+use alloc::{boxed::Box, string::String, vec::Vec};
 use async_trait::async_trait;
 
 pub mod path;
+use hashbrown::HashMap;
 pub use path::{Path, PathBuf};
 use spin::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+
+use self::path::{Component, Components};
 
 pub enum RegistryError {
     NotFound(PathBuf),
     Unsupported,
+    HandlerAlreadyRegistered(String),
+    InvalidPath,
 }
 
 #[async_trait]
@@ -18,19 +23,92 @@ pub trait RegistryHandler {
     async fn open_block_store(&self, subpath: &Path) -> Result<Box<dyn BlockStore>, RegistryError>;
 }
 
-pub struct Registry {}
+enum Node {
+    Directory(HashMap<String, Node>),
+    Handler(Box<dyn RegistryHandler>),
+}
+
+impl Node {
+    fn add(
+        &mut self,
+        mut prefix: Components,
+        name: &str,
+        handler: Box<dyn RegistryHandler>,
+    ) -> Result<(), RegistryError> {
+        use Node::*;
+        match (prefix.next(), self) {
+            (Some(Component::Name(s)), Directory(children)) => children
+                .entry(s.into())
+                .or_insert(Directory(Default::default()))
+                .add(prefix, name, handler),
+            (None, Directory(children)) => {
+                if children.contains_key(name) {
+                    Err(RegistryError::HandlerAlreadyRegistered(name.into()))
+                } else {
+                    children.insert(name.into(), Handler(handler));
+                    Ok(())
+                }
+            }
+            (Some(Component::Root | Component::ParentDir | Component::CurrentDir), _) => {
+                panic!("unexpected path component encountered")
+            }
+            _ => Err(RegistryError::HandlerAlreadyRegistered(name.into())),
+        }
+    }
+
+    fn find<'p>(
+        &self,
+        mut path: Components<'p>,
+    ) -> Result<(&'p Path, &dyn RegistryHandler), RegistryError> {
+        match (path.next(), self) {
+            (Some(Component::Name(n)), Node::Directory(children)) => match children.get(n) {
+                Some(Node::Handler(h)) => Ok((path.as_path(), h.as_ref())),
+                Some(n) => n.find(path),
+                None => Err(RegistryError::NotFound(todo!())),
+            },
+            (Some(Component::Root | Component::ParentDir | Component::CurrentDir), _) => {
+                panic!("unexpected path component encountered")
+            }
+            (None, Node::Directory(_)) => Err(todo!()),
+            _ => todo!(),
+        }
+    }
+}
+
+pub struct Registry {
+    root: Node,
+}
 
 impl Registry {
     fn new() -> Self {
-        Registry {}
+        Registry {
+            root: Node::Directory(HashMap::new()),
+        }
     }
 
-    pub fn register(&mut self, prefix: &Path, handler: Box<dyn RegistryHandler>) {
-        todo!()
+    pub fn register(
+        &mut self,
+        path: &Path,
+        handler: Box<dyn RegistryHandler>,
+    ) -> Result<(), RegistryError> {
+        let mut pc = path.components();
+        let name = pc
+            .next_back()
+            .and_then(|c| match c {
+                Component::Name(s) => Some(s),
+                _ => None,
+            })
+            .ok_or(RegistryError::InvalidPath)?;
+        log::debug!("registering {path}");
+        match pc.next() {
+            Some(Component::Root) => self.root.add(pc, name, handler),
+            _ => Err(RegistryError::InvalidPath),
+        }
     }
 
-    pub fn open_block_store(&self, p: &Path) -> Result<Box<dyn BlockStore>, RegistryError> {
-        todo!()
+    pub async fn open_block_store(&self, p: &Path) -> Result<Box<dyn BlockStore>, RegistryError> {
+        let (subpath, h) = self.root.find(p.components())?;
+        h.open_block_store(subpath).await
     }
 }
 

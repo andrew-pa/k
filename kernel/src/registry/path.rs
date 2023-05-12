@@ -119,12 +119,22 @@ impl Path {
 
     pub fn parent(&self) -> Option<&Path> {
         let mut comps = self.components();
-        let comp = comps.next_back();
-        comp.and_then(move |p| match p {
+        comps.next_back().and_then(move |p| match p {
             Component::Name(_) | Component::CurrentDir | Component::ParentDir => {
                 Some(comps.as_path())
             }
             _ => None,
+        })
+    }
+
+    pub fn file_name(&self) -> Option<&str> {
+        let mut comps = self.components();
+        comps.next_back().and_then(move |p| match p {
+            Component::Root => None,
+            // this is what the std::path::Path does?
+            Component::CurrentDir => comps.as_path().file_name(),
+            Component::ParentDir => None,
+            Component::Name(s) => Some(s),
         })
     }
 
