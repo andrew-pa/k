@@ -14,6 +14,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-trait"
+version = "0.1.66"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b84f9ebcc6c1f5b8cb160f6990096a5c127f423fcb6e1ccc46c370cbdfb75dfc"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "autocfg"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -139,6 +150,7 @@ dependencies = [
 name = "kernel"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "bitfield",
  "bitvec",
  "byteorder",
@@ -148,6 +160,7 @@ dependencies = [
  "hashbrown",
  "lock_api",
  "log",
+ "paste",
  "qemu-exit",
  "smallvec",
  "spin",
@@ -193,6 +206,12 @@ version = "0.4.1"
 dependencies = [
  "stable_deref_trait",
 ]
+
+[[package]]
+name = "paste"
+version = "1.0.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9f746c4065a8fa3fe23974dd82f15431cc8d40779821001404d10d2e79ca7d79"
 
 [[package]]
 name = "proc-macro2"

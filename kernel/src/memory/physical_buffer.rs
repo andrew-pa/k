@@ -1,3 +1,9 @@
+use core::{
+    borrow::Borrow,
+    ops::{Index, Range},
+    ptr::NonNull,
+};
+
 use super::{
     paging, physical_memory_allocator, virtual_address_allocator, MemoryError, PhysicalAddress,
     VirtualAddress, PAGE_SIZE,

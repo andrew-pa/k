@@ -38,6 +38,7 @@ pub extern "C" fn kmain() {
 
     memory::init_virtual_address_allocator();
     exception::init_interrupts(&dt);
+    registry::init_registry();
     tasks::init_executor();
     process::scheduler::init_scheduler(process::IDLE_THREAD);
 

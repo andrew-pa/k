@@ -41,6 +41,10 @@ impl PhysicalAddress {
         // self.0.trailing_zeros() == PAGE_SIZE.ilog2()
         self.0 & !(PAGE_SIZE - 1) == 0
     }
+
+    pub fn offset(self, byte_offset: isize) -> PhysicalAddress {
+        PhysicalAddress(self.0.saturating_add_signed(byte_offset))
+    }
 }
 
 impl VirtualAddress {

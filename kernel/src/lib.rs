@@ -14,6 +14,7 @@
 extern crate alloc;
 
 pub mod dtb;
+pub mod registry;
 
 pub mod exception;
 pub mod memory;
@@ -21,6 +22,7 @@ pub mod process;
 pub mod tasks;
 
 pub mod bus;
+pub mod io;
 pub mod storage;
 pub mod timer;
 pub mod uart;

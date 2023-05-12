@@ -6,15 +6,23 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-log = "0.4"
+derive_more = "0.99"
+bitfield = "0.14"
+async-trait = "0.1"
+
+hashbrown = "0.13"
+smallvec = "1"
 byteorder = { version = "1", default-features = false }
 bitvec = { version = "1", default-features = false }
-smallvec = "1"
-hashbrown = "0.13"
-bitfield = "0.14"
-derive_more = "0.99"
+
 spin = "0.9"
 lock_api = "0.4"
 crossbeam = { version = "0.8", features = ["alloc"], default-features = false }
 chashmap = { path = "../chashmap" }
+
+log = "0.4"
+
 qemu-exit = "3.0.1"
+
+[dev-dependencies]
+paste = "1"

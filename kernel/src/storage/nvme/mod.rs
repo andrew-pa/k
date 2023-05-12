@@ -2,8 +2,9 @@ use crate::{
     bus::pcie::{self, msix::MsiXTable},
     memory::{PhysicalBuffer, VirtualAddress, PAGE_SIZE},
 };
-use alloc::{boxed::Box, sync::Arc};
+use alloc::{boxed::Box, sync::Arc, vec::Vec};
 use bitfield::{bitfield, Bit};
+use smallvec::SmallVec;
 use spin::Mutex;
 
 use self::queue::{CompletionQueue, SubmissionQueue};
@@ -223,20 +224,21 @@ impl PcieDriver {
             .set_namespace_id(0)
             .set_data_ptr_single(id_res_buf.physical_address())
             .submit();
-
         log::trace!("waiting for command completion");
         let c = admin_cq.busy_wait_for_completion();
         log::debug!("ID active namespace list completion: {c:?}");
         let id_res: *mut u32 = id_res_buf.virtual_address().as_ptr();
+        let mut namespace_ids = Vec::new();
         unsafe {
             for i in 0..1024 {
                 let val = id_res.offset(i).read();
                 if val == 0 {
                     break;
                 }
-                log::debug!("active namespace {val:x}");
+                namespace_ids.push(val);
             }
         }
+        log::debug!("active namespaces: {namespace_ids:?}");
 
         let admin_sq = Arc::new(Mutex::new(admin_sq));
 
