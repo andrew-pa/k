@@ -187,6 +187,7 @@ impl<'a> FreeListCursor<'a> {
     /// insert a new block before the cursor's current block, leaving the cursor unmoved
     fn insert_before_current(&mut self, new_block: FreeBlock) {
         log::trace!("insert {new_block:?} before {:?}", self.current());
+        assert_ne!(new_block.size, 0);
         // (current.prev) <-> new_block <-> current
         // SAFETY: list ptrs should be good already and we check the new_block
         unsafe {
@@ -425,7 +426,10 @@ unsafe impl GlobalAlloc for KernelGlobalAlloc {
                 .offset(size_of::<AllocatedBlockHeader>() as isize)
                 .align_offset(layout.align());
             log::trace!("found block {block:?}, required padding = {padding}",);
-            let req_block_size = layout.size() + size_of::<AllocatedBlockHeader>() + padding;
+            let req_block_size = (layout.size() + size_of::<AllocatedBlockHeader>() + padding)
+                // we can't make a block any smaller than this or freeing the block
+                // will overwrite the next block
+                .max(size_of::<FreeBlockHeader>());
             let actual_block_size = if block.size - req_block_size > size_of::<FreeBlockHeader>() {
                 // put back the unused part of the block at the end
                 self.add_free_block(FreeBlock {
@@ -445,16 +449,18 @@ unsafe impl GlobalAlloc for KernelGlobalAlloc {
                 };
             }
             // return ptr to new allocated block
-            log::trace!(
-                "new allocated block @ {}, size = {}",
-                block.address,
-                actual_block_size
-            );
-            block
+            let data = block
                 .address
                 .as_ptr::<u8>()
                 .offset(size_of::<AllocatedBlockHeader>() as isize)
-                .offset(padding as isize)
+                .offset(padding as isize);
+            log::trace!(
+                "new allocated block @ {} (data @ {}), size = {}",
+                block.address,
+                VirtualAddress::from(data),
+                actual_block_size
+            );
+            data
         } else {
             self.increase_heap_size(&layout);
             // try to allocate again

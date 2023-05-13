@@ -23,6 +23,9 @@ pub trait RegistryHandler {
     async fn open_block_store(&self, subpath: &Path) -> Result<Box<dyn BlockStore>, RegistryError>;
 }
 
+// TODO: storing these as strings is bad as short strings might take up an unexpectedly large
+// amount of memory due to heap block headers and alighment requirements
+// maybe it would be better to intern them somehow?
 enum Node {
     Directory(HashMap<String, Node>),
     Handler(Box<dyn RegistryHandler>),
@@ -35,6 +38,7 @@ impl Node {
         name: &str,
         handler: Box<dyn RegistryHandler>,
     ) -> Result<(), RegistryError> {
+        log::trace!("{}.{name}", prefix.as_path());
         use Node::*;
         match (prefix.next(), self) {
             (Some(Component::Name(s)), Directory(children)) => children

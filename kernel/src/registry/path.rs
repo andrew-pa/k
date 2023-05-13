@@ -1,4 +1,8 @@
-use core::{borrow::Borrow, fmt::Display, ops::Deref};
+use core::{
+    borrow::Borrow,
+    fmt::{Display, Write},
+    ops::Deref,
+};
 
 use alloc::string::String;
 
@@ -149,6 +153,12 @@ impl Display for Path {
     }
 }
 
+impl AsRef<Path> for &str {
+    fn as_ref(&self) -> &Path {
+        Path::new(self)
+    }
+}
+
 pub struct PathBuf {
     s: String,
 }
@@ -181,7 +191,24 @@ impl Deref for PathBuf {
     }
 }
 
-impl PathBuf {}
+impl PathBuf {
+    pub fn push(&mut self, p: impl AsRef<Path>) {
+        if (!self.s.ends_with(PATH_SEP)) {
+            self.s.push(PATH_SEP);
+        }
+        self.s.push_str(p.as_ref().as_str());
+    }
+
+    pub fn pop(&mut self) -> bool {
+        match self.parent().map(|p| p.len()) {
+            Some(new_len) => {
+                self.s.truncate(new_len);
+                true
+            }
+            None => false,
+        }
+    }
+}
 
 #[cfg(test)]
 mod test {

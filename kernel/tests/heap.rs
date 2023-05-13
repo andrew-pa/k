@@ -6,8 +6,13 @@
 
 extern crate alloc;
 
-use alloc::{boxed::Box, vec::Vec};
-use kernel::*;
+use alloc::{
+    boxed::Box,
+    format,
+    string::{String, ToString},
+    vec::Vec,
+};
+use kernel::{registry::PathBuf, *};
 
 #[test_case]
 fn test_allocate_trival() {
@@ -38,6 +43,27 @@ fn test_unaligned_sizes() {
     let _ = Box::new([7u8; 5]);
     let _ = Box::new([7u8; 6]);
     let _ = Box::new([7u8; 7]);
+}
+
+#[test_case]
+fn test_path_manip() {
+    log::debug!("create path");
+    let mut path = PathBuf::from("/dev/nvme/");
+    log::debug!("create device_id");
+    let device_id: String = format!("{}", "pci@0:2:0");
+    log::debug!("push device_id");
+    path.push(device_id.as_str());
+    assert_eq!(path.as_str(), "/dev/nvme/pci@0:2:0");
+    for namespace_id in [1u32] {
+        log::debug!("create namespace_id");
+        let nid = namespace_id.to_string();
+        log::debug!("push namespace_id");
+        path.push(nid.as_str());
+        assert_eq!(path.as_str(), "/dev/nvme/pci@0:2:0/1");
+        log::debug!("pop namespace_id");
+        path.pop();
+    }
+    assert_eq!(path.as_str(), "/dev/nvme/pci@0:2:0/");
 }
 
 #[no_mangle]

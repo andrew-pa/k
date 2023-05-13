@@ -1,8 +1,16 @@
 use crate::{
     bus::pcie::{self, msix::MsiXTable},
     memory::{PhysicalBuffer, VirtualAddress, PAGE_SIZE},
+    registry::{registry_mut, Path, PathBuf, RegistryError, RegistryHandler},
 };
-use alloc::{boxed::Box, sync::Arc, vec::Vec};
+use alloc::{
+    boxed::Box,
+    format,
+    string::{String, ToString},
+    sync::Arc,
+    vec::Vec,
+};
+use async_trait::async_trait;
 use bitfield::{bitfield, Bit};
 use smallvec::SmallVec;
 use spin::Mutex;
@@ -56,6 +64,18 @@ impl Copy for AdminQueueAttributes {}
 impl Clone for AdminQueueAttributes {
     fn clone(&self) -> Self {
         Self(self.0.clone())
+    }
+}
+
+struct NvmeDeviceRegistryHandler {}
+
+#[async_trait]
+impl RegistryHandler for NvmeDeviceRegistryHandler {
+    async fn open_block_store(
+        &self,
+        subpath: &Path,
+    ) -> Result<Box<dyn crate::io::BlockStore>, RegistryError> {
+        todo!()
     }
 }
 
@@ -239,6 +259,18 @@ impl PcieDriver {
             }
         }
         log::debug!("active namespaces: {namespace_ids:?}");
+
+        {
+            let mut reg = registry_mut();
+            let mut path = PathBuf::from("/dev/nvme/");
+            let device_id: String = format!("{}", pcie_addr);
+            path.push(device_id.as_str());
+            for namespace_id in &namespace_ids {
+                path.push(namespace_id.to_string().as_str());
+                reg.register(&path, Box::new(NvmeDeviceRegistryHandler {}));
+                path.pop();
+            }
+        }
 
         let admin_sq = Arc::new(Mutex::new(admin_sq));
 
