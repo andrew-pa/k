@@ -2,6 +2,7 @@
 use core::{cell::OnceCell, ops::Range};
 
 use bitfield::bitfield;
+use snafu::{Snafu, ResultExt};
 use spin::Mutex;
 
 use super::{
@@ -175,7 +176,7 @@ pub struct PageTable {
     level0_phy_addr: PhysicalAddress,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Snafu)]
 pub enum MapError {
     RangeAlreadyMapped {
         virt_start: VirtualAddress,
@@ -190,7 +191,9 @@ pub enum MapError {
         page_count: usize,
         virt_start: VirtualAddress,
     },
-    Memory(MemoryError),
+    Memory {
+        source: MemoryError
+    },
 }
 
 impl core::fmt::Debug for PageTable {
@@ -283,7 +286,7 @@ impl PageTable {
         asid: u16,
         options: &PageTableEntryOptions,
     ) -> Result<PageTable, MapError> {
-        let mut p = PageTable::empty(high_addresses, asid).map_err(MapError::Memory)?;
+        let mut p = PageTable::empty(high_addresses, asid).context(MemorySnafu)?;
         p.map_range(
             start_addr,
             VirtualAddress(start_addr.0),
@@ -413,7 +416,7 @@ impl PageTable {
                         continue 'top;
                     } else {
                         tr[i] = PageTableEntry::table_desc(
-                            Self::allocate_table().map_err(MapError::Memory)?,
+                            Self::allocate_table().context(MemorySnafu)?,
                         );
                         table = tr[i].table_ref(lvl).unwrap();
                     }

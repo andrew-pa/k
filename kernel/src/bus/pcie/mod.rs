@@ -1,10 +1,11 @@
 use core::cell::OnceCell;
 
-use alloc::boxed::Box;
+use alloc::{boxed::Box, string::String};
 use bitfield::Bit;
 use byteorder::{BigEndian, ByteOrder, LittleEndian};
 use derive_more::Display;
 use hashbrown::HashMap;
+use snafu::Snafu;
 
 use crate::{
     dtb::{DeviceTree, MemRegionIter},
@@ -293,17 +294,16 @@ impl Type0ConfigHeader {
     }
 }
 
-pub trait DeviceDriver {}
-
-static mut DEVICES: OnceCell<CHashMapG<DeviceId, Box<dyn DeviceDriver>>> = OnceCell::new();
-
-#[derive(Debug, Display)]
+#[derive(Debug, Snafu)]
+#[snafu(module, visibility(pub))]
 pub enum Error {
-    Other(&'static str),
+    Memory { source: memory::MemoryError },
+    Mapping { source: memory::paging::MapError },
+    Registry { source: crate::registry::RegistryError }
 }
 
 pub type DriverInitFn =
-    fn(DeviceId, &ConfigBlock, &BaseAddresses) -> Result<Box<dyn DeviceDriver>, Error>;
+    fn(DeviceId, &ConfigBlock, &BaseAddresses) -> Result<(), Error>;
 
 pub fn init(dt: &DeviceTree, driver_registry: &HashMap<u32, DriverInitFn>) {
     assert!(
@@ -338,7 +338,6 @@ pub fn init(dt: &DeviceTree, driver_registry: &HashMap<u32, DriverInitFn>) {
     }
 
     // scan the bus for devices and initialize drivers
-    let devices = CHashMapG::new();
     for bus in 0..=255 {
         for device in 0..32 {
             let addr = DeviceId::new(bus, device, 0);
@@ -359,9 +358,7 @@ pub fn init(dt: &DeviceTree, driver_registry: &HashMap<u32, DriverInitFn>) {
                 }
                 if let Some(driver_init) = driver_registry.get(&(cfg.class() & !0xff)) {
                     match driver_init(addr, &cfg, &base) {
-                        Ok(dd) => {
-                            devices.insert(addr, dd);
-                        }
+                        Ok(()) => { }
                         Err(e) => {
                             log::error!("failed to initalize PCIe driver for device at {addr}: {e} (vendor={:x}, device={:x}, class={:x}", cfg.vendor_id(), cfg.device_id(), cfg.class())
                         }
@@ -369,9 +366,5 @@ pub fn init(dt: &DeviceTree, driver_registry: &HashMap<u32, DriverInitFn>) {
                 }
             }
         }
-    }
-
-    unsafe {
-        DEVICES.set(devices).ok().expect("init PCIe once");
     }
 }

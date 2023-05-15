@@ -2,10 +2,11 @@ use alloc::sync::Arc;
 use bitfield::BitRangeMut;
 use derive_more::Display;
 use hashbrown::HashMap;
+use snafu::Snafu;
 use spin::Mutex;
 
 use super::{command::QueuePriority, *};
-use crate::memory::{paging::PageTableEntryOptions, MemoryError, PhysicalAddress, PhysicalBuffer};
+use crate::{memory::{paging::PageTableEntryOptions, MemoryError, PhysicalAddress, PhysicalBuffer}, exception::{InterruptId, self}};
 
 pub struct Command<'sq> {
     parent: &'sq mut SubmissionQueue,
@@ -58,20 +59,14 @@ impl<'sq> Command<'sq> {
 
 pub type QueueId = u16;
 
-#[derive(Debug, Display)]
+#[derive(Debug, Snafu)]
 pub enum QueueCreateError {
-    Memory(MemoryError),
-    Generic(u8),
+    Memory { source: MemoryError },
+    Generic { code: u8 },
     InvalidQueueId,
     InvalidQueueSize,
     InvalidInterruptVectorIndex,
     InvalidCompletionQueueId,
-}
-
-impl From<MemoryError> for QueueCreateError {
-    fn from(value: MemoryError) -> Self {
-        Self::Memory(value)
-    }
 }
 
 pub struct SubmissionQueue {
@@ -145,7 +140,7 @@ impl SubmissionQueue {
             doorbell_stride,
             associated_completion_queue,
             Some(parent.clone()),
-        )?;
+        ).context(MemorySnafu)?;
         // TODO: for now all queues are physically continuous
         parent
             .lock()
@@ -164,7 +159,7 @@ impl SubmissionQueue {
         log::trace!("create IO SubmissionQueue completion={cmpl:?}");
         match (cmpl.status.status_code_type(), cmpl.status.status_code()) {
             (0, 0) => Ok(s),
-            (0, g) => Err(QueueCreateError::Generic(g)),
+            (0, code) => Err(QueueCreateError::Generic { code }),
             (1, 1) => Err(QueueCreateError::InvalidCompletionQueueId),
             (1, 2) => Err(QueueCreateError::InvalidQueueId),
             (1, 8) => Err(QueueCreateError::InvalidQueueSize),
@@ -207,6 +202,8 @@ impl SubmissionQueue {
         }
     }
 }
+
+unsafe impl Send for SubmissionQueue {}
 
 // TODO: WARN: if these queues get dropped while they are still active, the NVMe driver may try to
 // write to them, which will corrupt memory if reallocated elsewhere.
@@ -310,8 +307,7 @@ impl CompletionQueue {
         doorbell_stride: u8,
         parent: Arc<Mutex<SubmissionQueue>>,
         parent_cq: &mut CompletionQueue,
-        interrupt_index: u16,
-        interrupt_enabled: bool,
+        interrupt_index_and_id: Option<(u16, InterruptId)>,
     ) -> Result<Self, QueueCreateError> {
         assert!(id > 0);
         let mut s = Self::new(
@@ -320,24 +316,36 @@ impl CompletionQueue {
             doorbell_base,
             doorbell_stride,
             Some(parent.clone()),
-        )?;
+        ).context(MemorySnafu)?;
         // TODO: for now all queues are physically continuous
         parent
             .lock()
             .begin()
             .expect("admin queue full")
-            .create_io_completion_queue(id, s.size(), interrupt_index, interrupt_enabled, true)
+            .create_io_completion_queue(id, s.size(), interrupt_index_and_id.as_ref().map(|(ix, _)| *ix).unwrap_or(0), interrupt_index_and_id.is_some(), true)
             .set_data_ptr_single(s.address())
             .submit();
         let cmpl = parent_cq.busy_wait_for_completion();
         log::trace!("create IO CompletionQueue completion={cmpl:?}");
         match (cmpl.status.status_code_type(), cmpl.status.status_code()) {
-            (0, 0) => Ok(s),
-            (0, g) => Err(QueueCreateError::Generic(g)),
+            (0, 0) => {
+                s.register_interrupt_handler(interrupt_index_and_id);
+                Ok(s)
+            },
+            (0, code) => Err(QueueCreateError::Generic { code }),
             (1, 1) => Err(QueueCreateError::InvalidQueueId),
             (1, 2) => Err(QueueCreateError::InvalidQueueSize),
             (1, 8) => Err(QueueCreateError::InvalidInterruptVectorIndex),
             (_, _) => panic!("unexpected IO submission queue completion: {cmpl:?}"),
+        }
+    }
+
+    fn register_interrupt_handler(&mut self, interrupt_index_and_id: Option<(u16, InterruptId)>) {
+        if let Some((int_ix, int_id)) = interrupt_index_and_id {
+            // TODO: set MSI interrupt mask
+            exception::interrupt_handlers().insert(int_id, |id, regs| {
+                log::debug!("NVMe completion interrupt");
+            });
         }
     }
 
@@ -404,6 +412,8 @@ impl CompletionQueue {
 
     // TODO: could easily implement peek()
 }
+
+unsafe impl Send for CompletionQueue {}
 
 // TODO: WARN: see drop impl for SubmissionQueue
 impl Drop for CompletionQueue {

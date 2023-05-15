@@ -1,4 +1,5 @@
 use derive_more::Display;
+use snafu::Snafu;
 
 // these are defined by the linker script so we know where the BSS section is
 // notably not the value but the *address* of these symbols is what is relevant
@@ -114,11 +115,11 @@ impl core::fmt::Debug for VirtualAddress {
     }
 }
 
-#[derive(Debug, Display)]
+#[derive(Debug, Snafu)]
 pub enum MemoryError {
-    #[display(fmt = "out of memory")]
+    #[snafu(display("out of memory"))]
     OutOfMemory,
-    #[display(fmt = "insufficent memory for allocation of {} bytes", size)]
+    #[snafu(display("insufficent memory for allocation of {size} bytes"))]
     InsufficentForAllocation { size: usize },
 }
 

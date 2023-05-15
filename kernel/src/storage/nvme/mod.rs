@@ -13,12 +13,14 @@ use alloc::{
 use async_trait::async_trait;
 use bitfield::{bitfield, Bit};
 use smallvec::SmallVec;
+use snafu::ResultExt;
 use spin::Mutex;
 
 use self::queue::{CompletionQueue, SubmissionQueue};
 
 mod command;
 mod queue;
+mod interrupt;
 
 // PCIe Register offsets (in bytes)
 const REG_CAP: isize = 0x00;
@@ -67,25 +69,6 @@ impl Clone for AdminQueueAttributes {
     }
 }
 
-struct NvmeDeviceRegistryHandler {}
-
-#[async_trait]
-impl RegistryHandler for NvmeDeviceRegistryHandler {
-    async fn open_block_store(
-        &self,
-        subpath: &Path,
-    ) -> Result<Box<dyn crate::io::BlockStore>, RegistryError> {
-        todo!()
-    }
-}
-
-pub struct PcieDriver {
-    admin_cq: Arc<Mutex<CompletionQueue>>,
-    admin_sq: Arc<Mutex<SubmissionQueue>>,
-}
-
-impl pcie::DeviceDriver for PcieDriver {}
-
 fn busy_wait_for_ready_bit(csts: *mut u8, value: bool) {
     unsafe {
         loop {
@@ -99,12 +82,69 @@ fn busy_wait_for_ready_bit(csts: *mut u8, value: bool) {
     }
 }
 
-impl PcieDriver {
+struct NvmeDeviceRegistryHandler {
+    base_address: VirtualAddress,
+    cap: ControllerCapabilities,
+    msix_table: Mutex<MsiXTable>,
+    namespace_ids: Vec<u32>,
+    admin_cq: Arc<Mutex<CompletionQueue>>,
+    admin_sq: Arc<Mutex<SubmissionQueue>>,
+}
+
+#[async_trait]
+impl RegistryHandler for NvmeDeviceRegistryHandler {
+    async fn open_block_store(
+        &self,
+        subpath: &Path,
+    ) -> Result<Box<dyn crate::io::BlockStore>, RegistryError> {
+        // create IO queues
+        // allocate MSI for IO completion queue
+        let msi = {
+            let mut ic = crate::exception::interrupt_controller();
+            ic.alloc_msi().expect("MSI support for NVMe")
+        };
+        let ivx = 1u16;
+        self.msix_table.lock().write(ivx as usize, &msi);
+        // TODO we need to be able to await these really
+        log::trace!("creating IO completion queue");
+        let mut io_cq = CompletionQueue::new_io(
+            1,
+            (2 * PAGE_SIZE / COMPLETION_ENTRY_SIZE) as u16,
+            self.doorbell_base(),
+            self.cap.doorbell_stride(),
+            self.admin_sq.clone(),
+            &mut self.admin_cq.lock(),
+            Some((ivx, msi.intid))
+        )
+        .expect("create IO completion queue");
+
+        log::trace!("creating IO submission queue");
+        let mut io_sq = SubmissionQueue::new_io(
+            1,
+            (2 * PAGE_SIZE / SUBMISSION_ENTRY_SIZE) as u16,
+            self.doorbell_base(),
+            self.cap.doorbell_stride(),
+            &mut io_cq,
+            self.admin_sq.clone(),
+            &mut self.admin_cq.lock(),
+            command::QueuePriority::Medium,
+        )
+        .expect("create IO submission queue");
+
+        todo!()
+    }
+}
+
+impl NvmeDeviceRegistryHandler {
+    fn doorbell_base(&self) -> VirtualAddress {
+        self.base_address.offset(0x1000)
+    }
+
     fn configure(
         pcie_addr: pcie::DeviceId,
         base_address: VirtualAddress,
         msix_table: MsiXTable,
-    ) -> Result<PcieDriver, crate::memory::MemoryError> {
+    ) -> Result<Self, pcie::Error> {
         let cap: ControllerCapabilities = unsafe {
             base_address
                 .offset(REG_CAP)
@@ -140,14 +180,14 @@ impl PcieDriver {
             (PAGE_SIZE / COMPLETION_ENTRY_SIZE) as u16,
             doorbell_base,
             cap.doorbell_stride(),
-        )?;
+        ).context(pcie::error::MemorySnafu)?;
 
         let mut admin_sq = SubmissionQueue::new_admin(
             (PAGE_SIZE / SUBMISSION_ENTRY_SIZE) as u16,
             doorbell_base,
             cap.doorbell_stride(),
             &mut admin_cq,
-        )?;
+        ).context(pcie::error::MemorySnafu)?;
 
         unsafe {
             log::trace!(
@@ -188,18 +228,18 @@ impl PcieDriver {
         );
 
         // 4. configure controller
+        let mut r = ControllerConfigReg(0);
+        r.set_arbitration_mechanism(0b000); // round robin, no weights
+        r.set_io_command_set_selected(0b000);
+        r.set_memory_page_size(PAGE_SIZE.ilog2() - 12);
+        // TODO: where should these actually come from? the spec says that you can read the
+        // required and maximum values from the Identify result, but we haven't sent that yet
+        r.set_io_submission_queue_entry_size(SUBMISSION_ENTRY_SIZE.ilog2());
+        r.set_io_completion_queue_entry_size(COMPLETION_ENTRY_SIZE.ilog2());
+        // set CC.EN = 1 to enable controller
+        r.set_enable(true);
+        log::trace!("new controller config = {:?}", r);
         unsafe {
-            let mut r = ControllerConfigReg(0);
-            r.set_arbitration_mechanism(0b000); // round robin, no weights
-            r.set_io_command_set_selected(0b000);
-            r.set_memory_page_size(PAGE_SIZE.ilog2() - 12);
-            // TODO: where should these actually come from? the spec says that you can read the
-            // required and maximum values from the Identify result, but we haven't sent that yet
-            r.set_io_submission_queue_entry_size(SUBMISSION_ENTRY_SIZE.ilog2());
-            r.set_io_completion_queue_entry_size(COMPLETION_ENTRY_SIZE.ilog2());
-            // set CC.EN = 1 to enable controller
-            r.set_enable(true);
-            log::trace!("new controller config = {:?}", r);
             cc.write_volatile(r);
         }
 
@@ -209,10 +249,13 @@ impl PcieDriver {
         busy_wait_for_ready_bit(csts, true);
         log::debug!("controller ready!");
 
+        // TODO: set up interrupts for admin queue
+
         // 7. send Identify commands
         // the identify structure returns a 4KiB structure which is fortunatly only a single
         // page
-        let id_res_buf = PhysicalBuffer::alloc(1, &Default::default())?;
+        let id_res_buf = PhysicalBuffer::alloc(1, &Default::default())
+            .context(pcie::error::MemorySnafu)?;
 
         log::trace!("sending identify command to controller");
         admin_sq
@@ -260,54 +303,7 @@ impl PcieDriver {
         }
         log::debug!("active namespaces: {namespace_ids:?}");
 
-        {
-            let mut reg = registry_mut();
-            let mut path = PathBuf::from("/dev/nvme/");
-            let device_id: String = format!("{}", pcie_addr);
-            path.push(device_id.as_str());
-            for namespace_id in &namespace_ids {
-                path.push(namespace_id.to_string().as_str());
-                reg.register(&path, Box::new(NvmeDeviceRegistryHandler {}));
-                path.pop();
-            }
-        }
-
         let admin_sq = Arc::new(Mutex::new(admin_sq));
-
-        // create IO queues
-        // allocate MSI for IO completion queue
-        let msi = {
-            let mut ic = crate::exception::interrupt_controller();
-            ic.alloc_msi().expect("MSI support for NVMe")
-        };
-        let ivx = 1u16;
-        msix_table.write(ivx as usize, &msi);
-        log::trace!("creating IO completion queue");
-        let mut io_cq = CompletionQueue::new_io(
-            1,
-            (2 * PAGE_SIZE / COMPLETION_ENTRY_SIZE) as u16,
-            doorbell_base,
-            cap.doorbell_stride(),
-            admin_sq.clone(),
-            &mut admin_cq,
-            ivx,
-            true,
-        )
-        .expect("create IO completion queue");
-
-        log::trace!("creating IO submission queue");
-        let mut io_sq = SubmissionQueue::new_io(
-            1,
-            (2 * PAGE_SIZE / SUBMISSION_ENTRY_SIZE) as u16,
-            doorbell_base,
-            cap.doorbell_stride(),
-            &mut io_cq,
-            admin_sq.clone(),
-            &mut admin_cq,
-            command::QueuePriority::Medium,
-        )
-        .expect("create IO submission queue");
-
         let admin_cq = Arc::new(Mutex::new(admin_cq));
 
         // >>>>>>>>>>>>>>>>>>>>>>>>>>>> LEFT OFF HERE <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
@@ -315,12 +311,11 @@ impl PcieDriver {
         // TODO:
         // ~ send Identify command and parse results (is there anything useful in here??)
         // - set up interrupts
-        // - find somewhere to keep block devices & define block device interface
         // - impl block device interface for NVMe
 
-        log::info!("NVMe device at {pcie_addr} initialized!");
+        log::info!("NVMe controller at {pcie_addr} initialized!");
 
-        Ok(PcieDriver { admin_cq, admin_sq })
+        Ok(Self { base_address, admin_cq, admin_sq, namespace_ids, msix_table: Mutex::new(msix_table), cap })
     }
 }
 
@@ -328,7 +323,7 @@ pub fn init_nvme_over_pcie(
     addr: pcie::DeviceId,
     config: &pcie::ConfigBlock,
     base: &pcie::BaseAddresses,
-) -> Result<Box<dyn pcie::DeviceDriver>, pcie::Error> {
+) -> Result<(), pcie::Error> {
     log::info!("initializing NVMe over PCIe at {addr}");
     log::info!(
         "vendor = {:x}, device id = {:x}",
@@ -369,13 +364,19 @@ pub fn init_nvme_over_pcie(
         }
     }
 
-    // TODO: error handling
-    Ok(Box::new(
-        PcieDriver::configure(
-            addr,
-            base_vaddress,
-            msix_table.expect("MSI-X is only current supported MSI scheme for NVMe driver"),
-        )
-        .unwrap(),
-    ))
+    let h = NvmeDeviceRegistryHandler::configure(
+        addr,
+        base_vaddress,
+        msix_table.expect("MSI-X is only current supported MSI scheme for NVMe driver"),
+    )?;
+
+    {
+        let mut reg = registry_mut();
+        let mut path = PathBuf::from("/dev/nvme/");
+        path.push(addr.to_string().as_str());
+        reg.register(&path, Box::new(h))
+            .context(pcie::error::RegistrySnafu)?;
+    }
+
+    Ok(())
 }

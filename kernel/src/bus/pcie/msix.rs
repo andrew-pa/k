@@ -94,3 +94,5 @@ impl MsiXTable {
         }
     }
 }
+
+unsafe impl Send for MsiXTable {}

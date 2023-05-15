@@ -7,14 +7,16 @@ use async_trait::async_trait;
 pub mod path;
 use hashbrown::HashMap;
 pub use path::{Path, PathBuf};
+use snafu::Snafu;
 use spin::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use self::path::{Component, Components};
 
+#[derive(Debug, Snafu)]
 pub enum RegistryError {
-    NotFound(PathBuf),
+    NotFound { path: PathBuf },
     Unsupported,
-    HandlerAlreadyRegistered(String),
+    HandlerAlreadyRegistered { name: String },
     InvalidPath,
 }
 
@@ -47,7 +49,7 @@ impl Node {
                 .add(prefix, name, handler),
             (None, Directory(children)) => {
                 if children.contains_key(name) {
-                    Err(RegistryError::HandlerAlreadyRegistered(name.into()))
+                    Err(RegistryError::HandlerAlreadyRegistered {name: name.into()})
                 } else {
                     children.insert(name.into(), Handler(handler));
                     Ok(())
@@ -56,7 +58,7 @@ impl Node {
             (Some(Component::Root | Component::ParentDir | Component::CurrentDir), _) => {
                 panic!("unexpected path component encountered")
             }
-            _ => Err(RegistryError::HandlerAlreadyRegistered(name.into())),
+            _ => Err(RegistryError::HandlerAlreadyRegistered{name:name.into()}),
         }
     }
 
@@ -68,7 +70,7 @@ impl Node {
             (Some(Component::Name(n)), Node::Directory(children)) => match children.get(n) {
                 Some(Node::Handler(h)) => Ok((path.as_path(), h.as_ref())),
                 Some(n) => n.find(path),
-                None => Err(RegistryError::NotFound(todo!())),
+                None => Err(RegistryError::NotFound { path: path.as_path().into() }),
             },
             (Some(Component::Root | Component::ParentDir | Component::CurrentDir), _) => {
                 panic!("unexpected path component encountered")

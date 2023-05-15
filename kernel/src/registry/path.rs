@@ -159,6 +159,7 @@ impl AsRef<Path> for &str {
     }
 }
 
+#[derive(Debug)]
 pub struct PathBuf {
     s: String,
 }
