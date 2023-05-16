@@ -61,6 +61,7 @@ impl CompletionQueueHandle {
         let cmd_id = self.next_cmd_id;
         self.next_cmd_id = self.next_cmd_id.wrapping_add(1);
         cmd.set_command_id(cmd_id).submit();
+        log::debug!("created future for NVMe command id {cmd_id}");
         CompletionFuture {
             cmd_id,
             pending_completions: self.pending_completions.clone(),
@@ -77,6 +78,40 @@ impl Drop for CompletionQueueHandle {
     }
 }
 
+fn handle_interrupt(
+    int_id: InterruptId,
+    qu: &mut CompletionQueue,
+    pending_completions: &Arc<CHashMapG<u16, PendingCompletion>>,
+) {
+    use PendingCompletion::*;
+    if let Some(cmp) = qu.pop() {
+        if let Some(mut pc) = pending_completions.get_mut(&cmp.id) {
+            *pc = match &*pc {
+                Waiting(w) => {
+                    log::debug!("waking future for NVMe command id {}", cmp.id);
+                    w.wake_by_ref();
+                    Ready(cmp)
+                },
+                Ready(old_cmp) => panic!("recieved second completion {cmp:?} for id with pending ready completion {old_cmp:?}"),
+            }
+        } else {
+            pending_completions.insert(cmp.id, Ready(cmp));
+        }
+    } else {
+        // panic here?
+        log::error!("got NVMe completion interrupt but the completion queue did not have an available completion (queue {}, int id {int_id})", qu.queue_id());
+    }
+}
+
+pub fn enable_interrupts(int_id: InterruptId) {
+    let ic = exception::interrupt_controller();
+    ic.set_target_cpu(int_id, 0x1);
+    ic.set_priority(int_id, 0);
+    ic.set_config(int_id, exception::InterruptConfig::Level);
+    ic.set_pending(int_id, false);
+    ic.set_enable(int_id, true);
+}
+
 pub fn register_completion_queue(
     int_id: InterruptId,
     mut qu: CompletionQueue,
@@ -84,27 +119,12 @@ pub fn register_completion_queue(
     let pending_completions: Arc<CHashMapG<u16, PendingCompletion>> = Arc::new(Default::default());
     {
         let pending_completions = pending_completions.clone();
-        exception::interrupt_handlers().insert(int_id, Box::new(move |int_id, _| {
-            use PendingCompletion::*;
-            if let Some(cmp) = qu.pop() {
-                if let Some(mut pc) = pending_completions.get_mut(&cmp.id) {
-                    *pc = match &*pc {
-                        Waiting(w) => {
-                            w.wake_by_ref();
-                            Ready(cmp)
-                        },
-                        Ready(old_cmp) => panic!("recieved second completion {cmp:?} for id with pending ready completion {old_cmp:?}"),
-                    }
-                } else {
-                    pending_completions.insert(cmp.id, Ready(cmp));
-                }
-            } else {
-                // panic here?
-                log::error!("got NVMe completion interrupt but the completion queue did not have an available completion (queue {}, int id {int_id})", qu.queue_id());
-            }
-        }));
+        exception::interrupt_handlers().insert(
+            int_id,
+            Box::new(move |int_id, _| handle_interrupt(int_id, &mut qu, &pending_completions)),
+        );
     }
-    // TODO: enable interrupts
+    enable_interrupts(int_id);
     CompletionQueueHandle {
         next_cmd_id: 0,
         pending_completions,

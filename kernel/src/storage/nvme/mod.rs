@@ -128,8 +128,10 @@ impl RegistryHandler for NvmeDeviceRegistryHandler {
             let mut ic = crate::exception::interrupt_controller();
             ic.alloc_msi().expect("MSI support for NVMe")
         };
-        let ivx = 1u16;
+        // TODO: better way to allocate MSI-X vector slots
+        let ivx = namespace_id as u16;
         self.msix_table.lock().write(ivx as usize, &msi);
+        log::debug!("IO completion queue IRQ: {msi:?}");
         // TODO: we need to be able to await these really
         log::trace!("creating IO completion queue");
         let mut io_cq = CompletionQueue::new_io(
@@ -139,7 +141,7 @@ impl RegistryHandler for NvmeDeviceRegistryHandler {
             self.cap.doorbell_stride(),
             self.admin_sq.clone(),
             &mut self.admin_cq.lock(),
-            Some((ivx, msi.intid)),
+            Some(ivx),
         )
         .expect("create IO completion queue");
 

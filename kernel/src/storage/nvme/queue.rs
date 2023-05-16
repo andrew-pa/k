@@ -27,33 +27,42 @@ impl<'sq> Command<'sq> {
 
     // low-level accessors
 
+    #[inline]
     pub fn set_command_id(mut self, id: u16) -> Command<'sq> {
         self.cmd[0].set_bit_range(31, 16, id);
         self
     }
 
+    #[inline]
     pub fn set_opcode(mut self, op: u8) -> Command<'sq> {
         self.cmd[0].set_bit_range(7, 0, op);
         self
     }
 
+    #[inline]
     pub fn set_namespace_id(mut self, id: u32) -> Command<'sq> {
         self.cmd[1] = id;
         self
     }
 
+    #[inline]
     pub fn set_metadata_ptr(mut self, ptr: u64) -> Command<'sq> {
-        self.cmd[4] = ptr as u32;
-        self.cmd[5] = (ptr >> 32) as u32;
-        self
+        self.set_qword(4, ptr)
     }
 
+    #[inline]
     pub fn set_data_ptr_single(mut self, ptr: PhysicalAddress) -> Command<'sq> {
-        self.cmd[6] = ptr.0 as u32;
-        self.cmd[7] = (ptr.0 >> 32) as u32;
+        self.set_qword(6, ptr.0 as u64)
+    }
+
+    #[inline]
+    pub fn set_qword(mut self, idx: usize, data: u64) -> Command<'sq> {
+        self.cmd[idx] = data as u32;
+        self.cmd[idx + 1] = (data >> 32) as u32;
         self
     }
 
+    #[inline]
     pub fn set_dword(mut self, idx: usize, data: u32) -> Command<'sq> {
         self.cmd[idx] = data;
         self
@@ -232,11 +241,11 @@ bitfield! {
     pub struct CompletionStatus(u16);
     impl Debug;
     u8;
-    do_not_retry, _: 15;
-    more, _: 14;
-    command_retry_delay, _: 13, 12;
-    status_code_type, _: 11, 9;
-    status_code, _: 8, 1;
+    pub do_not_retry, _: 15;
+    pub more, _: 14;
+    pub command_retry_delay, _: 13, 12;
+    pub status_code_type, _: 11, 9;
+    pub status_code, _: 8, 1;
     phase_tag, _: 0;
 }
 
@@ -311,7 +320,7 @@ impl CompletionQueue {
         doorbell_stride: u8,
         parent: Arc<Mutex<SubmissionQueue>>,
         parent_cq: &mut CompletionQueue,
-        interrupt_index_and_id: Option<(u16, InterruptId)>,
+        interrupt_index: Option<u16>,
     ) -> Result<Self, QueueCreateError> {
         assert!(id > 0);
         let mut s = Self::new(
@@ -330,11 +339,8 @@ impl CompletionQueue {
             .create_io_completion_queue(
                 id,
                 s.size(),
-                interrupt_index_and_id
-                    .as_ref()
-                    .map(|(ix, _)| *ix)
-                    .unwrap_or(0),
-                interrupt_index_and_id.is_some(),
+                interrupt_index.unwrap_or(0),
+                interrupt_index.is_some(),
                 true,
             )
             .set_data_ptr_single(s.address())
