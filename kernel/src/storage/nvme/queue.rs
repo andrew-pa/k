@@ -6,7 +6,10 @@ use snafu::Snafu;
 use spin::Mutex;
 
 use super::{command::QueuePriority, *};
-use crate::{memory::{paging::PageTableEntryOptions, MemoryError, PhysicalAddress, PhysicalBuffer}, exception::{InterruptId, self}};
+use crate::{
+    exception::{self, InterruptId},
+    memory::{paging::PageTableEntryOptions, MemoryError, PhysicalAddress, PhysicalBuffer},
+};
 
 pub struct Command<'sq> {
     parent: &'sq mut SubmissionQueue,
@@ -140,7 +143,8 @@ impl SubmissionQueue {
             doorbell_stride,
             associated_completion_queue,
             Some(parent.clone()),
-        ).context(MemorySnafu)?;
+        )
+        .context(MemorySnafu)?;
         // TODO: for now all queues are physically continuous
         parent
             .lock()
@@ -246,16 +250,16 @@ impl Clone for CompletionStatus {
 #[derive(Clone, Debug)]
 pub struct Completion {
     /// command specfic field
-    cmd: u32,
+    pub cmd: u32,
     /// reserved field
-    res: u32,
+    pub res: u32,
     /// new head pointer for submission queue `sqid`
-    head: u16,
+    pub head: u16,
     // ID of the submission queue that submitted the command
-    sqid: QueueId,
+    pub sqid: QueueId,
     /// command identifier specified by host
-    id: u16,
-    status: CompletionStatus,
+    pub id: u16,
+    pub status: CompletionStatus,
 }
 
 pub struct CompletionQueue {
@@ -316,22 +320,29 @@ impl CompletionQueue {
             doorbell_base,
             doorbell_stride,
             Some(parent.clone()),
-        ).context(MemorySnafu)?;
+        )
+        .context(MemorySnafu)?;
         // TODO: for now all queues are physically continuous
         parent
             .lock()
             .begin()
             .expect("admin queue full")
-            .create_io_completion_queue(id, s.size(), interrupt_index_and_id.as_ref().map(|(ix, _)| *ix).unwrap_or(0), interrupt_index_and_id.is_some(), true)
+            .create_io_completion_queue(
+                id,
+                s.size(),
+                interrupt_index_and_id
+                    .as_ref()
+                    .map(|(ix, _)| *ix)
+                    .unwrap_or(0),
+                interrupt_index_and_id.is_some(),
+                true,
+            )
             .set_data_ptr_single(s.address())
             .submit();
         let cmpl = parent_cq.busy_wait_for_completion();
         log::trace!("create IO CompletionQueue completion={cmpl:?}");
         match (cmpl.status.status_code_type(), cmpl.status.status_code()) {
-            (0, 0) => {
-                s.register_interrupt_handler(interrupt_index_and_id);
-                Ok(s)
-            },
+            (0, 0) => Ok(s),
             (0, code) => Err(QueueCreateError::Generic { code }),
             (1, 1) => Err(QueueCreateError::InvalidQueueId),
             (1, 2) => Err(QueueCreateError::InvalidQueueSize),
@@ -340,13 +351,8 @@ impl CompletionQueue {
         }
     }
 
-    fn register_interrupt_handler(&mut self, interrupt_index_and_id: Option<(u16, InterruptId)>) {
-        if let Some((int_ix, int_id)) = interrupt_index_and_id {
-            // TODO: set MSI interrupt mask
-            exception::interrupt_handlers().insert(int_id, |id, regs| {
-                log::debug!("NVMe completion interrupt");
-            });
-        }
+    pub fn queue_id(&self) -> QueueId {
+        self.id
     }
 
     pub fn size(&self) -> u16 {

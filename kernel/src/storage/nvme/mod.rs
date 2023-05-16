@@ -1,7 +1,9 @@
 use crate::{
     bus::pcie::{self, msix::MsiXTable},
     memory::{PhysicalBuffer, VirtualAddress, PAGE_SIZE},
-    registry::{registry_mut, Path, PathBuf, RegistryError, RegistryHandler},
+    registry::{
+        self, path::Component, registry_mut, Path, PathBuf, RegistryError, RegistryHandler,
+    },
 };
 use alloc::{
     boxed::Box,
@@ -18,9 +20,10 @@ use spin::Mutex;
 
 use self::queue::{CompletionQueue, SubmissionQueue};
 
+mod block_store;
 mod command;
-mod queue;
 mod interrupt;
+mod queue;
 
 // PCIe Register offsets (in bytes)
 const REG_CAP: isize = 0x00;
@@ -62,6 +65,14 @@ bitfield! {
     submission_queue_size, set_submission_queue_size: 11, 0;
 }
 
+bitfield! {
+    struct LogicalBlockAddressFormat(u32);
+    impl Debug;
+    relative_performance, _: 25, 24;
+    data_size, _: 23, 16;
+    metadata_size, _: 15, 0;
+}
+
 impl Copy for AdminQueueAttributes {}
 impl Clone for AdminQueueAttributes {
     fn clone(&self) -> Self {
@@ -97,6 +108,20 @@ impl RegistryHandler for NvmeDeviceRegistryHandler {
         &self,
         subpath: &Path,
     ) -> Result<Box<dyn crate::io::BlockStore>, RegistryError> {
+        let namespace_id = match subpath.components().next() {
+            Some(Component::Name(n)) => n
+                .parse::<u32>()
+                .map_err(|e| Box::new(e) as Box<dyn core::error::Error>)
+                .context(registry::error::OtherSnafu)?,
+            _ => return Err(RegistryError::InvalidPath),
+        };
+        if !self.namespace_ids.contains(&namespace_id) {
+            log::debug!("{:?}", self.namespace_ids);
+            return Err(RegistryError::NotFound {
+                path: subpath.into(),
+            });
+        }
+
         // create IO queues
         // allocate MSI for IO completion queue
         let msi = {
@@ -105,7 +130,7 @@ impl RegistryHandler for NvmeDeviceRegistryHandler {
         };
         let ivx = 1u16;
         self.msix_table.lock().write(ivx as usize, &msi);
-        // TODO we need to be able to await these really
+        // TODO: we need to be able to await these really
         log::trace!("creating IO completion queue");
         let mut io_cq = CompletionQueue::new_io(
             1,
@@ -114,7 +139,7 @@ impl RegistryHandler for NvmeDeviceRegistryHandler {
             self.cap.doorbell_stride(),
             self.admin_sq.clone(),
             &mut self.admin_cq.lock(),
-            Some((ivx, msi.intid))
+            Some((ivx, msi.intid)),
         )
         .expect("create IO completion queue");
 
@@ -131,7 +156,56 @@ impl RegistryHandler for NvmeDeviceRegistryHandler {
         )
         .expect("create IO submission queue");
 
-        todo!()
+        let io_cq = interrupt::register_completion_queue(msi.intid, io_cq);
+
+        // query controller for supported_block_size
+        // TODO: for now this is synchronous, but it should be async as well
+        let id_res_buf = PhysicalBuffer::alloc(1, &Default::default())
+            .map_err(|e| Box::new(e) as Box<dyn core::error::Error>)
+            .context(registry::error::OtherSnafu)?;
+
+        let cmp = {
+            log::trace!("sending identify command to namespace {namespace_id}");
+            self.admin_sq
+                .lock()
+                .begin()
+                .expect("queue just created, can not be full")
+                .set_command_id(0xa000)
+                .identify(0, command::IdentifyStructure::Namespace)
+                .set_namespace_id(namespace_id)
+                .set_data_ptr_single(id_res_buf.physical_address())
+                .submit();
+
+            log::trace!("waiting for identify command completion");
+            self.admin_cq.lock().busy_wait_for_completion()
+        };
+
+        let (size, cap, util, lbaf) = unsafe {
+            let info: *const u8 = id_res_buf.virtual_address().as_ptr();
+            let info64 = info as *const u64;
+
+            // get current block size descriptor index
+            let flbas = info.offset(26).read_volatile() & 0x7;
+            let lbaf = info.offset(128 + 4 * flbas as isize) as *const LogicalBlockAddressFormat;
+
+            (
+                info64.read_volatile(),
+                info64.offset(1).read_volatile(),
+                info64.offset(2).read_volatile(),
+                lbaf.read_volatile(),
+            )
+        };
+        log::debug!("NVMe namespace {namespace_id} has size={size}, capacity={cap} and utilitization={util}, format={lbaf:?}");
+
+        Ok(Box::new(block_store::NamespaceBlockStore {
+            total_size: size,
+            capacity: cap,
+            utilitization: util,
+            namespace_id,
+            supported_block_size: 1 << lbaf.data_size(),
+            io_sq,
+            io_cq,
+        }))
     }
 }
 
@@ -180,14 +254,16 @@ impl NvmeDeviceRegistryHandler {
             (PAGE_SIZE / COMPLETION_ENTRY_SIZE) as u16,
             doorbell_base,
             cap.doorbell_stride(),
-        ).context(pcie::error::MemorySnafu)?;
+        )
+        .context(pcie::error::MemorySnafu)?;
 
         let mut admin_sq = SubmissionQueue::new_admin(
             (PAGE_SIZE / SUBMISSION_ENTRY_SIZE) as u16,
             doorbell_base,
             cap.doorbell_stride(),
             &mut admin_cq,
-        ).context(pcie::error::MemorySnafu)?;
+        )
+        .context(pcie::error::MemorySnafu)?;
 
         unsafe {
             log::trace!(
@@ -254,8 +330,8 @@ impl NvmeDeviceRegistryHandler {
         // 7. send Identify commands
         // the identify structure returns a 4KiB structure which is fortunatly only a single
         // page
-        let id_res_buf = PhysicalBuffer::alloc(1, &Default::default())
-            .context(pcie::error::MemorySnafu)?;
+        let id_res_buf =
+            PhysicalBuffer::alloc(1, &Default::default()).context(pcie::error::MemorySnafu)?;
 
         log::trace!("sending identify command to controller");
         admin_sq
@@ -315,7 +391,14 @@ impl NvmeDeviceRegistryHandler {
 
         log::info!("NVMe controller at {pcie_addr} initialized!");
 
-        Ok(Self { base_address, admin_cq, admin_sq, namespace_ids, msix_table: Mutex::new(msix_table), cap })
+        Ok(Self {
+            base_address,
+            admin_cq,
+            admin_sq,
+            namespace_ids,
+            msix_table: Mutex::new(msix_table),
+            cap,
+        })
     }
 }
 

@@ -4,6 +4,7 @@ use core::{
     ptr::null_mut,
 };
 
+use bitfield::bitfield;
 use spin::Mutex;
 
 use crate::memory::paging::PageTableEntryOptions;
@@ -13,8 +14,28 @@ use super::{VirtualAddress, PAGE_SIZE};
 const KERNEL_HEAP_START: VirtualAddress = VirtualAddress(0xffff_ff00_0000_0000);
 const INIT_SIZE: usize = 8; // pages
 
-struct AllocatedBlockHeader {
+/*struct AllocatedBlockHeader {
     size: usize,
+}*/
+bitfield! {
+    /// An allocated block header stores the size of the allocated block, and the amount of padding that preceeds this header.
+    struct AllocatedBlockHeader(u64);
+    // TODO: we could probably use less bits here, if needed
+    u8, padding, set_padding: 63,56;
+    size, set_size: 55, 0;
+}
+
+impl AllocatedBlockHeader {
+    fn new(size: usize, padding: usize) -> Self {
+        let mut s = AllocatedBlockHeader(0);
+        s.set_size(size as u64);
+        s.set_padding(padding as u8);
+        s
+    }
+
+    fn padding_size(&self) -> isize {
+        self.padding() as isize
+    }
 }
 
 #[derive(Debug)]
@@ -441,19 +462,18 @@ unsafe impl GlobalAlloc for KernelGlobalAlloc {
                 // use the whole block
                 block.size
             };
+            assert!(actual_block_size >= size_of::<FreeBlockHeader>());
+            let padded_address = block.address.offset(padding as isize);
             // write the allocated block header
-            let header: *mut AllocatedBlockHeader = block.address.as_ptr();
+            let header: *mut AllocatedBlockHeader = padded_address.as_ptr();
             unsafe {
-                *header.as_mut().expect("p not null") = AllocatedBlockHeader {
-                    size: actual_block_size,
-                };
+                *header.as_mut().expect("p not null") =
+                    AllocatedBlockHeader::new(actual_block_size, padding);
             }
             // return ptr to new allocated block
-            let data = block
-                .address
+            let data = padded_address
                 .as_ptr::<u8>()
-                .offset(size_of::<AllocatedBlockHeader>() as isize)
-                .offset(padding as isize);
+                .offset(size_of::<AllocatedBlockHeader>() as isize);
             log::trace!(
                 "new allocated block @ {} (data @ {}), size = {}",
                 block.address,
@@ -476,26 +496,25 @@ unsafe impl GlobalAlloc for KernelGlobalAlloc {
             return;
         }
         // TODO: we never return physical memory back to the system once it has been allocated, it just goes back in the heap free pool
-        // WARN: use the provided layout's alignment to compute padding offset
-        // TODO: is this padding computation correct?
-        let header = ptr.offset(
-            -((size_of::<AllocatedBlockHeader>()
-                + layout
-                    .align()
-                    .saturating_sub(size_of::<AllocatedBlockHeader>())) as isize),
-        ) as *mut AllocatedBlockHeader;
+        let header = ptr.offset(-((size_of::<AllocatedBlockHeader>()) as isize))
+            as *mut AllocatedBlockHeader;
+        let header_ref = header.as_ref().unwrap();
+        let block_size = header_ref.size() as usize;
+        let block_address = VirtualAddress::from(header).offset(-header_ref.padding_size());
         log::trace!(
-            "block header for {:x} at {:x}",
+            "block header for {:x} at {:x} (block address {block_address})",
             ptr as usize,
             header as usize
         );
-        let block_size = header.as_ref().unwrap().size;
-        assert!(
-            layout.size() <= block_size,
-            "{layout:?}.size <= block_size@{block_size}"
-        );
+        if layout.size() > block_size {
+            self.log_heap_info(log::Level::Error);
+            assert!(
+                layout.size() <= block_size,
+                "{layout:?}.size <= block_size@{block_size}"
+            );
+        }
         self.add_free_block(FreeBlock {
-            address: VirtualAddress::from(header),
+            address: block_address,
             size: block_size,
         });
         self.log_heap_info(log::Level::Trace);

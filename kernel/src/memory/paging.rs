@@ -2,7 +2,7 @@
 use core::{cell::OnceCell, ops::Range};
 
 use bitfield::bitfield;
-use snafu::{Snafu, ResultExt};
+use snafu::{ResultExt, Snafu};
 use spin::Mutex;
 
 use super::{
@@ -192,7 +192,7 @@ pub enum MapError {
         virt_start: VirtualAddress,
     },
     Memory {
-        source: MemoryError
+        source: MemoryError,
     },
 }
 

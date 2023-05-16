@@ -58,6 +58,14 @@ pub extern "C" fn kmain() {
     // initialize system timer and interrupt
     init::configure_time_slicing(&dt);
 
+    tasks::spawn(async {
+        let bs = registry::registry()
+            .open_block_store(registry::Path::new("/dev/nvme/pci@0:2:0/1"))
+            .await
+            .unwrap();
+        log::info!("supported block size = {}", bs.supported_block_size());
+    });
+
     #[cfg(test)]
     tasks::spawn(async {
         test_main();

@@ -13,11 +13,13 @@ use spin::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use self::path::{Component, Components};
 
 #[derive(Debug, Snafu)]
+#[snafu(visibility(pub), module(error))]
 pub enum RegistryError {
     NotFound { path: PathBuf },
     Unsupported,
     HandlerAlreadyRegistered { name: String },
     InvalidPath,
+    Other { source: Box<dyn snafu::Error> },
 }
 
 #[async_trait]
@@ -26,7 +28,7 @@ pub trait RegistryHandler {
 }
 
 // TODO: storing these as strings is bad as short strings might take up an unexpectedly large
-// amount of memory due to heap block headers and alighment requirements
+// amount of memory due to heap block headers and alignment requirements
 // maybe it would be better to intern them somehow?
 enum Node {
     Directory(HashMap<String, Node>),
@@ -49,16 +51,16 @@ impl Node {
                 .add(prefix, name, handler),
             (None, Directory(children)) => {
                 if children.contains_key(name) {
-                    Err(RegistryError::HandlerAlreadyRegistered {name: name.into()})
+                    Err(RegistryError::HandlerAlreadyRegistered { name: name.into() })
                 } else {
                     children.insert(name.into(), Handler(handler));
                     Ok(())
                 }
             }
-            (Some(Component::Root | Component::ParentDir | Component::CurrentDir), _) => {
-                panic!("unexpected path component encountered")
+            (p @ Some(Component::Root | Component::ParentDir | Component::CurrentDir), _) => {
+                panic!("unexpected path component encountered {p:?}")
             }
-            _ => Err(RegistryError::HandlerAlreadyRegistered{name:name.into()}),
+            _ => Err(RegistryError::HandlerAlreadyRegistered { name: name.into() }),
         }
     }
 
@@ -70,10 +72,12 @@ impl Node {
             (Some(Component::Name(n)), Node::Directory(children)) => match children.get(n) {
                 Some(Node::Handler(h)) => Ok((path.as_path(), h.as_ref())),
                 Some(n) => n.find(path),
-                None => Err(RegistryError::NotFound { path: path.as_path().into() }),
+                None => Err(RegistryError::NotFound {
+                    path: path.as_path().into(),
+                }),
             },
-            (Some(Component::Root | Component::ParentDir | Component::CurrentDir), _) => {
-                panic!("unexpected path component encountered")
+            (p @ Some(Component::Root | Component::ParentDir | Component::CurrentDir), _) => {
+                panic!("unexpected path component encountered {p:?}")
             }
             (None, Node::Directory(_)) => Err(todo!()),
             _ => todo!(),
@@ -113,7 +117,12 @@ impl Registry {
     }
 
     pub async fn open_block_store(&self, p: &Path) -> Result<Box<dyn BlockStore>, RegistryError> {
-        let (subpath, h) = self.root.find(p.components())?;
+        let mut pc = p.components();
+        match pc.next() {
+            Some(Component::Root) => {}
+            _ => return Err(RegistryError::InvalidPath),
+        }
+        let (subpath, h) = self.root.find(pc)?;
         h.open_block_store(subpath).await
     }
 }

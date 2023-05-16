@@ -54,7 +54,7 @@ pub trait InterruptController {
     // TODO: free MSIs
 }
 
-pub type InterruptHandler = fn(InterruptId, *mut Registers);
+pub type InterruptHandler = Box<dyn FnMut(InterruptId, *mut Registers)>;
 pub type SyscallHandler = fn(u16, *mut Registers);
 
 static mut IC: OnceCell<Mutex<Box<dyn InterruptController>>> = OnceCell::new();
@@ -228,8 +228,8 @@ unsafe extern "C" fn handle_interrupt(regs: *mut Registers, _esr: usize, _far: u
     let ic = interrupt_controller();
     let id = ic.ack_interrupt();
     log::trace!("interrupt {id}");
-    match interrupt_handlers().get(&id) {
-        Some(h) => (*h)(id, regs),
+    match interrupt_handlers().get_mut(&id) {
+        Some(mut h) => (*h)(id, regs),
         None => log::warn!("unhandled interrupt {id}"),
     }
     ic.finish_interrupt(id);

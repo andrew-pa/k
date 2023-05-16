@@ -1,3 +1,5 @@
+use alloc::boxed::Box;
+
 use crate::dtb::DeviceTree;
 
 use super::*;
@@ -33,11 +35,14 @@ pub fn configure_time_slicing(dt: &DeviceTree) {
     timer::set_enabled(true);
     timer::set_interrupts_enabled(true);
 
-    exception::interrupt_handlers().insert(timer_irq, |id, regs| {
-        log::trace!("{id} timer interrupt! {}", timer::counter());
-        process::scheduler::run_scheduler(regs);
-        timer::write_timer_value(timer::frequency() >> 4);
-    });
+    exception::interrupt_handlers().insert(
+        timer_irq,
+        Box::new(|id, regs| {
+            log::trace!("{id} timer interrupt! {}", timer::counter());
+            process::scheduler::run_scheduler(regs);
+            timer::write_timer_value(timer::frequency() >> 4);
+        }),
+    );
 
     // set timer to go off after we halt
     timer::write_timer_value(timer::frequency() >> 4);
