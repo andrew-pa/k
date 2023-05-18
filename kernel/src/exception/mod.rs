@@ -10,6 +10,7 @@ pub type InterruptId = u32;
 
 pub mod gic;
 
+#[derive(Debug)]
 pub enum InterruptConfig {
     Edge,
     Level,
@@ -23,6 +24,12 @@ pub struct MsiDescriptor {
 }
 
 pub trait InterruptController {
+    fn device_tree_interrupt_spec_byte_size(&self) -> usize;
+    fn parse_interrupt_spec_from_device_tree(
+        &self,
+        data: &[u8],
+    ) -> Option<(InterruptId, InterruptConfig)>;
+
     fn is_enabled(&self, id: InterruptId) -> bool;
     fn set_enable(&self, id: InterruptId, enabled: bool);
 

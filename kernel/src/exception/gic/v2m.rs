@@ -15,6 +15,7 @@ pub struct V2mMsiController {
 bitfield::bitfield! {
     struct V2mMsiTypeRegister(u32);
     impl Debug;
+    // qemu adds 32 to this value
     spi_start, set_spi_start: 25, 16;
     num_spis, _: 9, 0;
 }
@@ -33,8 +34,8 @@ impl V2mMsiController {
             V2mMsiTypeRegister(unsafe { basep.offset(V2M_MSI_TYPER >> 2).read_volatile() });
         // TODO: why is this value not what it says in the QEMU headers?
         // perhaps there is a fixed offset for SPIs
-        typer.set_spi_start(48);
-        log::info!("V2m IIDR = 0x{iidr:x}, TYPER={typer:x?}");
+        log::info!("V2m IIDR = 0x{iidr:x}, TYPER={typer:?}");
+        // typer.set_spi_start(0x24);
         Self {
             register_addr: PhysicalAddress(base.0.wrapping_add_signed(V2M_MSI_SETSPI_NS)),
             spi_start: typer.spi_start(),
@@ -50,6 +51,11 @@ impl MsiController for V2mMsiController {
             panic!("ran out of MSIs");
         }
         let intid = self.next_spi;
+        log::debug!(
+            "{intid} qemu spi = {}-{}",
+            (intid & 0x3ff),
+            (self.spi_start + 32)
+        );
         self.next_spi += 1;
         MsiDescriptor {
             register_addr: self.register_addr,

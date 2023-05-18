@@ -124,10 +124,13 @@ impl RegistryHandler for NvmeDeviceRegistryHandler {
 
         // create IO queues
         // allocate MSI for IO completion queue
-        let msi = {
+        let mut msi = {
             let mut ic = crate::exception::interrupt_controller();
             ic.alloc_msi().expect("MSI support for NVMe")
         };
+        msi.intid = 0x24;
+        msi.data_value = 0x24;
+
         // TODO: better way to allocate MSI-X vector slots
         let ivx = namespace_id as u16;
         self.msix_table.lock().write(ivx as usize, &msi);

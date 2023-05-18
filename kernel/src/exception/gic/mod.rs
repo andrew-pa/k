@@ -6,6 +6,7 @@ use bitvec::{
     order::Lsb0,
     ptr::{BitPtr, Const, Mut},
 };
+use byteorder::{BigEndian, ByteOrder};
 
 use crate::{
     dtb::{DeviceTree, MemRegionIter, StructureItem},
@@ -34,6 +35,7 @@ pub struct GenericInterruptController {
     distributor_base: *mut u32,
     cpu_base: *mut u32,
     msi_ctrl: Option<Box<dyn MsiController>>,
+    dt_interrupt_cells: usize,
 }
 
 fn find_regs_for_node<'i, 'a: 'i>(
@@ -60,6 +62,7 @@ impl GenericInterruptController {
         let mut gic_mem_regions = None;
         let mut found_node = false;
         let mut msi_ctrl = None;
+        let mut intc_cells = 0;
 
         let mut dt = device_tree.iter_structure();
         while let Some(n) = dt.next() {
@@ -99,6 +102,7 @@ impl GenericInterruptController {
                     "reg" => {
                         gic_mem_regions = Some(MemRegionIter::for_data(data));
                     }
+                    "#interrupt-cells" => intc_cells = BigEndian::read_u32(data),
                     _ => {}
                 },
                 _ => {}
@@ -125,6 +129,7 @@ impl GenericInterruptController {
                 distributor_base: distributor_base.to_virtual_canonical().as_ptr(),
                 cpu_base: cpu_base.to_virtual_canonical().as_ptr(),
                 msi_ctrl,
+                dt_interrupt_cells: intc_cells as usize,
             }
         };
         s.init_distributor();
@@ -328,6 +333,49 @@ impl InterruptController for GenericInterruptController {
 
     fn alloc_msi(&mut self) -> Option<MsiDescriptor> {
         self.msi_ctrl.as_mut().map(|c| c.alloc_msi())
+    }
+
+    fn device_tree_interrupt_spec_byte_size(&self) -> usize {
+        self.dt_interrupt_cells * size_of::<u32>()
+    }
+
+    fn parse_interrupt_spec_from_device_tree(
+        &self,
+        data: &[u8],
+    ) -> Option<(InterruptId, InterruptConfig)> {
+        if data.len() != self.device_tree_interrupt_spec_byte_size() {
+            return None;
+        }
+        let ty = BigEndian::read_u32(&data[0..4]);
+        let irq = BigEndian::read_u32(&data[4..8]);
+        let flags = BigEndian::read_u32(&data[8..12]);
+        let offset = match ty {
+            0 => {
+                // SPI type interrupt
+                assert!(irq <= 987);
+                32
+            }
+            1 => {
+                // PPI type interrupt
+                assert!(irq <= 15);
+                16
+            }
+            _ => panic!("unknown interrupt spec type: {ty} (irq:{irq} flags:{flags})"),
+        };
+        let cfg = match flags & 0xf {
+            // low->high trigger
+            1 => InterruptConfig::Edge,
+            // high->low trigger
+            2 => InterruptConfig::Edge,
+            // active high
+            3 => InterruptConfig::Level,
+            // active low
+            4 => InterruptConfig::Level,
+            _ => panic!("unknown interrupt flag: {flags} (ty:{ty} irq:{irq})"),
+        };
+        let irq_offsetted = irq + offset;
+        log::debug!("timer interrupt in device tree as {irq} with type={ty:x} and flags={flags:x} => {irq_offsetted}, {cfg:?}");
+        Some((irq_offsetted, cfg))
     }
 }
 

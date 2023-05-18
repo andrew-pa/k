@@ -59,11 +59,14 @@ pub extern "C" fn kmain() {
     init::configure_time_slicing(&dt);
 
     tasks::spawn(async {
-        let bs = registry::registry()
+        let mut bs = registry::registry()
             .open_block_store(registry::Path::new("/dev/nvme/pci@0:2:0/1"))
             .await
             .unwrap();
         log::info!("supported block size = {}", bs.supported_block_size());
+        let buf = memory::PhysicalBuffer::alloc(1, &Default::default()).unwrap();
+        bs.read_blocks(io::LogicalAddress(0), 1, buf.physical_address())
+            .await;
     });
 
     #[cfg(test)]

@@ -107,7 +107,7 @@ pub fn enable_interrupts(int_id: InterruptId) {
     let ic = exception::interrupt_controller();
     ic.set_target_cpu(int_id, 0x1);
     ic.set_priority(int_id, 0);
-    ic.set_config(int_id, exception::InterruptConfig::Level);
+    ic.set_config(int_id, exception::InterruptConfig::Edge);
     ic.set_pending(int_id, false);
     ic.set_enable(int_id, true);
 }

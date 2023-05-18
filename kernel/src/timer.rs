@@ -6,7 +6,10 @@ use bitfield::bitfield;
 use byteorder::{BigEndian, ByteOrder};
 use core::{arch::asm, ffi::CStr};
 
-use crate::dtb::{DeviceTree, StructureItem};
+use crate::{
+    dtb::{DeviceTree, StructureItem},
+    exception,
+};
 
 pub fn read_compare_value() -> u64 {
     let mut cv: u64;
@@ -114,20 +117,14 @@ pub fn find_timer_properties(device_tree: &DeviceTree) -> TimerProperties {
     device_tree.process_properties_for_node("timer", |name, data, _| {
         match name {
             "interrupts" => {
-                let mut i = 0;
-                while i < data.len() {
-                    let ty = BigEndian::read_u32(&data[i..]);
-                    i += 4;
-                    let irq = BigEndian::read_u32(&data[i..]);
-                    i += 4;
-                    let flags = BigEndian::read_u32(&data[i..]);
-                    i += 4;
-                    log::debug!("timer interrupt at {irq} with type={ty:x} and flags={flags:x}");
-                }
-                // TODO: this is the actual IRQ that we get. why 30?! that's not in the device tree!
-                // this may be because we're looking to get a PPI, and that means
-                // we need to add 16 to the IRQ which is 14 normally
-                interrupt = Some(30);
+                log::debug!("timer interrupt data = {data:?}");
+                let intc = exception::interrupt_controller();
+                let ib = intc.device_tree_interrupt_spec_byte_size();
+                // read the second interrupt spec, which should be the virtual timer
+                let spec = intc.parse_interrupt_spec_from_device_tree(&data[ib..2 * ib]);
+                log::debug!("got timer interrupt spec {spec:?}");
+                // TODO: do we care about edge vs level?
+                interrupt = spec.map(|(id, _)| id); // Some(30);
             }
             _ => {}
         }
