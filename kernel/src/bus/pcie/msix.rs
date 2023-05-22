@@ -84,6 +84,8 @@ impl MsiXTable {
         }
     }
 
+    /// Writes an MSI descriptor into the table at index
+    /// The interrupt will start masked, and must be unmasked when the driver is ready to process interrupts
     pub fn write(&self, index: usize, msi: &crate::exception::MsiDescriptor) {
         assert!(index < self.size);
         self.set_mask(index, true);

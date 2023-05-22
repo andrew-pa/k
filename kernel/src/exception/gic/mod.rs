@@ -374,7 +374,7 @@ impl InterruptController for GenericInterruptController {
             _ => panic!("unknown interrupt flag: {flags} (ty:{ty} irq:{irq})"),
         };
         let irq_offsetted = irq + offset;
-        log::debug!("timer interrupt in device tree as {irq} with type={ty:x} and flags={flags:x} => {irq_offsetted}, {cfg:?}");
+        log::trace!("timer interrupt in device tree as {irq} with type={ty:x} and flags={flags:x} => {irq_offsetted}, {cfg:?}");
         Some((irq_offsetted, cfg))
     }
 }

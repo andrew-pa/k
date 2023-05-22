@@ -23,11 +23,13 @@ impl Future for CompletionFuture {
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         use PendingCompletion::*;
+        log::debug!("polling NVMe completion future for {}", self.cmd_id);
         let pc = self.pending_completions.remove(&self.cmd_id);
         // TODO: if we recieve an interrupt here and pc == None, will we ever get the
         // completion? probably not
         match pc {
             None => {
+                log::debug!("pending");
                 self.pending_completions
                     .insert(self.cmd_id, Waiting(cx.waker().clone()));
                 Poll::Pending
@@ -84,8 +86,12 @@ fn handle_interrupt(
     pending_completions: &Arc<CHashMapG<u16, PendingCompletion>>,
 ) {
     use PendingCompletion::*;
+    log::debug!("handling NVMe interrupt {int_id}, {}", qu.queue_id());
     if let Some(cmp) = qu.pop() {
+        log::debug!("pc addr: 0x{:x}", Arc::as_ptr(pending_completions) as *const _ as usize);
+        log::debug!("got completion {cmp:?}");
         if let Some(mut pc) = pending_completions.get_mut(&cmp.id) {
+            log::debug!("pending completion?");
             *pc = match &*pc {
                 Waiting(w) => {
                     log::debug!("waking future for NVMe command id {}", cmp.id);

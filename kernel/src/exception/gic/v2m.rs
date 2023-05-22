@@ -34,7 +34,7 @@ impl V2mMsiController {
             V2mMsiTypeRegister(unsafe { basep.offset(V2M_MSI_TYPER >> 2).read_volatile() });
         // TODO: why is this value not what it says in the QEMU headers?
         // perhaps there is a fixed offset for SPIs
-        log::info!("V2m IIDR = 0x{iidr:x}, TYPER={typer:?}");
+        log::info!("v2m IIDR = 0x{iidr:x}, TYPER={typer:?}");
         // typer.set_spi_start(0x24);
         Self {
             register_addr: PhysicalAddress(base.0.wrapping_add_signed(V2M_MSI_SETSPI_NS)),

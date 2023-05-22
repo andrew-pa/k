@@ -117,12 +117,11 @@ pub fn find_timer_properties(device_tree: &DeviceTree) -> TimerProperties {
     device_tree.process_properties_for_node("timer", |name, data, _| {
         match name {
             "interrupts" => {
-                log::debug!("timer interrupt data = {data:?}");
                 let intc = exception::interrupt_controller();
                 let ib = intc.device_tree_interrupt_spec_byte_size();
                 // read the second interrupt spec, which should be the virtual timer
                 let spec = intc.parse_interrupt_spec_from_device_tree(&data[ib..2 * ib]);
-                log::debug!("got timer interrupt spec {spec:?}");
+                log::trace!("got timer interrupt spec {spec:?}");
                 // TODO: do we care about edge vs level?
                 interrupt = spec.map(|(id, _)| id); // Some(30);
             }

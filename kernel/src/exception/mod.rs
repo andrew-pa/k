@@ -222,6 +222,9 @@ unsafe extern "C" fn handle_synchronous_exception(regs: *mut Registers, esr: usi
             ),
         }
     } else {
+        // TODO: stack is sus??
+        // let mut v: usize;
+        // core::arch::asm!("mrs {v}, SP_EL1", v = out(reg) v);
         panic!(
             "synchronous exception! {}, FAR={far:x}, registers = {:?}",
             esr,
@@ -246,7 +249,7 @@ unsafe extern "C" fn handle_interrupt(regs: *mut Registers, _esr: usize, _far: u
 unsafe extern "C" fn handle_fast_interrupt(_regs: *mut Registers, _esr: usize, _far: usize) {
     let ic = interrupt_controller();
     let id = ic.ack_interrupt();
-    log::trace!("fast interrupt {id}");
+    log::warn!("unhandled fast interrupt {id}");
     ic.finish_interrupt(id);
 }
 
