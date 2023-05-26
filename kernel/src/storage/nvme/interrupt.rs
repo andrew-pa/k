@@ -88,7 +88,10 @@ fn handle_interrupt(
     use PendingCompletion::*;
     log::debug!("handling NVMe interrupt {int_id}, {}", qu.queue_id());
     if let Some(cmp) = qu.pop() {
-        log::debug!("pc addr: 0x{:x}", Arc::as_ptr(pending_completions) as *const _ as usize);
+        log::debug!(
+            "pc addr: 0x{:x}",
+            Arc::as_ptr(pending_completions) as *const _ as usize
+        );
         log::debug!("got completion {cmp:?}");
         if let Some(mut pc) = pending_completions.get_mut(&cmp.id) {
             log::debug!("pending completion?");
@@ -101,6 +104,7 @@ fn handle_interrupt(
                 Ready(old_cmp) => panic!("recieved second completion {cmp:?} for id with pending ready completion {old_cmp:?}"),
             }
         } else {
+            log::debug!("inserting pending ready completion");
             pending_completions.insert(cmp.id, Ready(cmp));
         }
     } else {

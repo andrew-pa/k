@@ -4,7 +4,11 @@ use alloc::boxed::Box;
 use bitfield::bitfield;
 use spin::{Mutex, MutexGuard};
 
-use crate::{memory::PhysicalAddress, timer, CHashMapG};
+use crate::{
+    memory::PhysicalAddress,
+    process::{self, read_exception_link_reg, read_stack_pointer},
+    sp_sel, timer, CHashMapG,
+};
 
 pub type InterruptId = u32;
 
@@ -226,9 +230,10 @@ unsafe extern "C" fn handle_synchronous_exception(regs: *mut Registers, esr: usi
         // let mut v: usize;
         // core::arch::asm!("mrs {v}, SP_EL1", v = out(reg) v);
         panic!(
-            "synchronous exception! {}, FAR={far:x}, registers = {:?}",
+            "synchronous exception! {}, FAR={far:x}, registers = {:?}, ELR={:x?}",
             esr,
-            regs.as_ref()
+            regs.as_ref(),
+            read_exception_link_reg(),
         );
     }
 }
@@ -238,10 +243,18 @@ unsafe extern "C" fn handle_interrupt(regs: *mut Registers, _esr: usize, _far: u
     let ic = interrupt_controller();
     let id = ic.ack_interrupt();
     log::trace!("interrupt {id}");
+    let pid = process::scheduler::scheduler().pause_current_thread(regs);
+    write_interrupt_mask(InterruptMask::all_disabled());
     match interrupt_handlers().get_mut(&id) {
         Some(mut h) => (*h)(id, regs),
         None => log::warn!("unhandled interrupt {id}"),
     }
+    process::scheduler::scheduler().resume_current_thread(
+        regs,
+        pid.and_then(|pid| process::processes().get(&pid))
+            .map(|proc| proc.page_tables.asid),
+    );
+    write_interrupt_mask(InterruptMask::all_enabled());
     ic.finish_interrupt(id);
 }
 

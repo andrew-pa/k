@@ -43,11 +43,52 @@ impl ThreadScheduler {
             .0
             .retain(|id| *id != thread);
     }
+
+    pub unsafe fn pause_current_thread(
+        &mut self,
+        current_regs: *mut Registers,
+    ) -> Option<ProcessId> {
+        let current = self.currently_running();
+        log::trace!("pausing thread {current}");
+        if let Some(mut t) = threads().get_mut(&current) {
+            t.save(current_regs.as_ref().unwrap());
+            log::trace!("paused thread {current} @ {}, sp={}", t.pc, t.sp);
+            t.parent
+        } else {
+            None
+        }
+    }
+
+    pub unsafe fn resume_current_thread(
+        &mut self,
+        current_regs: *mut Registers,
+        previous_asid: Option<u16>,
+    ) {
+        let current = self.currently_running();
+        log::trace!("resuming thread {current}");
+        let thread = threads()
+            .get_mut(&current)
+            .expect("scheduler has valid thread IDs");
+        log::trace!(
+            "resuming thread {current} @ {}, sp={}",
+            thread.pc,
+            thread.sp
+        );
+
+        if let Some(proc) = thread.parent.and_then(|id| processes().get(&id)) {
+            proc.page_tables.activate();
+        }
+
+        crate::memory::paging::flush_tlb_for_asid(previous_asid.unwrap_or(0));
+
+        thread.restore(current_regs.as_mut().unwrap());
+    }
 }
 
 // TODO: we will eventually need one of these per-CPU
 static mut SCHD: OnceCell<Mutex<ThreadScheduler>> = OnceCell::new();
 
+// TODO: maybe the first thread should always be the idle thread??
 pub fn init_scheduler(first_thread: ThreadId) {
     unsafe {
         SCHD.set(Mutex::new(ThreadScheduler::new(first_thread)))
@@ -59,51 +100,4 @@ pub fn init_scheduler(first_thread: ThreadId) {
 // TODO: also will eventually need to be per-CPU?
 pub fn scheduler() -> MutexGuard<'static, ThreadScheduler> {
     unsafe { SCHD.get().unwrap().lock() }
-}
-
-pub fn run_scheduler(current_regs: *mut Registers) {
-    let mut scheduler = unsafe {
-        if let Some(s) = SCHD.get_mut().unwrap().try_lock() {
-            s
-        } else {
-            // try again next cycle
-            return;
-        }
-    };
-    let previous_asid = {
-        let current = scheduler.currently_running();
-        log::trace!("pausing thread {current}");
-        unsafe {
-            if let Some(mut t) = threads().get_mut(&current) {
-                t.save(current_regs.as_ref().unwrap());
-                log::trace!("pausing thread {current} @ {}", t.pc);
-                if let Some(proc) = t.parent.and_then(|id| processes().get(&id)) {
-                    Some(proc.page_tables.asid)
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        }
-    };
-    scheduler.schedule_next_thread();
-    {
-        let current = scheduler.currently_running();
-        log::trace!("resuming thread {current}");
-        let thread = threads()
-            .get_mut(&current)
-            .expect("scheduler has valid thread IDs");
-        log::trace!("resuming thread {current} @ {}", thread.pc);
-
-        unsafe {
-            if let Some(proc) = thread.parent.and_then(|id| processes().get(&id)) {
-                proc.page_tables.activate();
-            }
-
-            crate::memory::paging::flush_tlb_for_asid(previous_asid.unwrap_or(0));
-
-            thread.restore(current_regs.as_mut().unwrap());
-        }
-    }
 }

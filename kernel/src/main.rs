@@ -52,9 +52,6 @@ pub extern "C" fn kmain() {
     );
     bus::pcie::init(&dt, &pcie_drivers);
 
-    // create idle thread
-    process::threads().insert(process::IDLE_THREAD, process::Thread::idle_thread());
-
     // initialize system timer and interrupt
     init::configure_time_slicing(&dt);
 
@@ -65,8 +62,10 @@ pub extern "C" fn kmain() {
             .unwrap();
         log::info!("supported block size = {}", bs.supported_block_size());
         let buf = memory::PhysicalBuffer::alloc(1, &Default::default()).unwrap();
-        bs.read_blocks(io::LogicalAddress(0), 1, buf.physical_address())
+        let res = bs
+            .read_blocks(io::LogicalAddress(0), 1, buf.physical_address())
             .await;
+        log::info!("read result = {res:?}");
     });
 
     #[cfg(test)]
@@ -74,11 +73,23 @@ pub extern "C" fn kmain() {
         test_main();
     });
 
+    log::info!("creating task executor thread");
+    let task_stack = memory::PhysicalBuffer::alloc(1024, &Default::default())
+        .expect("allocate task exec thread stack");
+
+    process::spawn_thread(process::Thread::kernel_thread(
+        process::TASK_THREAD,
+        tasks::run_executor,
+        &task_stack,
+    ));
+
     // enable all interrupts in DAIF process state mask
     exception::write_interrupt_mask(exception::InterruptMask::all_enabled());
 
-    log::info!("running task executor...");
-    tasks::run_executor()
+    log::trace!("idle loop starting");
+    loop {
+        wait_for_interrupt()
+    }
 }
 
 /* TODO:

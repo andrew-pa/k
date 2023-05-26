@@ -97,6 +97,12 @@ impl VirtualAddress {
     }
 }
 
+impl<T> From<*const T> for VirtualAddress {
+    fn from(value: *const T) -> Self {
+        VirtualAddress(value as usize)
+    }
+}
+
 impl<T> From<*mut T> for VirtualAddress {
     fn from(value: *mut T) -> Self {
         VirtualAddress(value as usize)

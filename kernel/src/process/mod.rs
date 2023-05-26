@@ -1,6 +1,6 @@
 use crate::{
     exception::Registers,
-    memory::{paging::PageTable, VirtualAddress},
+    memory::{paging::PageTable, PhysicalBuffer, VirtualAddress},
     CHashMapG,
 };
 use bitfield::bitfield;
@@ -54,20 +54,21 @@ impl Thread {
         *regs = self.register_state;
     }
 
-    pub fn idle_thread() -> Self {
+    pub fn kernel_thread(id: ThreadId, start: fn() -> !, stack: &PhysicalBuffer) -> Self {
         Thread {
-            id: IDLE_THREAD,
+            id,
             parent: None,
             register_state: Registers::default(),
             program_status: SavedProgramStatus::initial_for_el1(),
-            pc: VirtualAddress(0),
-            sp: VirtualAddress(0),
-            priority: ThreadPriority::Low,
+            pc: (start as *const ()).into(),
+            sp: stack.virtual_address().offset((stack.len() - 16) as isize),
+            priority: ThreadPriority::Normal,
         }
     }
 }
 
 pub const IDLE_THREAD: ThreadId = 0;
+pub const TASK_THREAD: ThreadId = 1;
 
 static mut PROCESSES: OnceCell<CHashMapG<ProcessId, Process>> = OnceCell::new();
 static mut THREADS: OnceCell<CHashMapG<ThreadId, Thread>> = OnceCell::new();
@@ -77,7 +78,33 @@ pub fn processes() -> &'static CHashMapG<ProcessId, Process> {
 }
 
 pub fn threads() -> &'static CHashMapG<ThreadId, Thread> {
-    unsafe { THREADS.get_or_init(Default::default) }
+    unsafe {
+        THREADS.get_or_init(|| {
+            let mut ths: CHashMapG<ThreadId, Thread> = Default::default();
+            // Create the idle thread, which will just wait for interrupts
+            let mut program_status = SavedProgramStatus::initial_for_el1();
+            program_status.set_sp(true); // the idle thread runs on the EL1 stack normally used by interrupts and kmain
+            ths.insert(
+                IDLE_THREAD,
+                Thread {
+                    id: IDLE_THREAD,
+                    parent: None,
+                    register_state: Registers::default(),
+                    program_status,
+                    pc: VirtualAddress(0),
+                    sp: VirtualAddress(0),
+                    priority: ThreadPriority::Low,
+                },
+            );
+            ths
+        })
+    }
+}
+
+pub fn spawn_thread(thread: Thread) {
+    let id = thread.id;
+    threads().insert(id, thread);
+    scheduler::scheduler().add_thread(id);
 }
 
 bitfield! {
@@ -138,6 +165,7 @@ pub fn write_saved_program_status(spsr: &SavedProgramStatus) {
     }
 }
 
+/// Read the value of the program counter when the exception occured
 pub fn read_exception_link_reg() -> VirtualAddress {
     let mut v: usize;
     unsafe {
@@ -146,6 +174,7 @@ pub fn read_exception_link_reg() -> VirtualAddress {
     VirtualAddress(v)
 }
 
+/// Write the value that the program counter will assume when the exception handler is finished
 pub fn write_exception_link_reg(addr: VirtualAddress) {
     unsafe {
         core::arch::asm!("msr ELR_EL1, {v}", v = in(reg) addr.0);
@@ -166,14 +195,12 @@ pub fn read_stack_pointer(el: u8) -> VirtualAddress {
     VirtualAddress(v)
 }
 
-pub fn write_stack_pointer(el: u8, sp: VirtualAddress) {
-    unsafe {
-        match el {
-            0 => core::arch::asm!("msr SP_EL0, {v}", v = in(reg) sp.0),
-            1 => core::arch::asm!("msr SP_EL1, {v}", v = in(reg) sp.0),
-            2 => core::arch::asm!("msr SP_EL2, {v}", v = in(reg) sp.0),
-            // 3 => core::arch::asm!("msr SP_EL3, {v}", v = in(reg) sp.0),
-            _ => panic!("invalid exception level {el}"),
-        }
+pub unsafe fn write_stack_pointer(el: u8, sp: VirtualAddress) {
+    match el {
+        0 => core::arch::asm!("msr SP_EL0, {v}", v = in(reg) sp.0),
+        1 => core::arch::asm!("msr SP_EL1, {v}", v = in(reg) sp.0),
+        2 => core::arch::asm!("msr SP_EL2, {v}", v = in(reg) sp.0),
+        // 3 => core::arch::asm!("msr SP_EL3, {v}", v = in(reg) sp.0),
+        _ => panic!("invalid exception level {el}"),
     }
 }

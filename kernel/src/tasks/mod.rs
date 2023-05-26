@@ -102,7 +102,7 @@ impl Executor {
                     Poll::Pending => {}
                 }
             }
-            // super::wait_for_interrupt();
+            super::wait_for_interrupt();
         }
     }
 }
@@ -124,6 +124,7 @@ pub fn spawn(task: impl Future<Output = ()> + 'static) {
 }
 
 pub fn run_executor() -> ! {
+    log::info!("starting task executor");
     let exec = unsafe { EXEC.get().expect("executor initialized").clone() };
     exec.run_forever()
 }

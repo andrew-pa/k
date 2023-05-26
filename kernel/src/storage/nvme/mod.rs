@@ -131,7 +131,9 @@ impl RegistryHandler for NvmeDeviceRegistryHandler {
 
         // TODO: better way to allocate MSI-X vector slots
         let ivx = namespace_id as u16;
-        {self.msix_table.lock().write(ivx as usize, &msi);}
+        {
+            self.msix_table.lock().write(ivx as usize, &msi);
+        }
         log::debug!("IO completion queue IRQ: {msi:?}");
         // TODO: we need to be able to await these really
         log::trace!("creating IO completion queue");
@@ -200,7 +202,9 @@ impl RegistryHandler for NvmeDeviceRegistryHandler {
         };
         log::debug!("NVMe namespace {namespace_id} has size={size}, capacity={cap} and utilitization={util}, format={lbaf:?}");
 
-        {self.msix_table.lock().set_mask(ivx as usize, false)};
+        {
+            self.msix_table.lock().set_mask(ivx as usize, false)
+        };
 
         Ok(Box::new(block_store::NamespaceBlockStore {
             total_size: size,

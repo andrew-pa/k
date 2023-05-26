@@ -76,6 +76,17 @@ pub fn mair() -> usize {
     x >> 2
 }
 
+pub fn sp_sel() -> bool {
+    let mut v: usize;
+    unsafe {
+        core::arch::asm!(
+            "mrs {v}, SPSel",
+            v = out(reg) v
+        );
+    }
+    v == 1
+}
+
 #[panic_handler]
 pub fn panic_handler(info: &core::panic::PanicInfo) -> ! {
     use core::fmt::Write;
