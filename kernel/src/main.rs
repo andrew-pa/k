@@ -24,7 +24,9 @@ pub extern "C" fn kmain() {
     }
     init::init_logging(log::LevelFilter::Debug);
 
-    let dt = unsafe { dtb::DeviceTree::at_address(memory::VirtualAddress(0xffff_0000_4000_0000)) };
+    let dt = unsafe {
+        dtb::DeviceTree::at_address(memory::PhysicalAddress(0x4000_0000).to_virtual_canonical())
+    };
 
     // initialize virtual memory and interrupts
     unsafe {
@@ -63,9 +65,10 @@ pub extern "C" fn kmain() {
         log::info!("supported block size = {}", bs.supported_block_size());
         let buf = memory::PhysicalBuffer::alloc(1, &Default::default()).unwrap();
         let res = bs
-            .read_blocks(io::LogicalAddress(0), 1, buf.physical_address())
+            .read_blocks(storage::LogicalAddress(0), 1, buf.physical_address())
             .await;
         log::info!("read result = {res:?}");
+        log::debug!("data = {:?}", buf.as_bytes());
     });
 
     #[cfg(test)]

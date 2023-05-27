@@ -107,7 +107,7 @@ impl RegistryHandler for NvmeDeviceRegistryHandler {
     async fn open_block_store(
         &self,
         subpath: &Path,
-    ) -> Result<Box<dyn crate::io::BlockStore>, RegistryError> {
+    ) -> Result<Box<dyn super::BlockStore>, RegistryError> {
         let namespace_id = match subpath.components().next() {
             Some(Component::Name(n)) => n
                 .parse::<u32>()

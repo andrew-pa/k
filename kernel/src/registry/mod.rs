@@ -1,6 +1,6 @@
 use core::cell::OnceCell;
 
-use crate::io::BlockStore;
+use crate::storage::BlockStore;
 use alloc::{boxed::Box, string::String, vec::Vec};
 use async_trait::async_trait;
 

@@ -1,4 +1,4 @@
-use crate::io::LogicalAddress;
+use crate::storage::LogicalAddress;
 
 use super::queue::{Command, QueueId};
 

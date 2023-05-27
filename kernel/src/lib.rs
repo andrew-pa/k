@@ -23,7 +23,6 @@ pub mod process;
 pub mod tasks;
 
 pub mod bus;
-pub mod io;
 pub mod storage;
 pub mod timer;
 pub mod uart;

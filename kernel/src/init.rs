@@ -44,6 +44,6 @@ pub fn configure_time_slicing(dt: &DeviceTree) {
         }),
     );
 
-    // set timer to go off after we halt
-    timer::write_timer_value(timer::frequency() >> 4);
+    // set timer to go off as soon as we enable interrupts
+    timer::write_timer_value(0);
 }

@@ -67,7 +67,9 @@ impl Thread {
     }
 }
 
+/// the idle thread is dedicated to handling interrupts, i.e. it is the thread holding the EL1 stack
 pub const IDLE_THREAD: ThreadId = 0;
+/// the task thread runs the async task executor on its own stack at SP_EL0
 pub const TASK_THREAD: ThreadId = 1;
 
 static mut PROCESSES: OnceCell<CHashMapG<ProcessId, Process>> = OnceCell::new();

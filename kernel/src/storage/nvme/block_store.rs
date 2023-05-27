@@ -1,6 +1,6 @@
 use crate::{
-    io::{BlockStore, Error, LogicalAddress},
     memory::PhysicalAddress,
+    storage::{BlockStore, Error, LogicalAddress},
 };
 use alloc::boxed::Box;
 use async_trait::async_trait;
