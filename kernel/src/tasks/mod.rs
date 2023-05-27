@@ -3,7 +3,7 @@ use core::{
     cell::OnceCell,
     future::Future,
     pin::Pin,
-    sync::atomic::AtomicU32,
+    sync::atomic::{AtomicBool, AtomicU32},
     task::{Context, Poll, Waker},
 };
 use crossbeam::queue::ArrayQueue;
@@ -127,4 +127,35 @@ pub fn run_executor() -> ! {
     log::info!("starting task executor");
     let exec = unsafe { EXEC.get().expect("executor initialized").clone() };
     exec.run_forever()
+}
+
+struct BlockingWaiter {
+    signal: Arc<AtomicBool>,
+}
+
+impl Wake for BlockingWaiter {
+    fn wake(self: Arc<Self>) {
+        self.signal
+            .store(false, core::sync::atomic::Ordering::Release);
+    }
+}
+
+pub fn block_on<O, F: Future<Output = O>>(task: F) -> O {
+    let mut task = Box::pin(task);
+    let signal = Arc::new(AtomicBool::default());
+    let waker = Waker::from(Arc::new(BlockingWaiter {
+        signal: signal.clone(),
+    }));
+    let mut context = Context::from_waker(&waker);
+    loop {
+        match task.as_mut().poll(&mut context) {
+            Poll::Ready(v) => return v,
+            Poll::Pending => {
+                signal.store(true, core::sync::atomic::Ordering::Release);
+                while signal.load(core::sync::atomic::Ordering::Acquire) {
+                    crate::wait_for_interrupt();
+                }
+            }
+        }
+    }
 }

@@ -138,9 +138,9 @@ pub fn init_registry() {
 }
 
 pub fn registry() -> RwLockReadGuard<'static, Registry> {
-    unsafe { REG.get().unwrap().read() }
+    unsafe { REG.get().expect("registry initialized").read() }
 }
 
 pub fn registry_mut() -> RwLockWriteGuard<'static, Registry> {
-    unsafe { REG.get().unwrap().write() }
+    unsafe { REG.get().expect("registry initialized").write() }
 }
