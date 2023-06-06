@@ -10,6 +10,7 @@ pub struct LogicalAddress(pub u64);
 
 #[derive(Debug, Snafu)]
 pub enum Error {
+    Memory { source: crate::memory::MemoryError },
     DeviceError,
 }
 
@@ -29,8 +30,8 @@ pub trait BlockStore {
     async fn read_blocks(
         &mut self,
         source_addr: LogicalAddress,
-        num_blocks: usize,
         destination_addr: PhysicalAddress,
+        num_blocks: usize,
     ) -> Result<usize, Error>;
 
     /// Write the data at source into the blocks starting at dest_addr.
@@ -38,8 +39,8 @@ pub trait BlockStore {
     /// Returns the number of blocks written, or an error if one occurred
     async fn write_blocks(
         &mut self,
-        destination_addr: LogicalAddress,
         source_addr: PhysicalAddress,
+        destination_addr: LogicalAddress,
         num_blocks: usize,
     ) -> Result<usize, Error>;
 }

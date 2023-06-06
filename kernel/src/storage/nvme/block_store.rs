@@ -26,8 +26,8 @@ impl BlockStore for NamespaceBlockStore {
     async fn read_blocks(
         &mut self,
         source_addr: LogicalAddress,
-        num_blocks: usize,
         destination_addr: PhysicalAddress,
+        num_blocks: usize,
     ) -> Result<usize, Error> {
         let cmp = self.io_cq.wait_for_completion(
             self.io_sq.begin()
@@ -48,8 +48,8 @@ impl BlockStore for NamespaceBlockStore {
 
     async fn write_blocks(
         &mut self,
-        destination_addr: LogicalAddress,
         source_addr: PhysicalAddress,
+        destination_addr: LogicalAddress,
         num_blocks: usize,
     ) -> Result<usize, Error> {
         let cmp = self.io_cq.wait_for_completion(

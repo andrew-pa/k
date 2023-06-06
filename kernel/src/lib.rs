@@ -108,6 +108,16 @@ pub extern "C" fn kmain() {
         memory::zero_bss_section();
     }
     init::init_logging(log::LevelFilter::Trace);
+
+    // initialize virtual memory and exceptions
+    unsafe {
+        exception::install_exception_vector_table();
+    }
+    let dt = unsafe { dtb::DeviceTree::at_address(memory::VirtualAddress(0xffff_0000_4000_0000)) };
+    memory::init_physical_memory_allocator(&dt);
+    memory::paging::init_kernel_page_table();
+    memory::init_virtual_address_allocator();
+
     test_main();
 }
 

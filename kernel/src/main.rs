@@ -62,13 +62,15 @@ pub extern "C" fn kmain() {
             .open_block_store(registry::Path::new("/dev/nvme/pci@0:2:0/1"))
             .await
             .unwrap();
-        log::info!("supported block size = {}", bs.supported_block_size());
-        let buf = memory::PhysicalBuffer::alloc(1, &Default::default()).unwrap();
+        let s = bs.supported_block_size();
+        log::info!("supported block size = {}", s);
+        let mut buf = memory::PhysicalBuffer::alloc(1, &Default::default()).unwrap();
+        buf.as_bytes_mut().fill(0);
         let res = bs
-            .read_blocks(storage::LogicalAddress(0), 1, buf.physical_address())
+            .read_blocks(storage::LogicalAddress(0x3f), buf.physical_address(), 1)
             .await;
         log::info!("read result = {res:?}");
-        log::debug!("data = {:?}", buf.as_bytes());
+        log::debug!("data = {:x?}", &buf.as_bytes()[0..s]);
     });
 
     #[cfg(test)]
