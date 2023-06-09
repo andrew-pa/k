@@ -115,8 +115,9 @@ impl BlockCache {
             .offset((chunk_id * self.chunk_size as u64) as isize)
     }
 
-    async fn load_chunk(&self, tag: u64, chunk_id: u64) -> Result<(), Error> {
+    async fn load_chunk(&self, tag: u64, chunk_id: u64, mark_dirty: bool) -> Result<(), Error> {
         let md = { self.metadata.read()[chunk_id as usize] };
+        log::trace!("loading chunk {tag}:{chunk_id}, md={md:?}");
         if !md.occupied() || md.tag() != tag {
             // chunk is not present
             let mut store = self.store.lock();
@@ -139,7 +140,7 @@ impl BlockCache {
             let mut md = &mut self.metadata.write()[chunk_id as usize];
             md.set_tag(tag);
             md.set_occupied(true);
-            md.set_dirty(false);
+            md.set_dirty(mark_dirty);
         }
         Ok(())
     }
@@ -149,6 +150,7 @@ impl BlockCache {
         starting_tag: u64,
         starting_chunk_id: u64,
         num_chunks_inclusive: u64,
+        mark_dirty: bool,
     ) -> Result<(), Error> {
         let res = future::join_all((0..num_chunks_inclusive).map(|i| {
             let mut tag = starting_tag;
@@ -157,7 +159,7 @@ impl BlockCache {
                 tag += chunk_id / self.num_chunks as u64;
                 chunk_id = chunk_id % self.num_chunks as u64;
             }
-            self.load_chunk(tag, chunk_id)
+            self.load_chunk(tag, chunk_id, mark_dirty)
         }))
         .await;
         for e in res.into_iter().flat_map(Result::err) {
@@ -183,8 +185,13 @@ impl BlockCache {
             // that writes to the destination buffer
             todo!("implement large reads");
         }
-        self.load_chunks(starting_tag, starting_chunk_id, num_chunks_inclusive as u64)
-            .await?;
+        self.load_chunks(
+            starting_tag,
+            starting_chunk_id,
+            num_chunks_inclusive as u64,
+            false,
+        )
+        .await?;
         let offset = (starting_chunk_id as usize * self.chunk_size
             + initial_block_offset as usize * self.block_size) as usize
             + byte_offset;
@@ -209,8 +216,13 @@ impl BlockCache {
             // the cache (to take care of offsets) and then issuing a big direct write for the rest
             todo!("implement large writes");
         }
-        self.load_chunks(starting_tag, starting_chunk_id, num_chunks_inclusive as u64)
-            .await?;
+        self.load_chunks(
+            starting_tag,
+            starting_chunk_id,
+            num_chunks_inclusive as u64,
+            true,
+        )
+        .await?;
         let offset = (starting_chunk_id as usize * self.chunk_size
             + initial_block_offset as usize * self.block_size) as usize
             + byte_offset;
@@ -236,12 +248,12 @@ mod test {
     use super::*;
     use crate::tasks::block_on;
 
-    struct MockBlockStore {
+    struct MockReadOnlyBlockStore {
         block_size: usize,
         read_counter: Arc<AtomicUsize>,
     }
 
-    impl MockBlockStore {
+    impl MockReadOnlyBlockStore {
         fn new(block_size: usize) -> Self {
             Self {
                 block_size,
@@ -251,7 +263,7 @@ mod test {
     }
 
     #[async_trait]
-    impl BlockStore for MockBlockStore {
+    impl BlockStore for MockReadOnlyBlockStore {
         fn supported_block_size(&self) -> usize {
             self.block_size
         }
@@ -277,13 +289,13 @@ mod test {
             destination_addr: LogicalAddress,
             num_blocks: usize,
         ) -> Result<usize, Error> {
-            todo!()
+            unimplemented!()
         }
     }
 
     #[test_case]
     fn cold_read_single_block() {
-        let bs = MockBlockStore::new(8);
+        let bs = MockReadOnlyBlockStore::new(8);
         let rc = bs.read_counter.clone();
         let mut c = BlockCache::new(bs, 1).unwrap();
         let mut buf = [0; 8];
@@ -294,7 +306,7 @@ mod test {
 
     #[test_case]
     fn cold_read_across_blocks_small() {
-        let bs = MockBlockStore::new(8);
+        let bs = MockReadOnlyBlockStore::new(8);
         let rc = bs.read_counter.clone();
         let mut c = BlockCache::new(bs, 1).unwrap();
         let mut buf = [0; 8];
@@ -305,7 +317,7 @@ mod test {
 
     #[test_case]
     fn warm_read_single_block() {
-        let bs = MockBlockStore::new(8);
+        let bs = MockReadOnlyBlockStore::new(8);
         let rc = bs.read_counter.clone();
         let mut c = BlockCache::new(bs, 1).unwrap();
         let mut buf = [0; 8];
@@ -318,5 +330,101 @@ mod test {
         block_on(c.copy_bytes(LogicalAddress(0), 0, &mut buf)).unwrap();
         assert_eq!(buf, [0, 1, 2, 3, 4, 5, 6, 7]);
         assert_eq!(rc.load(Ordering::Acquire), 0);
+    }
+
+    struct MockRwBlockStore {
+        buffer: Vec<u8>,
+        read_counter: Arc<AtomicUsize>,
+        write_counter: Arc<AtomicUsize>,
+    }
+
+    impl MockRwBlockStore {
+        fn new() -> Self {
+            MockRwBlockStore {
+                buffer: [0; 4096].into(),
+                read_counter: Default::default(),
+                write_counter: Default::default(),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl BlockStore for MockRwBlockStore {
+        fn supported_block_size(&self) -> usize {
+            8
+        }
+
+        async fn read_blocks(
+            &mut self,
+            source_addr: LogicalAddress,
+            destination_addr: PhysicalAddress,
+            num_blocks: usize,
+        ) -> Result<usize, Error> {
+            log::debug!("read {source_addr} → {destination_addr}, {num_blocks} blocks");
+            unsafe {
+                let p: *mut u8 = destination_addr.to_virtual_canonical().as_ptr();
+                let mut s = core::slice::from_raw_parts_mut(p, 8 * num_blocks);
+                let start = (source_addr.0 * 8) as usize;
+                let end = start + num_blocks * 8;
+                if start > self.buffer.len() || end > self.buffer.len() {
+                    return Ok(0);
+                }
+                s.copy_from_slice(&self.buffer[start..end]);
+            }
+            self.read_counter.fetch_add(num_blocks, Ordering::Release);
+            Ok(num_blocks)
+        }
+
+        async fn write_blocks(
+            &mut self,
+            source_addr: PhysicalAddress,
+            destination_addr: LogicalAddress,
+            num_blocks: usize,
+        ) -> Result<usize, Error> {
+            log::debug!("write {source_addr} → {destination_addr}, {num_blocks} blocks");
+            unsafe {
+                let p: *mut u8 = source_addr.to_virtual_canonical().as_ptr();
+                let mut s = core::slice::from_raw_parts_mut(p, 8 * num_blocks);
+                let start = (destination_addr.0 * 8) as usize;
+                let end = start + num_blocks * 8;
+                self.buffer[start..end].copy_from_slice(s);
+            }
+            self.write_counter.fetch_add(num_blocks, Ordering::Release);
+            Ok(num_blocks)
+        }
+    }
+
+    #[test_case]
+    fn write_and_read_back() {
+        let bs = MockRwBlockStore::new();
+        let (rc, wc) = (bs.read_counter.clone(), bs.write_counter.clone());
+        let mut c = BlockCache::new(bs, 1).unwrap();
+        let mut buf = [0; 8];
+        buf.copy_from_slice(b"testtest");
+        block_on(c.write_bytes(LogicalAddress(7), 0, &buf));
+        assert_eq!(rc.swap(0, Ordering::Acquire), PAGE_SIZE / 8);
+        assert_eq!(wc.load(Ordering::Acquire), 0); // no writes yet
+        buf.fill(0);
+        block_on(c.copy_bytes(LogicalAddress(7), 0, &mut buf)).unwrap();
+        assert_eq!(&buf, b"testtest");
+        assert_eq!(rc.load(Ordering::Acquire), 0);
+        assert_eq!(wc.load(Ordering::Acquire), 0);
+    }
+
+    #[test_case]
+    fn write_back() {
+        let bs = MockRwBlockStore::new();
+        let (rc, wc) = (bs.read_counter.clone(), bs.write_counter.clone());
+        let mut c = BlockCache::new(bs, 1).unwrap();
+        let mut buf = [0; 8];
+        buf.copy_from_slice(b"testtest");
+        block_on(c.write_bytes(LogicalAddress(7), 0, &buf));
+        assert_eq!(rc.swap(0, Ordering::Acquire), PAGE_SIZE / 8);
+        assert_eq!(wc.load(Ordering::Acquire), 0); // no writes yet
+        buf.fill(0);
+        // read a block with a different tag to cause the cache to write the dirty block out
+        block_on(c.copy_bytes(LogicalAddress(0x800), 0, &mut buf)).unwrap();
+        assert_eq!(rc.load(Ordering::Acquire), 0);
+        assert_eq!(wc.load(Ordering::Acquire), PAGE_SIZE / 8);
     }
 }
