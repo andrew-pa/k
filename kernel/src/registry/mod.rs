@@ -1,6 +1,6 @@
 use core::cell::OnceCell;
 
-use crate::storage::BlockStore;
+use crate::{fs::ByteStore, storage::BlockStore};
 use alloc::{boxed::Box, string::String, vec::Vec};
 use async_trait::async_trait;
 
@@ -22,9 +22,13 @@ pub enum RegistryError {
     Other { source: Box<dyn snafu::Error> },
 }
 
+/// A RegistryHandler responds to requests to open registered resources by path.
 #[async_trait]
 pub trait RegistryHandler {
+    /// Open a [BlockStore][crate::storage::BlockStore] resource at `subpath`.
     async fn open_block_store(&self, subpath: &Path) -> Result<Box<dyn BlockStore>, RegistryError>;
+    /// Open a [ByteStore][crate::fs::ByteStore] resource at `subpath`.
+    async fn open_byte_store(&self, subpath: &Path) -> Result<Box<dyn ByteStore>, RegistryError>;
 }
 
 // TODO: storing these as strings is bad as short strings might take up an unexpectedly large
@@ -85,6 +89,7 @@ impl Node {
     }
 }
 
+/// The centeral resource registry, which resolves paths to resources.
 pub struct Registry {
     root: Node,
 }
@@ -96,6 +101,7 @@ impl Registry {
         }
     }
 
+    /// Register a new handler to handle resource requests for all subpaths under `path`.
     pub fn register(
         &mut self,
         path: &Path,
@@ -116,19 +122,36 @@ impl Registry {
         }
     }
 
-    pub async fn open_block_store(&self, p: &Path) -> Result<Box<dyn BlockStore>, RegistryError> {
+    fn find_handler<'s, 'p>(
+        &'s self,
+        p: &'p Path,
+    ) -> Result<(&'p Path, &'s dyn RegistryHandler), RegistryError> {
         let mut pc = p.components();
         match pc.next() {
             Some(Component::Root) => {}
             _ => return Err(RegistryError::InvalidPath),
         }
-        let (subpath, h) = self.root.find(pc)?;
+        self.root.find(pc)
+    }
+
+    /// Open a [BlockStore][crate::storage::BlockStore] resource located at `p` using the handler
+    /// registered for that path, if present.
+    pub async fn open_block_store(&self, p: &Path) -> Result<Box<dyn BlockStore>, RegistryError> {
+        let (subpath, h) = self.find_handler(p)?;
         h.open_block_store(subpath).await
+    }
+
+    /// Open a [ByteStore][crate::fs::ByteStore] resource located at `p` using the handler
+    /// registered for that path, if present.
+    pub async fn open_byte_store(&self, p: &Path) -> Result<Box<dyn ByteStore>, RegistryError> {
+        let (subpath, h) = self.find_handler(p)?;
+        h.open_byte_store(subpath).await
     }
 }
 
 static mut REG: OnceCell<RwLock<Registry>> = OnceCell::new();
 
+/// Initialize the central resource registry.
 pub fn init_registry() {
     unsafe {
         REG.set(RwLock::new(Registry::new()))
@@ -137,10 +160,12 @@ pub fn init_registry() {
     }
 }
 
+/// Obtain a read-only handle to the central resource registry.
 pub fn registry() -> RwLockReadGuard<'static, Registry> {
     unsafe { REG.get().expect("registry initialized").read() }
 }
 
+/// Obtain a read-write handle to the central resource registry.
 pub fn registry_mut() -> RwLockWriteGuard<'static, Registry> {
     unsafe { REG.get().expect("registry initialized").write() }
 }

@@ -27,6 +27,8 @@ pub mod storage;
 pub mod timer;
 pub mod uart;
 
+pub mod fs;
+
 pub mod init;
 
 use core::{arch::global_asm, panic::PanicInfo};

@@ -14,12 +14,10 @@ pub enum Error {
     DeviceError,
 }
 
-// TODO: these definitions should probably just be in storage/mod.rs, maybe the block cache goes in
-// a seperate file
-
 #[async_trait]
 pub trait BlockStore {
     // TODO: support non-contiguous source/destinations in physical memory
+    // TODO: report how big the store is
 
     /// Block size supported by this store, in bytes
     fn supported_block_size(&self) -> usize;
