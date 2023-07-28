@@ -59,18 +59,18 @@ impl ThreadScheduler {
         }
     }
 
-    pub unsafe fn resume_current_thread(
+    pub unsafe fn resume_thread(
         &mut self,
+        id: ThreadId,
         current_regs: *mut Registers,
         previous_asid: Option<u16>,
     ) {
-        let current = self.currently_running();
-        log::trace!("resuming thread {current}");
+        log::trace!("resuming thread {id}");
         let thread = threads()
-            .get_mut(&current)
+            .get_mut(&id)
             .expect("scheduler has valid thread IDs");
         log::trace!(
-            "resuming thread {current} @ {}, sp={}",
+            "resuming thread {id} @ {}, sp={}",
             thread.pc,
             thread.sp
         );
@@ -82,6 +82,14 @@ impl ThreadScheduler {
         crate::memory::paging::flush_tlb_for_asid(previous_asid.unwrap_or(0));
 
         thread.restore(current_regs.as_mut().unwrap());
+    }
+
+    pub unsafe fn resume_current_thread(
+        &mut self,
+        current_regs: *mut Registers,
+        previous_asid: Option<u16>,
+    ) {
+        self.resume_thread(self.currently_running(), current_regs, previous_asid)
     }
 }
 

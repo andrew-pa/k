@@ -169,7 +169,7 @@ impl BlockCache {
     }
 
     /// Copy bytes from the cache into a slice. Any unloaded blocks will be loaded, and copies can span multiple blocks
-    async fn copy_bytes(
+    pub async fn copy_bytes(
         &mut self,
         address: LogicalAddress,
         byte_offset: usize,
@@ -200,7 +200,7 @@ impl BlockCache {
     }
 
     /// Write bytes from a slice into the cache. Any unloaded blocks will be loaded, and writes can span multiple blocks. The cache will write the blocks back to the underlying storage when they are ejected from the cache.
-    async fn write_bytes(
+    pub async fn write_bytes(
         &mut self,
         address: LogicalAddress,
         byte_offset: usize,
@@ -231,7 +231,7 @@ impl BlockCache {
     }
 
     /// Update bytes in the cache in a certain range. All blocks in the range will be loaded into the cache if they are unloaded.
-    async fn update_bytes(
+    pub async fn update_bytes(
         &mut self,
         address: LogicalAddress,
         size_in_bytes: usize,

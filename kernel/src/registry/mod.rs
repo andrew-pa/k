@@ -22,6 +22,16 @@ pub enum RegistryError {
     Other { source: Box<dyn snafu::Error> },
 }
 
+/// Resource types that can be retrieved from the Registry
+pub enum ResourceType {
+    /// A [BlockStore][crate::storage::BlockStore] implementation
+    BlockStore,
+    /// A [ByteStore][crate::fs::ByteStore] implementation
+    ByteStore,
+    /// Represents that the path refers to a directory rather than a single resource
+    Directory
+}
+
 /// A RegistryHandler responds to requests to open registered resources by path.
 #[async_trait]
 pub trait RegistryHandler {
@@ -33,7 +43,8 @@ pub trait RegistryHandler {
 
 // TODO: storing these as strings is bad as short strings might take up an unexpectedly large
 // amount of memory due to heap block headers and alignment requirements
-// maybe it would be better to intern them somehow?
+// maybe it would be better to intern them somehow? You could have a interned string path type as
+// well that would be more efficient.
 enum Node {
     Directory(HashMap<String, Node>),
     Handler(Box<dyn RegistryHandler>),

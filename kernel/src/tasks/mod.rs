@@ -69,11 +69,13 @@ impl Executor {
         }
     }
 
+    /// Run the task executor forever. This is intended to be the effective entry point for the executor thread.
     pub fn run_forever(self) -> ! {
         let mut tasks = HashMap::new();
         let mut waker_cache = HashMap::new();
 
         loop {
+            log::debug!("top of loop");
             while let Some((task_id, task)) = self.new_task_queue.pop() {
                 log::trace!("adding new task {task_id}");
                 tasks.insert(task_id, task);
@@ -102,6 +104,7 @@ impl Executor {
                     Poll::Pending => {}
                 }
             }
+            log::debug!("bottom of loop");
             super::wait_for_interrupt();
         }
     }

@@ -1,6 +1,6 @@
 #!/bin/bash
-qemu-system-aarch64 -machine virt -cpu cortex-a57 -nographic \
-    -bios ./u-boot/.build/u-boot.bin \
+./qemu/.build/qemu-system-aarch64 -machine virt -cpu cortex-a57 -nographic \
+    -bios ./u-boot/.build/u-boot.bin -semihosting \
     -drive if=none,file=fat:rw:./.build,id=test,format=raw \
     -device nvme,drive=test,serial=foo \
 <<-END

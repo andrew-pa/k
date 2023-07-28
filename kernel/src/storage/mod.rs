@@ -15,7 +15,7 @@ pub enum Error {
 }
 
 #[async_trait]
-pub trait BlockStore {
+pub trait BlockStore: Send {
     // TODO: support non-contiguous source/destinations in physical memory
     // TODO: report how big the store is
 
@@ -41,6 +41,31 @@ pub trait BlockStore {
         destination_addr: LogicalAddress,
         num_blocks: usize,
     ) -> Result<usize, Error>;
+}
+
+#[async_trait]
+impl BlockStore for Box<dyn BlockStore> {
+    fn supported_block_size(&self) -> usize {
+        self.as_ref().supported_block_size()
+    }
+
+    async fn read_blocks(
+        &mut self,
+        source_addr: LogicalAddress,
+        destination_addr: PhysicalAddress,
+        num_blocks: usize,
+    ) -> Result<usize, Error> {
+        self.as_mut().read_blocks(source_addr, destination_addr, num_blocks).await
+    }
+
+    async fn write_blocks(
+        &mut self,
+        source_addr: PhysicalAddress,
+        destination_addr: LogicalAddress,
+        num_blocks: usize,
+    ) -> Result<usize, Error> {
+        self.as_mut().write_blocks(source_addr, destination_addr, num_blocks).await
+    }
 }
 
 pub mod block_cache;

@@ -62,8 +62,9 @@ impl CompletionQueueHandle {
     pub fn wait_for_completion<'sq>(&mut self, cmd: Command<'sq>) -> CompletionFuture {
         let cmd_id = self.next_cmd_id;
         self.next_cmd_id = self.next_cmd_id.wrapping_add(1);
-        cmd.set_command_id(cmd_id).submit();
         log::debug!("created future for NVMe command id {cmd_id}");
+        log::trace!("NVMe command {cmd_id} = {cmd:?}");
+        cmd.set_command_id(cmd_id).submit();
         CompletionFuture {
             cmd_id,
             pending_completions: self.pending_completions.clone(),

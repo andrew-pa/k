@@ -14,7 +14,7 @@ use core::{arch::global_asm, panic::PanicInfo};
 use hashbrown::HashMap;
 use smallvec::SmallVec;
 
-use kernel::*;
+use kernel::{*, registry::Path};
 
 #[no_mangle]
 pub extern "C" fn kmain() {
@@ -22,7 +22,7 @@ pub extern "C" fn kmain() {
     unsafe {
         memory::zero_bss_section();
     }
-    init::init_logging(log::LevelFilter::Debug);
+    init::init_logging(log::LevelFilter::Trace);
 
     let dt = unsafe {
         dtb::DeviceTree::at_address(memory::PhysicalAddress(0x4000_0000).to_virtual_canonical())
@@ -57,7 +57,7 @@ pub extern "C" fn kmain() {
     // initialize system timer and interrupt
     init::configure_time_slicing(&dt);
 
-    tasks::spawn(async {
+    /*tasks::spawn(async {
         let mut bs = registry::registry()
             .open_block_store(registry::Path::new("/dev/nvme/pci@0:2:0/1"))
             .await
@@ -71,6 +71,14 @@ pub extern "C" fn kmain() {
             .await;
         log::info!("read result = {res:?}");
         log::debug!("data = {:x?}", &buf.as_bytes()[0..s]);
+    });*/
+
+    tasks::spawn(async {
+        let mut bs = registry::registry()
+            .open_block_store(Path::new("/dev/nvme/pci@0:2:0/1"))
+            .await
+            .unwrap();
+        fs::fat::mount(Path::new("/fat"), bs).await.unwrap();
     });
 
     #[cfg(test)]
@@ -93,6 +101,7 @@ pub extern "C" fn kmain() {
 
     log::trace!("idle loop starting");
     loop {
+        log::debug!("idle top of loop");
         wait_for_interrupt()
     }
 }

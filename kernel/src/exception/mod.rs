@@ -128,6 +128,7 @@ impl InterruptMask {
     }
 }
 
+#[inline]
 pub fn read_interrupt_mask() -> InterruptMask {
     let mut v: u64;
     unsafe {
@@ -136,6 +137,7 @@ pub fn read_interrupt_mask() -> InterruptMask {
     InterruptMask(v)
 }
 
+#[inline]
 pub fn write_interrupt_mask(m: InterruptMask) {
     unsafe {
         core::arch::asm!("msr DAIF, {v}", v = in(reg) m.0);
@@ -244,18 +246,15 @@ unsafe extern "C" fn handle_interrupt(regs: *mut Registers, _esr: usize, _far: u
     let id = ic.ack_interrupt();
     log::trace!("interrupt {id}");
     let pid = process::scheduler::scheduler().pause_current_thread(regs);
-    write_interrupt_mask(InterruptMask::all_disabled());
     match interrupt_handlers().get_mut(&id) {
         Some(mut h) => (*h)(id, regs),
         None => log::warn!("unhandled interrupt {id}"),
     }
-    process::scheduler::scheduler().resume_current_thread(
-        regs,
-        pid.and_then(|pid| process::processes().get(&pid))
-            .map(|proc| proc.page_tables.asid),
-    );
-    write_interrupt_mask(InterruptMask::all_enabled());
+    log::trace!("finished interrupt {id}");
     ic.finish_interrupt(id);
+    let previous_asid = pid.and_then(|pid| process::processes().get(&pid))
+            .map(|proc| proc.page_tables.asid);
+    process::scheduler::scheduler().resume_current_thread(regs, previous_asid);
 }
 
 #[no_mangle]

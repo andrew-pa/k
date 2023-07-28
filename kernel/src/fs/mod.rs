@@ -7,6 +7,7 @@ use snafu::Snafu;
 pub enum Error {
     Memory { source: crate::memory::MemoryError },
     Storage { source: crate::storage::Error },
+    Registry { source: crate::registry::RegistryError }
 }
 
 /// Enumeration of possible methods to seek within an I/O object.
@@ -31,3 +32,5 @@ pub trait ByteStore {
     /// Write a buffer into this writer, returning how many bytes were written.
     async fn write(&mut self, buf: &[u8]) -> Result<usize, Error>;
 }
+
+pub mod fat;

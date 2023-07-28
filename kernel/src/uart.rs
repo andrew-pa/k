@@ -21,11 +21,13 @@ impl Write for DebugUart {
 pub struct DebugUartLogger;
 
 impl log::Log for DebugUartLogger {
-    fn enabled(&self, _metadata: &log::Metadata) -> bool {
-        true
+    fn enabled(&self, metadata: &log::Metadata) -> bool {
+        metadata.target() != "kernel::memory::heap"
     }
 
     fn log(&self, record: &log::Record) {
+        if !self.enabled(record.metadata()) { return }
+
         //WARN: this is currently NOT thread safe!
         let mut uart = DebugUart {
             base: 0xffff_0000_0900_0000 as *mut u8,

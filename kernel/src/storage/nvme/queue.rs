@@ -17,12 +17,25 @@ pub struct Command<'sq> {
     pub cmd: &'sq mut [u32],
 }
 
+impl core::fmt::Debug for Command<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let mut x = f.debug_struct("Command");
+        x.field("parent-queue", &self.parent.id);
+        for w in self.cmd.iter() {
+            x.field("dw", &format_args!("0x{:x}", w));
+        }
+        x.finish()
+    }
+}
+
 impl<'sq> Command<'sq> {
     pub fn submit(self) {
+        log::trace!("submitting NVMe command {self:?}");
         self.parent.tail = self.new_tail;
         unsafe {
             self.parent.tail_doorbell.write_volatile(self.parent.tail);
         }
+        log::trace!("submitted!");
     }
 
     // low-level accessors
@@ -377,13 +390,13 @@ impl CompletionQueue {
                 .offset((self.head as usize * COMPLETION_ENTRY_SIZE) as isize)
                 .as_ptr::<[u32; 4]>())
             .read_volatile();
-            log::trace!(
-                "cmp raw:\n0: {:8x}\n1: {:8x}\n2: {:8x}\n3: {:8x}",
-                sl[0],
-                sl[1],
-                sl[2],
-                sl[3]
-            );
+            // log::trace!(
+            //     "cmp raw:\n0: {:8x}\n1: {:8x}\n2: {:8x}\n3: {:8x}",
+            //     sl[0],
+            //     sl[1],
+            //     sl[2],
+            //     sl[3]
+            // );
 
             let ptr = self
                 .queue_memory
