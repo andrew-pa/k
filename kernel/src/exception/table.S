@@ -50,7 +50,6 @@
 
     save_regs
 
-
     mov x0, sp
     mrs x1, ESR_EL1
     mrs x2, FAR_EL1

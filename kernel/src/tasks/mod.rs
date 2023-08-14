@@ -85,6 +85,7 @@ impl Executor {
                     .expect("ready task queue overflow");
             }
 
+            log::debug!("dequeuing task");
             while let Some(task_id) = self.ready_queue.pop() {
                 log::trace!("polling {task_id}");
                 let task = match tasks.get_mut(&task_id) {
@@ -95,6 +96,7 @@ impl Executor {
                     .entry(task_id)
                     .or_insert_with(|| TaskWaker::new(task_id, self.ready_queue.clone()));
                 let mut context = Context::from_waker(waker);
+                log::debug!("polling task {task_id}");
                 match task.as_mut().poll(&mut context) {
                     Poll::Ready(()) => {
                         log::trace!("task {task_id} finished");
@@ -105,7 +107,7 @@ impl Executor {
                 }
             }
             log::debug!("bottom of loop");
-            super::wait_for_interrupt();
+            // super::wait_for_interrupt();
         }
     }
 }
