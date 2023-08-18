@@ -49,12 +49,12 @@ impl ThreadScheduler {
         current_regs: *mut Registers,
     ) -> Option<ProcessId> {
         let current = self.currently_running();
-        log::trace!("pausing thread {current}");
         if let Some(mut t) = threads().get_mut(&current) {
             t.save(current_regs.as_ref().unwrap());
             log::trace!("paused thread {current} @ {}, sp={}", t.pc, t.sp);
             t.parent
         } else {
+            log::warn!("pausing thread {current} that has no thread info");
             None
         }
     }
@@ -65,15 +65,10 @@ impl ThreadScheduler {
         current_regs: *mut Registers,
         previous_asid: Option<u16>,
     ) {
-        log::trace!("resuming thread {id}");
         let thread = threads()
             .get_mut(&id)
             .expect("scheduler has valid thread IDs");
-        log::trace!(
-            "resuming thread {id} @ {}, sp={}",
-            thread.pc,
-            thread.sp
-        );
+        log::trace!("resuming thread {id} @ {}, sp={}", thread.pc, thread.sp);
 
         if let Some(proc) = thread.parent.and_then(|id| processes().get(&id)) {
             proc.page_tables.activate();

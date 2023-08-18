@@ -5,6 +5,7 @@ use bitfield::bitfield;
 use spin::{Mutex, MutexGuard};
 
 use crate::{
+    current_el,
     memory::PhysicalAddress,
     process::{self, read_exception_link_reg, read_stack_pointer},
     sp_sel, timer, CHashMapG,
@@ -52,7 +53,7 @@ pub trait InterruptController {
     fn config(&self, id: InterruptId) -> InterruptConfig;
     fn set_config(&self, id: InterruptId, config: InterruptConfig);
 
-    fn ack_interrupt(&self) -> InterruptId;
+    fn ack_interrupt(&self) -> Option<InterruptId>;
     fn finish_interrupt(&self, id: InterruptId);
 
     fn msi_supported(&self) -> bool {
@@ -243,24 +244,32 @@ unsafe extern "C" fn handle_synchronous_exception(regs: *mut Registers, esr: usi
 #[no_mangle]
 unsafe extern "C" fn handle_interrupt(regs: *mut Registers, _esr: usize, _far: usize) {
     let ic = interrupt_controller();
-    let id = ic.ack_interrupt();
-    log::trace!("interrupt {id}");
+
     let pid = process::scheduler::scheduler().pause_current_thread(regs);
-    match interrupt_handlers().get_mut(&id) {
-        Some(mut h) => (*h)(id, regs),
-        None => log::warn!("unhandled interrupt {id}"),
+    // log::trace!("SPsel = {}, EL={}", sp_sel(), current_el());
+    let previous_asid = pid
+        .and_then(|pid| process::processes().get(&pid))
+        .map(|proc| proc.page_tables.asid);
+
+    while let Some(id) = ic.ack_interrupt() {
+        log::trace!("handling interrupt {id}");
+        match interrupt_handlers().get_mut(&id) {
+            Some(mut h) => (*h)(id, regs),
+            None => log::warn!("unhandled interrupt {id}"),
+        }
+        log::trace!("finished interrupt {id}");
+        ic.finish_interrupt(id);
     }
-    log::trace!("finished interrupt {id}");
-    ic.finish_interrupt(id);
-    let previous_asid = pid.and_then(|pid| process::processes().get(&pid))
-            .map(|proc| proc.page_tables.asid);
+
+    // TODO: if we get another interrupt here, it might cause problems
+
     process::scheduler::scheduler().resume_current_thread(regs, previous_asid);
 }
 
 #[no_mangle]
 unsafe extern "C" fn handle_fast_interrupt(_regs: *mut Registers, _esr: usize, _far: usize) {
     let ic = interrupt_controller();
-    let id = ic.ack_interrupt();
+    let id = ic.ack_interrupt().unwrap();
     log::warn!("unhandled fast interrupt {id}");
     ic.finish_interrupt(id);
 }

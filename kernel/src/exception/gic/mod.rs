@@ -316,8 +316,13 @@ impl InterruptController for GenericInterruptController {
         }
     }
 
-    fn ack_interrupt(&self) -> InterruptId {
-        unsafe { self.cpu_base.offset(GICC_IAR).read_volatile() }
+    fn ack_interrupt(&self) -> Option<InterruptId> {
+        let id = unsafe { self.cpu_base.offset(GICC_IAR).read_volatile() };
+        if id == INTID_NONE_PENDING {
+            None
+        } else {
+            Some(id)
+        }
     }
 
     fn finish_interrupt(&self, id: InterruptId) {
@@ -422,3 +427,6 @@ const GICC_APR_N: isize = 0x00d0 >> 2;
 const GICC_NSAPR_N: isize = 0x00e0 >> 2;
 const GICC_IIDR: isize = 0x00fc >> 2;
 const GICC_DIR: isize = 0x1000 >> 2;
+
+//// Special InterruptIds
+const INTID_NONE_PENDING: InterruptId = 1023;

@@ -29,7 +29,7 @@ pub enum ResourceType {
     /// A [ByteStore][crate::fs::ByteStore] implementation
     ByteStore,
     /// Represents that the path refers to a directory rather than a single resource
-    Directory
+    Directory,
 }
 
 /// A RegistryHandler responds to requests to open registered resources by path.

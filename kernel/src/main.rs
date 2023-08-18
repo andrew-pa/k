@@ -14,7 +14,7 @@ use core::{arch::global_asm, panic::PanicInfo};
 use hashbrown::HashMap;
 use smallvec::SmallVec;
 
-use kernel::{*, registry::Path};
+use kernel::{registry::Path, *};
 
 #[no_mangle]
 pub extern "C" fn kmain() {
@@ -74,10 +74,12 @@ pub extern "C" fn kmain() {
     });*/
 
     tasks::spawn(async {
+        log::info!("open /dev/nvme/pci@0:2:0/1");
         let mut bs = registry::registry()
             .open_block_store(Path::new("/dev/nvme/pci@0:2:0/1"))
             .await
             .unwrap();
+        log::info!("mount FAT filesystem");
         fs::fat::mount(Path::new("/fat"), bs).await.unwrap();
     });
 
@@ -97,6 +99,7 @@ pub extern "C" fn kmain() {
     ));
 
     // enable all interrupts in DAIF process state mask
+    log::trace!("enabling interrupts");
     exception::write_interrupt_mask(exception::InterruptMask::all_enabled());
 
     log::trace!("idle loop starting");

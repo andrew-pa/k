@@ -5,9 +5,15 @@ use snafu::Snafu;
 /// File system related errors.
 #[derive(Debug, Snafu)]
 pub enum Error {
-    Memory { source: crate::memory::MemoryError },
-    Storage { source: crate::storage::Error },
-    Registry { source: crate::registry::RegistryError }
+    Memory {
+        source: crate::memory::MemoryError,
+    },
+    Storage {
+        source: crate::storage::Error,
+    },
+    Registry {
+        source: crate::registry::RegistryError,
+    },
 }
 
 /// Enumeration of possible methods to seek within an I/O object.

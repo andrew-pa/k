@@ -55,7 +55,9 @@ impl BlockStore for Box<dyn BlockStore> {
         destination_addr: PhysicalAddress,
         num_blocks: usize,
     ) -> Result<usize, Error> {
-        self.as_mut().read_blocks(source_addr, destination_addr, num_blocks).await
+        self.as_mut()
+            .read_blocks(source_addr, destination_addr, num_blocks)
+            .await
     }
 
     async fn write_blocks(
@@ -64,7 +66,9 @@ impl BlockStore for Box<dyn BlockStore> {
         destination_addr: LogicalAddress,
         num_blocks: usize,
     ) -> Result<usize, Error> {
-        self.as_mut().write_blocks(source_addr, destination_addr, num_blocks).await
+        self.as_mut()
+            .write_blocks(source_addr, destination_addr, num_blocks)
+            .await
     }
 }
 

@@ -26,7 +26,9 @@ impl log::Log for DebugUartLogger {
     }
 
     fn log(&self, record: &log::Record) {
-        if !self.enabled(record.metadata()) { return }
+        if !self.enabled(record.metadata()) {
+            return;
+        }
 
         //WARN: this is currently NOT thread safe!
         let mut uart = DebugUart {
