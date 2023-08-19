@@ -4,9 +4,10 @@ use async_trait::async_trait;
 use derive_more::Display;
 use snafu::Snafu;
 
+/// The address of a block in a [BlockStore]
 #[derive(Copy, Clone, Display, PartialEq, Eq, PartialOrd, Ord)]
 #[display(fmt = "L:0x{:x}", _0)]
-pub struct LogicalAddress(pub u64);
+pub struct BlockAddress(pub u64);
 
 #[derive(Debug, Snafu)]
 pub enum Error {
@@ -27,7 +28,7 @@ pub trait BlockStore: Send {
     /// Returns the number of blocks read, or an error if one occurred
     async fn read_blocks(
         &mut self,
-        source_addr: LogicalAddress,
+        source_addr: BlockAddress,
         destination_addr: PhysicalAddress,
         num_blocks: usize,
     ) -> Result<usize, Error>;
@@ -38,7 +39,7 @@ pub trait BlockStore: Send {
     async fn write_blocks(
         &mut self,
         source_addr: PhysicalAddress,
-        destination_addr: LogicalAddress,
+        destination_addr: BlockAddress,
         num_blocks: usize,
     ) -> Result<usize, Error>;
 }
@@ -51,7 +52,7 @@ impl BlockStore for Box<dyn BlockStore> {
 
     async fn read_blocks(
         &mut self,
-        source_addr: LogicalAddress,
+        source_addr: BlockAddress,
         destination_addr: PhysicalAddress,
         num_blocks: usize,
     ) -> Result<usize, Error> {
@@ -63,7 +64,7 @@ impl BlockStore for Box<dyn BlockStore> {
     async fn write_blocks(
         &mut self,
         source_addr: PhysicalAddress,
-        destination_addr: LogicalAddress,
+        destination_addr: BlockAddress,
         num_blocks: usize,
     ) -> Result<usize, Error> {
         self.as_mut()

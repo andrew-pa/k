@@ -1,4 +1,4 @@
-use crate::storage::LogicalAddress;
+use crate::storage::BlockAddress;
 
 use super::queue::{Command, QueueId};
 
@@ -75,7 +75,7 @@ impl<'sq> Command<'sq> {
         self.set_opcode(0x00)
     }
 
-    pub fn read(self, starting_lba: LogicalAddress, num_blocks: u16) -> Self {
+    pub fn read(self, starting_lba: BlockAddress, num_blocks: u16) -> Self {
         self.set_opcode(0x02)
             .set_qword(10, starting_lba.0)
             // TODO: not all parameters are exposed, including data protection
@@ -86,7 +86,7 @@ impl<'sq> Command<'sq> {
         // TODO: 14.. have end-to-end values that are not yet relevant
     }
 
-    pub fn write(self, starting_lba: LogicalAddress, num_blocks: u16) -> Self {
+    pub fn write(self, starting_lba: BlockAddress, num_blocks: u16) -> Self {
         self.set_opcode(0x01)
             .set_qword(10, starting_lba.0)
             // TODO: not all parameters are exposed, including data protection

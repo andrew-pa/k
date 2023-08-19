@@ -6,7 +6,7 @@
 
 use hashbrown::HashMap;
 
-use kernel::{storage::LogicalAddress, *};
+use kernel::{storage::BlockAddress, *};
 
 #[test_case]
 fn write_then_read_scratch() {
@@ -20,11 +20,11 @@ fn write_then_read_scratch() {
         buf.as_bytes_mut().fill(0);
         let data = "Hello, block storage!".as_bytes();
         buf.as_bytes_mut()[0..data.len()].copy_from_slice(data);
-        bs.write_blocks(buf.physical_address(), LogicalAddress(0), 1)
+        bs.write_blocks(buf.physical_address(), BlockAddress(0), 1)
             .await
             .expect("write block");
         buf.as_bytes_mut()[0..data.len()].fill(0);
-        bs.read_blocks(LogicalAddress(0), buf.physical_address(), 1)
+        bs.read_blocks(BlockAddress(0), buf.physical_address(), 1)
             .await
             .expect("read block");
         assert_eq!(&buf.as_bytes()[0..data.len()], data);

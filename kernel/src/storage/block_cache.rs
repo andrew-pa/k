@@ -49,6 +49,8 @@ pub struct BlockCache {
 
 // TODO: bounds checking on device size
 impl BlockCache {
+    /// Create a new block cache using `store` as the underlying block store, caching a maximum of
+    /// `max_size_in_pages` pages worth of blocks in memory.
     pub fn new(
         store: impl BlockStore + 'static,
         max_size_in_pages: usize,
@@ -89,7 +91,7 @@ impl BlockCache {
     }
 
     /// Decompose a logical address into its cache tag, chunk ID and block offset, respectively.
-    fn decompose_address(&self, address: LogicalAddress) -> (u64, u64, u64) {
+    fn decompose_address(&self, address: BlockAddress) -> (u64, u64, u64) {
         (
             address
                 .0
@@ -102,8 +104,8 @@ impl BlockCache {
         )
     }
 
-    fn compose_address(&self, tag: u64, chunk_id: u64) -> LogicalAddress {
-        LogicalAddress(
+    fn compose_address(&self, tag: u64, chunk_id: u64) -> BlockAddress {
+        BlockAddress(
             (tag << (self.chunk_id_bits + self.block_offset_bits))
                 | (chunk_id << self.block_offset_bits),
         )
@@ -168,10 +170,10 @@ impl BlockCache {
         Ok(())
     }
 
-    /// Copy bytes from the cache into a slice. Any unloaded blocks will be loaded, and copies can span multiple blocks
+    /// Copy bytes from the cache into a slice. Any unloaded blocks will be loaded, and copies can span multiple blocks.
     pub async fn copy_bytes(
         &mut self,
-        address: LogicalAddress,
+        address: BlockAddress,
         byte_offset: usize,
         dest: &mut [u8],
     ) -> Result<(), Error> {
@@ -202,7 +204,7 @@ impl BlockCache {
     /// Write bytes from a slice into the cache. Any unloaded blocks will be loaded, and writes can span multiple blocks. The cache will write the blocks back to the underlying storage when they are ejected from the cache.
     pub async fn write_bytes(
         &mut self,
-        address: LogicalAddress,
+        address: BlockAddress,
         byte_offset: usize,
         src: &[u8],
     ) -> Result<(), Error> {
@@ -233,7 +235,7 @@ impl BlockCache {
     /// Update bytes in the cache in a certain range. All blocks in the range will be loaded into the cache if they are unloaded.
     pub async fn update_bytes(
         &mut self,
-        address: LogicalAddress,
+        address: BlockAddress,
         size_in_bytes: usize,
         f: impl FnOnce(&mut [u8]),
     ) {
@@ -269,7 +271,7 @@ mod test {
         }
         async fn read_blocks(
             &mut self,
-            source_addr: LogicalAddress,
+            source_addr: BlockAddress,
             destination_addr: PhysicalAddress,
             num_blocks: usize,
         ) -> Result<usize, Error> {
@@ -286,7 +288,7 @@ mod test {
         async fn write_blocks(
             &mut self,
             source_addr: PhysicalAddress,
-            destination_addr: LogicalAddress,
+            destination_addr: BlockAddress,
             num_blocks: usize,
         ) -> Result<usize, Error> {
             unimplemented!()
@@ -299,7 +301,7 @@ mod test {
         let rc = bs.read_counter.clone();
         let mut c = BlockCache::new(bs, 1).unwrap();
         let mut buf = [0; 8];
-        block_on(c.copy_bytes(LogicalAddress(0), 0, &mut buf)).unwrap();
+        block_on(c.copy_bytes(BlockAddress(0), 0, &mut buf)).unwrap();
         assert_eq!(buf, [0, 1, 2, 3, 4, 5, 6, 7]);
         assert_eq!(rc.load(Ordering::Acquire), PAGE_SIZE / 8);
     }
@@ -310,7 +312,7 @@ mod test {
         let rc = bs.read_counter.clone();
         let mut c = BlockCache::new(bs, 1).unwrap();
         let mut buf = [0; 8];
-        block_on(c.copy_bytes(LogicalAddress(0), 4, &mut buf)).unwrap();
+        block_on(c.copy_bytes(BlockAddress(0), 4, &mut buf)).unwrap();
         assert_eq!(buf, [4, 5, 6, 7, 8, 9, 10, 11]);
         assert_eq!(rc.load(Ordering::Acquire), PAGE_SIZE / 8);
     }
@@ -322,12 +324,12 @@ mod test {
         let mut c = BlockCache::new(bs, 1).unwrap();
         let mut buf = [0; 8];
         // first read cold
-        block_on(c.copy_bytes(LogicalAddress(0), 0, &mut buf)).unwrap();
+        block_on(c.copy_bytes(BlockAddress(0), 0, &mut buf)).unwrap();
         assert_eq!(buf, [0, 1, 2, 3, 4, 5, 6, 7]);
         assert_eq!(rc.swap(0, Ordering::Acquire), PAGE_SIZE / 8);
         // second read should just be cached
         buf.fill(0);
-        block_on(c.copy_bytes(LogicalAddress(0), 0, &mut buf)).unwrap();
+        block_on(c.copy_bytes(BlockAddress(0), 0, &mut buf)).unwrap();
         assert_eq!(buf, [0, 1, 2, 3, 4, 5, 6, 7]);
         assert_eq!(rc.load(Ordering::Acquire), 0);
     }
@@ -356,7 +358,7 @@ mod test {
 
         async fn read_blocks(
             &mut self,
-            source_addr: LogicalAddress,
+            source_addr: BlockAddress,
             destination_addr: PhysicalAddress,
             num_blocks: usize,
         ) -> Result<usize, Error> {
@@ -378,7 +380,7 @@ mod test {
         async fn write_blocks(
             &mut self,
             source_addr: PhysicalAddress,
-            destination_addr: LogicalAddress,
+            destination_addr: BlockAddress,
             num_blocks: usize,
         ) -> Result<usize, Error> {
             log::debug!("write {source_addr} → {destination_addr}, {num_blocks} blocks");
@@ -401,11 +403,11 @@ mod test {
         let mut c = BlockCache::new(bs, 1).unwrap();
         let mut buf = [0; 8];
         buf.copy_from_slice(b"testtest");
-        block_on(c.write_bytes(LogicalAddress(7), 0, &buf));
+        block_on(c.write_bytes(BlockAddress(7), 0, &buf));
         assert_eq!(rc.swap(0, Ordering::Acquire), PAGE_SIZE / 8);
         assert_eq!(wc.load(Ordering::Acquire), 0); // no writes yet
         buf.fill(0);
-        block_on(c.copy_bytes(LogicalAddress(7), 0, &mut buf)).unwrap();
+        block_on(c.copy_bytes(BlockAddress(7), 0, &mut buf)).unwrap();
         assert_eq!(&buf, b"testtest");
         assert_eq!(rc.load(Ordering::Acquire), 0);
         assert_eq!(wc.load(Ordering::Acquire), 0);
@@ -418,12 +420,12 @@ mod test {
         let mut c = BlockCache::new(bs, 1).unwrap();
         let mut buf = [0; 8];
         buf.copy_from_slice(b"testtest");
-        block_on(c.write_bytes(LogicalAddress(7), 0, &buf));
+        block_on(c.write_bytes(BlockAddress(7), 0, &buf));
         assert_eq!(rc.swap(0, Ordering::Acquire), PAGE_SIZE / 8);
         assert_eq!(wc.load(Ordering::Acquire), 0); // no writes yet
         buf.fill(0);
         // read a block with a different tag to cause the cache to write the dirty block out
-        block_on(c.copy_bytes(LogicalAddress(0x800), 0, &mut buf)).unwrap();
+        block_on(c.copy_bytes(BlockAddress(0x800), 0, &mut buf)).unwrap();
         assert_eq!(rc.load(Ordering::Acquire), 0);
         assert_eq!(wc.load(Ordering::Acquire), PAGE_SIZE / 8);
     }

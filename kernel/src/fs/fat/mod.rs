@@ -1,3 +1,5 @@
+//! Support for the FAT32 filesystem for QEMU
+// See <qemu-src>/block/vvfat.c
 use alloc::boxed::Box;
 use async_trait::async_trait;
 use byteorder::{ByteOrder, LittleEndian};
@@ -5,12 +7,15 @@ use snafu::ResultExt;
 
 use crate::{
     registry::{registry_mut, Path, RegistryHandler},
-    storage::{block_cache::BlockCache, BlockStore, LogicalAddress},
+    storage::{block_cache::BlockCache, BlockAddress, BlockStore},
 };
 
 use super::Error;
 
 const CACHE_SIZE: usize = 256 /* pages */;
+
+// assume that every FAT filesystem uses 512 byte sectors
+const SECTOR_SIZE: u64 = 512;
 
 struct Handler {}
 
@@ -18,10 +23,10 @@ impl Handler {
     async fn new(block_store: Box<dyn BlockStore>) -> Result<Handler, Error> {
         let mut cache = BlockCache::new(block_store, CACHE_SIZE).context(super::StorageSnafu)?;
 
-        // read the MBR
+        // read the relevant part of the MBR, starting at byte 446
         let mut mbr_data = [0u8; 66];
         cache
-            .copy_bytes(LogicalAddress(0), 446, &mut mbr_data)
+            .copy_bytes(BlockAddress(0), 446, &mut mbr_data)
             .await
             .context(super::StorageSnafu)?;
 
@@ -30,17 +35,17 @@ impl Handler {
             return Err(todo!("bad mbr"));
         }
 
-        log::debug!("{mbr_data:x?}");
+        log::debug!("MBR: {mbr_data:x?}");
 
         for i in 0..4 {
             let type_code = mbr_data[i * 16 + 5];
             let partition_addr =
-                LogicalAddress(LittleEndian::read_u32(&mbr_data[i * 16 + 8..]) as u64);
+                BlockAddress(LittleEndian::read_u32(&mbr_data[i * 16 + 8..]) as u64);
             log::debug!("FAT partition at {partition_addr}, type={type_code:x}");
         }
 
         // TODO: handle more than one partition in slot 0
-        let partition_addr = LogicalAddress(LittleEndian::read_u32(&mbr_data[8..]) as u64);
+        let partition_addr = BlockAddress(LittleEndian::read_u32(&mbr_data[8..]) as u64);
         log::debug!("using partition at {partition_addr}");
         assert!(partition_addr.0 > 0);
         let mut vol_id_data = [0u8; 512];

@@ -1,6 +1,6 @@
 use crate::{
     memory::PhysicalAddress,
-    storage::{BlockStore, Error, LogicalAddress},
+    storage::{BlockAddress, BlockStore, Error},
 };
 use alloc::boxed::Box;
 use async_trait::async_trait;
@@ -25,7 +25,7 @@ impl BlockStore for NamespaceBlockStore {
 
     async fn read_blocks(
         &mut self,
-        source_addr: LogicalAddress,
+        source_addr: BlockAddress,
         destination_addr: PhysicalAddress,
         num_blocks: usize,
     ) -> Result<usize, Error> {
@@ -49,7 +49,7 @@ impl BlockStore for NamespaceBlockStore {
     async fn write_blocks(
         &mut self,
         source_addr: PhysicalAddress,
-        destination_addr: LogicalAddress,
+        destination_addr: BlockAddress,
         num_blocks: usize,
     ) -> Result<usize, Error> {
         let cmp = self.io_cq.wait_for_completion(
