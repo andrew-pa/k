@@ -14,6 +14,10 @@ pub enum Error {
     Registry {
         source: crate::registry::RegistryError,
     },
+    BadMetadata {
+        message: &'static str,
+        value: usize,
+    },
 }
 
 /// Enumeration of possible methods to seek within an I/O object.

@@ -1,11 +1,14 @@
-//! Support for the FAT32 filesystem for QEMU
+//! Support for the FAT filesystem for QEMU
+//! Currently this only supports FAT16.
 // See <qemu-src>/block/vvfat.c
 use alloc::boxed::Box;
 use async_trait::async_trait;
+use bitfield::bitfield;
 use byteorder::{ByteOrder, LittleEndian};
-use snafu::ResultExt;
+use snafu::{ensure, ResultExt};
 
 use crate::{
+    fs::BadMetadataSnafu,
     registry::{registry_mut, Path, RegistryHandler},
     storage::{block_cache::BlockCache, BlockAddress, BlockStore},
 };
@@ -17,7 +20,16 @@ const CACHE_SIZE: usize = 256 /* pages */;
 // assume that every FAT filesystem uses 512 byte sectors
 const SECTOR_SIZE: u64 = 512;
 
-struct Handler {}
+mod data;
+use data::*;
+
+struct Handler {
+    cache: BlockCache,
+    fat_start: BlockAddress,
+    clusters_start: BlockAddress,
+    root_directory_start: BlockAddress,
+    sectors_per_cluster: u64,
+}
 
 impl Handler {
     async fn new(block_store: Box<dyn BlockStore>) -> Result<Handler, Error> {
@@ -37,30 +49,74 @@ impl Handler {
 
         log::debug!("MBR: {mbr_data:x?}");
 
-        for i in 0..4 {
-            let type_code = mbr_data[i * 16 + 5];
-            let partition_addr =
-                BlockAddress(LittleEndian::read_u32(&mbr_data[i * 16 + 8..]) as u64);
-            log::debug!("FAT partition at {partition_addr}, type={type_code:x}");
+        let partition_table: &[PartitionEntry] =
+            unsafe { core::slice::from_raw_parts(mbr_data.as_ptr() as *const PartitionEntry, 4) };
+
+        for p in partition_table {
+            log::debug!("FAT partition {p:x?}");
         }
 
         // TODO: handle more than one partition in slot 0
-        let partition_addr = BlockAddress(LittleEndian::read_u32(&mbr_data[8..]) as u64);
+        let partition_addr = BlockAddress(partition_table[0].start_sector.into());
         log::debug!("using partition at {partition_addr}");
         assert!(partition_addr.0 > 0);
-        let mut vol_id_data = [0u8; 512];
+        let mut bootsector_data = [0u8; 512];
         cache
-            .copy_bytes(partition_addr, 0, &mut vol_id_data)
+            .copy_bytes(partition_addr, 0, &mut bootsector_data)
             .await
             .context(super::StorageSnafu)?;
-        log::debug!("{vol_id_data:x?}");
+        log::debug!("{bootsector_data:x?}");
 
-        // check volume ID magic bytes
-        if vol_id_data[510] != 0x55 && vol_id_data[511] != 0xaa {
-            return Err(todo!("bad volume id"));
+        // check boot sector magic bytes
+        ensure!(
+            bootsector_data[510] == 0x55 && bootsector_data[511] == 0xaa,
+            BadMetadataSnafu {
+                message: "invalid boot sector signature",
+                value: bootsector_data[510]
+            }
+        );
+        let bootsector: &BootSector = unsafe { &*(bootsector_data.as_ptr() as *const BootSector) };
+        log::debug!("FAT bootsector = {bootsector:x?}");
+        bootsector.validate()?;
+
+        let root_dir_sector = BlockAddress(
+            partition_addr.0
+                + bootsector.reserved_sectors_count as u64
+                + (bootsector.number_of_fats as u64 * bootsector.fat_size_16 as u64),
+        );
+
+        let mut root_dir_data = [0u8; 512];
+        cache
+            .copy_bytes(root_dir_sector, 0, &mut root_dir_data)
+            .await
+            .context(super::StorageSnafu)?;
+        log::debug!("{root_dir_sector} = {root_dir_data:x?}");
+        let root_dir: &[DirEntry] =
+            unsafe { core::slice::from_raw_parts(root_dir_data.as_ptr() as *const DirEntry, 16) };
+        log::debug!("{root_dir:?}");
+        for e in DirEntryIter::from(root_dir.iter()) {
+            let e = e?;
+            log::debug!(
+                "{:?} {} : {}",
+                e.attributes,
+                unsafe { core::str::from_utf8_unchecked(&e.short_name) },
+                unsafe { core::str::from_utf8_unchecked(&e.name) }
+            )
         }
 
-        todo!()
+        todo!();
+
+        Ok(Handler {
+            cache,
+            fat_start: BlockAddress(partition_addr.0 + bootsector.reserved_sectors_count as u64),
+            clusters_start: BlockAddress(
+                partition_addr.0
+                    + bootsector.reserved_sectors_count as u64
+                    + bootsector.number_of_fats as u64 * bootsector.fat_size_16 as u64,
+            ),
+            root_directory_start: root_dir_sector,
+            sectors_per_cluster: bootsector.sectors_per_cluster as u64,
+        })
     }
 }
 

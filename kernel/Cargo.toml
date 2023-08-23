@@ -9,6 +9,7 @@ edition = "2021"
 # macros
 derive_more = "0.99"
 bitfield = "0.14"
+bitflags = { version = "2", features = ["bytemuck"] }
 async-trait = "0.1"
 
 # extra data structures
@@ -16,6 +17,7 @@ hashbrown = "0.13"
 smallvec = "1"
 byteorder = { version = "1", default-features = false }
 bitvec = { version = "1", default-features = false }
+bytemuck = { version = "1", features = ["derive"] }
 
 # logging / errors
 log = "0.4"

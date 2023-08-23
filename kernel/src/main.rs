@@ -89,8 +89,9 @@ pub extern "C" fn kmain() {
     });
 
     log::info!("creating task executor thread");
-    let task_stack = memory::PhysicalBuffer::alloc(1024, &Default::default())
+    let task_stack = memory::PhysicalBuffer::alloc(4 * 1024, &Default::default())
         .expect("allocate task exec thread stack");
+    log::debug!("task stack = {task_stack:x?}");
 
     process::spawn_thread(process::Thread::kernel_thread(
         process::TASK_THREAD,

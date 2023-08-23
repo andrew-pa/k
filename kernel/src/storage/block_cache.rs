@@ -69,10 +69,11 @@ impl BlockCache {
             (1, max_size_in_pages / block_size, block_size)
         };
         let chunk_id_bits = num_chunks.ilog2() as usize;
-        log::debug!("creating block cache with {num_chunks} chunks, {blocks_per_chunk} blocks per chunk, {chunk_id_bits} bits for chunk ID");
+        let block_offset_bits = blocks_per_chunk.ilog2() as usize;
+        log::debug!("creating block cache with {num_chunks} chunks, {blocks_per_chunk} blocks per chunk, {chunk_id_bits} bits for chunk ID, {block_offset_bits} bits for block offset");
         Ok(BlockCache {
             store: Arc::new(Mutex::new(store)),
-            block_offset_bits: blocks_per_chunk.ilog2() as usize,
+            block_offset_bits,
             blocks_per_chunk,
             chunk_id_bits,
             block_size,
@@ -92,16 +93,16 @@ impl BlockCache {
 
     /// Decompose a logical address into its cache tag, chunk ID and block offset, respectively.
     fn decompose_address(&self, address: BlockAddress) -> (u64, u64, u64) {
-        (
-            address
-                .0
-                .bit_range(63, self.chunk_id_bits + self.block_offset_bits + 1),
-            address.0.bit_range(
-                self.chunk_id_bits + self.block_offset_bits + 1,
-                self.block_offset_bits + 1,
-            ),
-            address.0.bit_range(self.block_offset_bits, 0),
-        )
+        let tag = address
+            .0
+            .bit_range(63, self.chunk_id_bits + self.block_offset_bits);
+        let chunk_id = address.0.bit_range(
+            self.chunk_id_bits + self.block_offset_bits,
+            self.block_offset_bits,
+        );
+        let block_offset = address.0.bit_range(self.block_offset_bits - 1, 0);
+        // log::trace!("decomposing {:b} => {tag:b}:{chunk_id:b}:{block_offset:b}", address.0);
+        (tag, chunk_id, block_offset)
     }
 
     fn compose_address(&self, tag: u64, chunk_id: u64) -> BlockAddress {
@@ -179,7 +180,7 @@ impl BlockCache {
     ) -> Result<(), Error> {
         let (starting_tag, starting_chunk_id, initial_block_offset) =
             self.decompose_address(address);
-        log::trace!("copying from {starting_tag}:{starting_chunk_id}:{initial_block_offset}");
+        log::trace!("copying from {starting_tag}:{starting_chunk_id}:{initial_block_offset} + {byte_offset}");
         let num_chunks_inclusive = dest.len().div_ceil(self.chunk_size);
         if num_chunks_inclusive > self.num_chunks {
             // if the read is larger than the entire cache

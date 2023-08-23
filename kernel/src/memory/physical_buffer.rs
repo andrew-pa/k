@@ -13,6 +13,7 @@ use super::{
 
 /// PhysicalBuffer is an owned, contiguous region of memory with a known physical address that is
 /// also mapped into the kernel's virtual address space
+#[derive(Debug)]
 pub struct PhysicalBuffer {
     phy_addr: PhysicalAddress,
     vir_addr: VirtualAddress,
