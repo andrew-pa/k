@@ -91,6 +91,11 @@ impl BlockCache {
         })
     }
 
+    /// Size of a single block in bytes (forwards to [BlockStore::supported_block_size]).
+    pub fn block_size(&self) -> usize {
+        self.store.lock().supported_block_size()
+    }
+
     /// Decompose a logical address into its cache tag, chunk ID and block offset, respectively.
     fn decompose_address(&self, address: BlockAddress) -> (u64, u64, u64) {
         let tag = address

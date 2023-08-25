@@ -6,6 +6,7 @@
 #![feature(allocator_api)]
 #![feature(linked_list_cursors)]
 #![feature(custom_test_frameworks)]
+#![feature(iter_array_chunks)]
 #![test_runner(kernel::test_runner)]
 #![reexport_test_harness_main = "test_main"]
 #![allow(unused)]

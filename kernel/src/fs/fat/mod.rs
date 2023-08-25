@@ -5,6 +5,7 @@ use alloc::boxed::Box;
 use async_trait::async_trait;
 use bitfield::bitfield;
 use byteorder::{ByteOrder, LittleEndian};
+use futures::StreamExt;
 use snafu::{ensure, ResultExt};
 
 use crate::{
@@ -85,24 +86,23 @@ impl Handler {
                 + (bootsector.number_of_fats as u64 * bootsector.fat_size_16 as u64),
         );
 
-        let mut root_dir_data = [0u8; 512];
-        cache
-            .copy_bytes(root_dir_sector, 0, &mut root_dir_data)
-            .await
-            .context(super::StorageSnafu)?;
-        log::debug!("{root_dir_sector} = {root_dir_data:x?}");
-        let root_dir: &[DirEntry] =
-            unsafe { core::slice::from_raw_parts(root_dir_data.as_ptr() as *const DirEntry, 16) };
-        log::debug!("{root_dir:?}");
-        for e in DirEntryIter::from(root_dir.iter()) {
-            let e = e?;
-            log::debug!(
-                "{:?} {} : {}",
-                e.attributes,
-                unsafe { core::str::from_utf8_unchecked(&e.short_name) },
-                unsafe { core::str::from_utf8_unchecked(&e.name) }
-            )
-        }
+        long_dir_entry_stream(&mut cache, root_dir_sector)
+            .for_each(|e| async move {
+                match e {
+                    Ok(e) => log::debug!(
+                        "{:?} {} : {}",
+                        e.attributes,
+                        unsafe { core::str::from_utf8_unchecked(&e.short_name) },
+                        e.long_name().unwrap()
+                    ),
+                    Err(e) => log::error!("failed to read root directory entry: {e}"),
+                }
+            })
+            .await;
+
+        /* TODO:
+         * - traverse directories to locate a file
+         * - read file (implement ByteStore) */
 
         todo!();
 

@@ -2,8 +2,12 @@
 use core::ops::Deref;
 
 use bitflags::bitflags;
-use bytemuck::{bytes_of, Pod, Zeroable};
+use bytemuck::{bytes_of, bytes_of_mut, from_bytes, Pod, Zeroable};
+use futures::Stream;
 use smallvec::SmallVec;
+use widestring::Utf16Str;
+
+use crate::fs::StorageSnafu;
 
 use super::*;
 
@@ -141,16 +145,132 @@ pub struct DirEntry {
     pub file_size: u32,
 }
 
-pub struct LongDirEntry<'e> {
+pub fn dir_entry_stream(
+    cache: &mut BlockCache,
+    dir_start_address: BlockAddress,
+) -> impl Stream<Item = Result<DirEntry, Error>> + '_ {
+    futures::stream::unfold(
+        (cache, dir_start_address, 0),
+        move |(cache, mut block_addr, mut offset)| async move {
+            let mut de = DirEntry::zeroed();
+            match cache
+                .copy_bytes(block_addr, offset, bytes_of_mut(&mut de))
+                .await
+                .context(StorageSnafu)
+            {
+                Ok(_) => {}
+                Err(e) => return Some((Err(e), (cache, block_addr, offset))),
+            }
+            if de.short_name[0] == 0 {
+                return None;
+            }
+            offset += core::mem::size_of::<DirEntry>();
+            if offset > cache.block_size() {
+                offset = 0;
+                block_addr.0 += 1;
+            }
+            Some((Ok(de), (cache, block_addr, offset)))
+        },
+    )
+}
+
+pub struct LongDirEntry {
+    pub entry: DirEntry,
+    pub name: SmallVec<[u16; 8]>,
+}
+
+impl Deref for LongDirEntry {
+    type Target = DirEntry;
+
+    fn deref(&self) -> &Self::Target {
+        &self.entry
+    }
+}
+
+impl LongDirEntry {
+    /// Get the long name for this entry as a UTF-16 encoded string.
+    pub fn long_name(&self) -> Result<&Utf16Str, widestring::error::Utf16Error> {
+        Utf16Str::from_slice(&self.name)
+    }
+}
+
+pub fn long_dir_entry_stream(
+    cache: &mut BlockCache,
+    dir_start_address: BlockAddress,
+) -> impl Stream<Item = Result<LongDirEntry, Error>> + '_ {
+    futures::stream::unfold(
+        (cache, dir_start_address, 0),
+        move |(cache, mut block_addr, mut offset)| async move {
+            let mut entry_bytes = [0u8; 32];
+            let mut entry_name = SmallVec::new();
+
+            loop {
+                match cache
+                    .copy_bytes(block_addr, offset, &mut entry_bytes)
+                    .await
+                    .context(StorageSnafu)
+                {
+                    Ok(_) => {}
+                    Err(e) => return Some((Err(e), (cache, block_addr, offset))),
+                }
+
+                offset += 32;
+                if offset > cache.block_size() {
+                    offset = 0;
+                    block_addr.0 += 1;
+                }
+
+                if entry_bytes[0] == 0 {
+                    return None;
+                } else if entry_bytes[11] == DirEntryAttributes::LongName.bits() {
+                    entry_name.insert_many(
+                        0,
+                        (1..11)
+                            .chain(14..26)
+                            .chain(28..32)
+                            .map(|i| entry_bytes[i])
+                            .take_while(|b| *b != 0xff)
+                            .array_chunks()
+                            .map(|a: [u8; 2]| bytemuck::cast(a)),
+                    );
+                } else {
+                    return Some((
+                        Ok(LongDirEntry {
+                            entry: bytemuck::cast(entry_bytes),
+                            name: entry_name,
+                        }),
+                        (cache, block_addr, offset),
+                    ));
+                }
+            }
+        },
+    )
+}
+
+pub struct LongDirEntryX<'e> {
     pub entry: &'e DirEntry,
     pub name: SmallVec<[u8; 16]>,
 }
 
-impl<'e> Deref for LongDirEntry<'e> {
+impl<'e> Deref for LongDirEntryX<'e> {
     type Target = DirEntry;
 
     fn deref(&self) -> &Self::Target {
         self.entry
+    }
+}
+
+impl<'e> LongDirEntryX<'e> {
+    /// Get the long name for this entry as a UTF-16 encoded string.
+    pub fn long_name(&self) -> Result<&Utf16Str, widestring::error::Utf16Error> {
+        // SAFTEY: we have already checked to make sure that the SmallVec<u8> has enough bytes to
+        // be sliced into as a u16. This assumes that the system has matching endianness as the volume.
+        unsafe {
+            Utf16Str::from_slice(core::slice::from_raw_parts(
+                self.name.as_ptr() as *const u16,
+                self.name.len() / 2,
+            ))
+        }
     }
 }
 
@@ -165,41 +285,52 @@ impl<'e, U: Iterator<Item = &'e DirEntry>> From<U> for DirEntryIter<U> {
 }
 
 impl<'e, U: Iterator<Item = &'e DirEntry>> Iterator for DirEntryIter<U> {
-    type Item = Result<LongDirEntry<'e>, Error>;
+    type Item = Result<LongDirEntryX<'e>, Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if let Some(mut e) = self.underlying.next() {
-            if e.short_name[0] == 0x00 {
-                return None;
-            }
+        let mut e = self.underlying.next()?;
 
-            let mut name = SmallVec::new();
-            while e.attributes == DirEntryAttributes::LongName {
-                log::trace!("found long directory entry {e:?}");
-                let bytes = bytes_of(e);
-                name.insert_many(
-                    0,
-                    (1..11)
-                        .chain(14..26)
-                        .chain(28..32)
-                        .map(|i| bytes[i])
-                        .take_while(|b| *b != 0xff),
-                );
-                if let Some(ne) = self.underlying.next() {
-                    e = ne;
-                } else {
-                    return Some(Err(BadMetadataSnafu {
-                        message: "unexpected end of directory",
-                        value: e.cluster_num_lo,
-                    }
-                    .build()));
-                }
-            }
-
-            // TODO: name is in heckin' UTF16, uhg
-            Some(Ok(LongDirEntry { entry: e, name }))
-        } else {
-            None
+        if e.short_name[0] == 0x00 {
+            return None;
         }
+
+        let mut name = SmallVec::new();
+        while e.attributes == DirEntryAttributes::LongName {
+            // log::trace!("ld {e:?}");
+            let bytes = bytes_of(e);
+            name.insert_many(
+                0,
+                (1..11)
+                    .chain(14..26)
+                    .chain(28..32)
+                    .map(|i| bytes[i])
+                    .take_while(|b| *b != 0xff),
+            );
+            if let Some(ne) = self.underlying.next() {
+                e = ne;
+            } else {
+                return Some(Err(BadMetadataSnafu {
+                    message: "unexpected end of directory",
+                    value: e.cluster_num_lo,
+                }
+                .build()));
+            }
+        }
+
+        if name.len() % 2 == 1 {
+            // we include the null byte at the end when we gather the bytes, but if we get here we
+            // just need to take that off
+            if name.last().is_some_and(|v| *v == 0) {
+                name.pop();
+            } else {
+                return Some(Err(Error::BadMetadata {
+                    message: "long name is invalid UTF-16 (odd number of bytes)",
+                    value: name.len(),
+                }));
+            }
+        }
+
+        // log::trace!("E {e:?}");
+        Some(Ok(LongDirEntryX { entry: e, name }))
     }
 }

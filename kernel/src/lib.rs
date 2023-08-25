@@ -7,6 +7,7 @@
 #![feature(linked_list_cursors)]
 #![feature(type_name_of_val)]
 #![feature(error_in_core)]
+#![feature(iter_array_chunks)]
 #![feature(custom_test_frameworks)]
 #![test_runner(crate::test_runner)]
 #![reexport_test_harness_main = "test_main"]
