@@ -179,12 +179,18 @@ impl BlockCache {
     /// Copy bytes from the cache into a slice. Any unloaded blocks will be loaded, and copies can span multiple blocks.
     pub async fn copy_bytes(
         &mut self,
-        address: BlockAddress,
-        byte_offset: usize,
+        mut address: BlockAddress,
+        mut byte_offset: usize,
         dest: &mut [u8],
     ) -> Result<(), Error> {
+        if byte_offset >= self.block_size() {
+            address.0 += (byte_offset / self.block_size()) as u64;
+            byte_offset = byte_offset % self.block_size();
+        }
+
         let (starting_tag, starting_chunk_id, initial_block_offset) =
             self.decompose_address(address);
+
         log::trace!("copying from {starting_tag}:{starting_chunk_id}:{initial_block_offset} + {byte_offset}");
         let num_chunks_inclusive = dest.len().div_ceil(self.chunk_size);
         if num_chunks_inclusive > self.num_chunks {
@@ -210,10 +216,15 @@ impl BlockCache {
     /// Write bytes from a slice into the cache. Any unloaded blocks will be loaded, and writes can span multiple blocks. The cache will write the blocks back to the underlying storage when they are ejected from the cache.
     pub async fn write_bytes(
         &mut self,
-        address: BlockAddress,
-        byte_offset: usize,
+        mut address: BlockAddress,
+        mut byte_offset: usize,
         src: &[u8],
     ) -> Result<(), Error> {
+        if byte_offset >= self.block_size() {
+            address.0 += (byte_offset / self.block_size()) as u64;
+            byte_offset = byte_offset % self.block_size();
+        }
+
         let (starting_tag, starting_chunk_id, initial_block_offset) =
             self.decompose_address(address);
         log::trace!("writing to {starting_tag}:{starting_chunk_id}:{initial_block_offset}");
