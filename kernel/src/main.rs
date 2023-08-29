@@ -76,12 +76,18 @@ pub extern "C" fn kmain() {
 
     tasks::spawn(async {
         log::info!("open /dev/nvme/pci@0:2:0/1");
-        let mut bs = registry::registry()
-            .open_block_store(Path::new("/dev/nvme/pci@0:2:0/1"))
-            .await
-            .unwrap();
+        let mut bs = {
+            registry::registry()
+                .open_block_store(Path::new("/dev/nvme/pci@0:2:0/1"))
+                .await
+                .unwrap()
+        };
         log::info!("mount FAT filesystem");
         fs::fat::mount(Path::new("/fat"), bs).await.unwrap();
+        registry::registry()
+            .open_byte_store(Path::new("/fat/abcdefghij/test.txt"))
+            .await
+            .unwrap();
     });
 
     #[cfg(test)]

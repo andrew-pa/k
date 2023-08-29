@@ -18,6 +18,10 @@ pub enum Error {
         message: &'static str,
         value: usize,
     },
+    Other {
+        reason: &'static str,
+        source: Box<dyn snafu::Error + Send + Sync>,
+    },
 }
 
 /// Enumeration of possible methods to seek within an I/O object.

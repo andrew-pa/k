@@ -1,10 +1,12 @@
 //! Data structures for FAT filesystems
 use core::ops::Deref;
 
+use alloc::string::String;
 use bitflags::bitflags;
 use bytemuck::{bytes_of, bytes_of_mut, from_bytes, Pod, Zeroable};
 use futures::Stream;
 use smallvec::SmallVec;
+use snafu::Snafu;
 use widestring::Utf16Str;
 
 use crate::fs::StorageSnafu;
@@ -145,35 +147,6 @@ pub struct DirEntry {
     pub file_size: u32,
 }
 
-pub fn dir_entry_stream(
-    cache: &mut BlockCache,
-    dir_start_address: BlockAddress,
-) -> impl Stream<Item = Result<DirEntry, Error>> + '_ {
-    futures::stream::unfold(
-        (cache, dir_start_address, 0),
-        move |(cache, mut block_addr, mut offset)| async move {
-            let mut de = DirEntry::zeroed();
-            match cache
-                .copy_bytes(block_addr, offset, bytes_of_mut(&mut de))
-                .await
-                .context(StorageSnafu)
-            {
-                Ok(_) => {}
-                Err(e) => return Some((Err(e), (cache, block_addr, offset))),
-            }
-            if de.short_name[0] == 0 {
-                return None;
-            }
-            offset += core::mem::size_of::<DirEntry>();
-            if offset > cache.block_size() {
-                offset = 0;
-                block_addr.0 += 1;
-            }
-            Some((Ok(de), (cache, block_addr, offset)))
-        },
-    )
-}
-
 pub struct LongDirEntry {
     pub entry: DirEntry,
     pub name: SmallVec<[u16; 8]>,
@@ -187,15 +160,58 @@ impl Deref for LongDirEntry {
     }
 }
 
+#[derive(Debug, Snafu)]
+pub enum FatError {
+    InvalidUtf16 {
+        #[snafu(source(false))]
+        source: widestring::error::Utf16Error,
+        entry: DirEntry,
+    },
+
+    InvalidShortName {
+        reason: &'static str,
+        name: String,
+    },
+}
+
 impl LongDirEntry {
-    /// Get the long name for this entry as a UTF-16 encoded string.
+    /// Get the long name for this entry as a UTF-16 encoded string. If no long name was present, the empty string is returned.
     pub fn long_name(&self) -> Result<&Utf16Str, widestring::error::Utf16Error> {
         Utf16Str::from_slice(&self.name)
+    }
+
+    /// Determine if this directory entry's name matches `name`.
+    pub fn is_named(&self, name: &str) -> Result<bool, FatError> {
+        if self.name.is_empty() {
+            if name.len() <= 11 {
+                let (name, ext) = name.split_once('.').unwrap_or_else(|| (&name[0..8], ""));
+                let ename = (&self.short_name[0..8]);
+                let eext = &self.short_name[8..11];
+                // compare by bytes b/c if the name isn't ASCII then it can't match
+                // regardless
+                Ok(name
+                    .bytes()
+                    .eq(ename.iter().copied().take_while(|b| *b != b' '))
+                    && ext.bytes().eq(eext.iter().copied()))
+            } else {
+                Ok(false)
+            }
+        } else {
+            let ln = self.long_name().map_err(|source| {
+                InvalidUtf16Snafu {
+                    source,
+                    entry: self.entry,
+                }
+                .build()
+            })?;
+            Ok(ln.chars().eq(name.chars()))
+        }
     }
 }
 
 pub type ClusterIndex = u16;
 
+#[derive(Debug)]
 pub enum DirectorySource {
     Direct(BlockAddress),
     Clusters(ClusterIndex),

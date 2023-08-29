@@ -11,6 +11,7 @@ derive_more = "0.99"
 bitfield = "0.14"
 bitflags = { version = "2", features = ["bytemuck"] }
 async-trait = "0.1"
+async-recursion = "1"
 
 # extra data structures
 hashbrown = "0.13"

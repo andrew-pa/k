@@ -2,16 +2,18 @@
 //! Currently this only supports FAT16.
 // See <qemu-src>/block/vvfat.c
 
-use alloc::boxed::Box;
+use alloc::{boxed::Box, vec::Vec};
+use async_recursion::async_recursion;
 use async_trait::async_trait;
 use bitfield::bitfield;
 use byteorder::{ByteOrder, LittleEndian};
 use futures::{Stream, StreamExt};
 use smallvec::SmallVec;
 use snafu::{ensure, ResultExt};
+use widestring::Utf16Str;
 
 use crate::{
-    fs::BadMetadataSnafu,
+    fs::{BadMetadataSnafu, OtherSnafu},
     registry::{registry_mut, Path, RegistryHandler},
     storage::{block_cache::BlockCache, BlockAddress, BlockStore},
 };
@@ -125,8 +127,6 @@ impl Handler {
          *     - recursively go through directories to find actual file
          * - read file (implement ByteStore) */
 
-        todo!();
-
         Ok(hh)
     }
 }
@@ -146,7 +146,7 @@ fn compute_block_addr(
 
 impl Handler {
     fn dir_entry_stream(
-        &mut self,
+        &self,
         source: DirectorySource,
     ) -> impl Stream<Item = Result<LongDirEntry, Error>> + '_ {
         // max # of bytes in offset before wrapping and moving to the next segment
@@ -158,7 +158,7 @@ impl Handler {
         let clusters_start = self.clusters_start;
         let sectors_per_cluster = self.sectors_per_cluster;
         futures::stream::unfold(
-            (&mut self.cache, source, 0),
+            (&self.cache, source, 0),
             move |(cache, mut source, mut offset)| async move {
                 let mut entry_bytes = [0u8; core::mem::size_of::<DirEntry>()];
                 let mut entry_name = SmallVec::new();
@@ -176,10 +176,12 @@ impl Handler {
                         Err(e) => return Some((Err(e), (cache, source, offset))),
                     }
 
+                    log::trace!("{:?}", bytemuck::cast_ref::<_, DirEntry>(&entry_bytes));
+
                     offset += core::mem::size_of::<DirEntry>();
                     if offset >= size_of_segment {
                         offset = 0;
-                        match source {
+                        match &mut source {
                             DirectorySource::Direct(mut d) => d.0 += 1,
                             DirectorySource::Clusters(mut i) => {
                                 match cache
@@ -214,6 +216,10 @@ impl Handler {
                                 .map(|a: [u8; 2]| bytemuck::cast(a)),
                         );
                     } else {
+                        if entry_name.last().is_some_and(|t| *t == 0) {
+                            entry_name.pop();
+                            entry_name.shrink_to_fit();
+                        }
                         return Some((
                             Ok(LongDirEntry {
                                 entry: bytemuck::cast(entry_bytes),
@@ -225,6 +231,46 @@ impl Handler {
                 }
             },
         )
+    }
+
+    #[async_recursion]
+    async fn find_entry_for_path(
+        &self,
+        source: DirectorySource,
+        mut comps: crate::registry::path::Components<'async_recursion>,
+    ) -> Result<DirEntry, Error> {
+        let comp = comps.next().unwrap();
+        log::trace!("find entry for path component {comp:?} in {source:?}");
+        let ps = match comp {
+            crate::registry::path::Component::Root => todo!(),
+            crate::registry::path::Component::CurrentDir => ".",
+            crate::registry::path::Component::ParentDir => "..",
+            crate::registry::path::Component::Name(s) => s,
+        };
+
+        let v = self.dir_entry_stream(source).collect::<Vec<_>>().await;
+
+        for de in v {
+            let de = de?;
+            log::trace!("got entry {:?}", de.long_name());
+            if de
+                .is_named(ps)
+                .map_err(|e| Box::new(e) as Box<dyn snafu::Error + Send + Sync>)
+                .context(OtherSnafu {
+                    reason: "check name",
+                })?
+            {
+                if de.attributes.contains(DirEntryAttributes::Directory) {
+                    return self
+                        .find_entry_for_path(DirectorySource::Clusters(de.cluster_num_lo), comps)
+                        .await;
+                } else {
+                    return Ok(*de);
+                }
+            }
+        }
+
+        todo!()
     }
 }
 
@@ -241,6 +287,18 @@ impl RegistryHandler for Handler {
         &self,
         subpath: &Path,
     ) -> Result<Box<dyn super::ByteStore>, crate::registry::RegistryError> {
+        log::trace!("attempting to locate {subpath} in FAT volume");
+        let entry = self
+            .find_entry_for_path(
+                DirectorySource::Direct(self.root_directory_start),
+                subpath.components(),
+            )
+            .await
+            .map_err(|e| Box::new(e) as Box<dyn snafu::Error + Send + Sync>)
+            .context(crate::registry::error::OtherSnafu {
+                reason: "failed to find directory entry for path",
+            })?;
+        log::debug!("found entry {entry:?} for path {subpath}");
         todo!()
     }
 }

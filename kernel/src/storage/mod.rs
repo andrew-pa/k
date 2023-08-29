@@ -6,8 +6,14 @@ use snafu::Snafu;
 
 /// The address of a block in a [BlockStore]
 #[derive(Copy, Clone, Display, PartialEq, Eq, PartialOrd, Ord)]
-#[display(fmt = "L:0x{:x}", _0)]
+#[display(fmt = "B:0x{:x}", _0)]
 pub struct BlockAddress(pub u64);
+
+impl core::fmt::Debug for BlockAddress {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "B:0x{:x}", self.0)
+    }
+}
 
 #[derive(Debug, Snafu)]
 pub enum Error {

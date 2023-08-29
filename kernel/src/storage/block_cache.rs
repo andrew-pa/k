@@ -178,7 +178,7 @@ impl BlockCache {
 
     /// Copy bytes from the cache into a slice. Any unloaded blocks will be loaded, and copies can span multiple blocks.
     pub async fn copy_bytes(
-        &mut self,
+        &self,
         mut address: BlockAddress,
         mut byte_offset: usize,
         dest: &mut [u8],
@@ -191,7 +191,7 @@ impl BlockCache {
         let (starting_tag, starting_chunk_id, initial_block_offset) =
             self.decompose_address(address);
 
-        log::trace!("copying from {starting_tag}:{starting_chunk_id}:{initial_block_offset} + {byte_offset}");
+        log::trace!("copying from {starting_tag}:{starting_chunk_id}:{initial_block_offset} + {byte_offset} [{address}]");
         let num_chunks_inclusive = dest.len().div_ceil(self.chunk_size);
         if num_chunks_inclusive > self.num_chunks {
             // if the read is larger than the entire cache

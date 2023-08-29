@@ -15,11 +15,18 @@ use self::path::{Component, Components};
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub), module(error))]
 pub enum RegistryError {
-    NotFound { path: PathBuf },
+    NotFound {
+        path: PathBuf,
+    },
     Unsupported,
-    HandlerAlreadyRegistered { name: String },
+    HandlerAlreadyRegistered {
+        name: String,
+    },
     InvalidPath,
-    Other { source: Box<dyn snafu::Error> },
+    Other {
+        reason: &'static str,
+        source: Box<dyn snafu::Error + Send + Sync>,
+    },
 }
 
 /// Resource types that can be retrieved from the Registry

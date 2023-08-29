@@ -111,8 +111,10 @@ impl RegistryHandler for NvmeDeviceRegistryHandler {
         let namespace_id = match subpath.components().next() {
             Some(Component::Name(n)) => n
                 .parse::<u32>()
-                .map_err(|e| Box::new(e) as Box<dyn core::error::Error>)
-                .context(registry::error::OtherSnafu)?,
+                .map_err(|e| Box::new(e) as Box<dyn core::error::Error + Send + Sync>)
+                .context(registry::error::OtherSnafu {
+                    reason: "failed to parse NVMe device ID number",
+                })?,
             _ => return Err(RegistryError::InvalidPath),
         };
         if !self.namespace_ids.contains(&namespace_id) {
@@ -166,8 +168,10 @@ impl RegistryHandler for NvmeDeviceRegistryHandler {
         // query controller for supported_block_size
         // TODO: for now this is synchronous, but it should be async as well
         let id_res_buf = PhysicalBuffer::alloc(1, &Default::default())
-            .map_err(|e| Box::new(e) as Box<dyn core::error::Error>)
-            .context(registry::error::OtherSnafu)?;
+            .map_err(|e| Box::new(e) as Box<dyn core::error::Error + Send + Sync>)
+            .context(registry::error::OtherSnafu {
+                reason: "failed to allocate memory to recieve NVMe device properties",
+            })?;
 
         let cmp = {
             log::trace!("sending identify command to namespace {namespace_id}");
