@@ -2,14 +2,14 @@
 //! Currently this only supports FAT16.
 // See <qemu-src>/block/vvfat.c
 
-use alloc::{boxed::Box, vec::Vec};
+use alloc::{boxed::Box, string::String, vec::Vec};
 use async_recursion::async_recursion;
 use async_trait::async_trait;
 use bitfield::bitfield;
 use byteorder::{ByteOrder, LittleEndian};
 use futures::{Stream, StreamExt};
 use smallvec::SmallVec;
-use snafu::{ensure, ResultExt};
+use snafu::{ensure, OptionExt, ResultExt};
 use widestring::Utf16Str;
 
 use crate::{
@@ -18,15 +18,32 @@ use crate::{
     storage::{block_cache::BlockCache, BlockAddress, BlockStore},
 };
 
-use super::{Error, StorageSnafu};
+use super::{ByteStore, Error, SeekFrom, StorageSnafu};
+
+mod data;
+use data::*;
 
 const CACHE_SIZE: usize = 256 /* pages */;
 
 // assume that every FAT filesystem uses 512 byte sectors
 const SECTOR_SIZE: u64 = 512;
 
-mod data;
-use data::*;
+struct File {}
+
+#[async_trait]
+impl ByteStore for File {
+    async fn seek(&mut self, pos: SeekFrom) -> Result<u64, Error> {
+        todo!()
+    }
+
+    async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Error> {
+        todo!()
+    }
+
+    async fn write(&mut self, buf: &[u8]) -> Result<usize, Error> {
+        todo!()
+    }
+}
 
 struct Handler {
     cache: BlockCache,
@@ -101,6 +118,12 @@ impl Handler {
             root_directory_start: root_dir_sector,
             sectors_per_cluster: bootsector.sectors_per_cluster as u64,
         };
+        log::debug!(
+            "FAT start = {}, cluster start = {}, root_dir_start = {}",
+            hh.fat_start,
+            hh.clusters_start,
+            hh.root_directory_start
+        );
 
         hh.dir_entry_stream(DirectorySource::Direct(root_dir_sector))
             .for_each(|e| async move {
@@ -123,8 +146,8 @@ impl Handler {
         /* TODO:
          * - traverse directories to locate a file
          *     + read root directory
-         *     - read directory in clusters
-         *     - recursively go through directories to find actual file
+         *     + read directory in clusters
+         *     + recursively go through directories to find actual file
          * - read file (implement ByteStore) */
 
         Ok(hh)
@@ -139,7 +162,7 @@ fn compute_block_addr(
     match source {
         DirectorySource::Direct(a) => *a,
         DirectorySource::Clusters(i) => {
-            BlockAddress(clusters_start.0 + (i - 2) as u64 * sectors_per_cluster)
+            BlockAddress(clusters_start.0 + *i as u64 * sectors_per_cluster)
         }
     }
 }
@@ -181,14 +204,15 @@ impl Handler {
                     offset += core::mem::size_of::<DirEntry>();
                     if offset >= size_of_segment {
                         offset = 0;
+                        log::trace!("current src={source:?}");
                         match &mut source {
-                            DirectorySource::Direct(mut d) => d.0 += 1,
-                            DirectorySource::Clusters(mut i) => {
+                            DirectorySource::Direct(ref mut d) => d.0 += 1,
+                            DirectorySource::Clusters(ref mut i) => {
                                 match cache
                                     .copy_bytes(
                                         fat_start,
-                                        (i * 2) as usize,
-                                        bytemuck::bytes_of_mut(&mut i),
+                                        (*i * 2) as usize,
+                                        bytemuck::bytes_of_mut(i),
                                     )
                                     .await
                                     .context(StorageSnafu)
@@ -200,6 +224,7 @@ impl Handler {
                         }
                         block_addr =
                             compute_block_addr(&source, clusters_start, sectors_per_cluster);
+                        log::trace!("src={source:?}; next block address: {block_addr}");
                     }
 
                     if entry_bytes[0] == 0 {
@@ -238,7 +263,7 @@ impl Handler {
         &self,
         source: DirectorySource,
         mut comps: crate::registry::path::Components<'async_recursion>,
-    ) -> Result<DirEntry, Error> {
+    ) -> Result<Option<DirEntry>, Error> {
         let comp = comps.next().unwrap();
         log::trace!("find entry for path component {comp:?} in {source:?}");
         let ps = match comp {
@@ -252,12 +277,14 @@ impl Handler {
 
         for de in v {
             let de = de?;
-            log::trace!("got entry {:?}", de.long_name());
+            log::trace!("got entry {:?}, {}", de.long_name(), unsafe {
+                core::str::from_utf8_unchecked(&de.short_name)
+            });
             if de
                 .is_named(ps)
                 .map_err(|e| Box::new(e) as Box<dyn snafu::Error + Send + Sync>)
                 .context(OtherSnafu {
-                    reason: "check name",
+                    reason: "check entry name",
                 })?
             {
                 if de.attributes.contains(DirEntryAttributes::Directory) {
@@ -265,12 +292,12 @@ impl Handler {
                         .find_entry_for_path(DirectorySource::Clusters(de.cluster_num_lo), comps)
                         .await;
                 } else {
-                    return Ok(*de);
+                    return Ok(Some(*de));
                 }
             }
         }
 
-        todo!()
+        Ok(None)
     }
 }
 
@@ -280,7 +307,7 @@ impl RegistryHandler for Handler {
         &self,
         subpath: &Path,
     ) -> Result<Box<dyn BlockStore>, crate::registry::RegistryError> {
-        todo!()
+        Err(crate::registry::error::UnsupportedSnafu.build())
     }
 
     async fn open_byte_store(
@@ -297,7 +324,8 @@ impl RegistryHandler for Handler {
             .map_err(|e| Box::new(e) as Box<dyn snafu::Error + Send + Sync>)
             .context(crate::registry::error::OtherSnafu {
                 reason: "failed to find directory entry for path",
-            })?;
+            })?
+            .with_context(|| crate::registry::error::NotFoundSnafu { path: subpath })?;
         log::debug!("found entry {entry:?} for path {subpath}");
         todo!()
     }
