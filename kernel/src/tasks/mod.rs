@@ -12,6 +12,8 @@ use spin::Mutex;
 
 use crate::CHashMapG;
 
+pub mod locks;
+
 type TaskId = u32;
 type Task = Pin<Box<dyn Future<Output = ()>>>;
 type ReadyTaskQueue = Arc<ArrayQueue<TaskId>>;
