@@ -84,10 +84,14 @@ pub extern "C" fn kmain() {
         };
         log::info!("mount FAT filesystem");
         fs::fat::mount(Path::new("/fat"), bs).await.unwrap();
-        registry::registry()
+        let mut f = registry::registry()
             .open_byte_store(Path::new("/fat/abcdefghij/test.txt"))
             .await
             .unwrap();
+        let mut buf = [0u8; 32];
+        let len = f.read(&mut buf).await.expect("read file");
+        let s = core::str::from_utf8(&buf[0..len]).expect("valid utf-8");
+        panic!("got file contents: {s}");
     });
 
     #[cfg(test)]

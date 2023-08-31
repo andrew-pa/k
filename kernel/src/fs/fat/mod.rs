@@ -2,7 +2,7 @@
 //! Currently this only supports FAT16.
 // See <qemu-src>/block/vvfat.c
 
-use alloc::{boxed::Box, string::String, vec::Vec};
+use alloc::{boxed::Box, string::String, sync::Arc, vec::Vec};
 use async_recursion::async_recursion;
 use async_trait::async_trait;
 use bitfield::bitfield;
@@ -28,7 +28,14 @@ const CACHE_SIZE: usize = 256 /* pages */;
 // assume that every FAT filesystem uses 512 byte sectors
 const SECTOR_SIZE: u64 = 512;
 
-struct File {}
+struct File {
+    cache: Arc<BlockCache>,
+    params: VolumeParams,
+    start_cluster_number: u16,
+    current_cluster_number: u16,
+    current_offset: usize,
+    file_size: u32
+}
 
 #[async_trait]
 impl ByteStore for File {
@@ -45,12 +52,37 @@ impl ByteStore for File {
     }
 }
 
-struct Handler {
-    cache: BlockCache,
+#[derive(Debug, Clone)]
+struct VolumeParams {
     fat_start: BlockAddress,
     clusters_start: BlockAddress,
     root_directory_start: BlockAddress,
     sectors_per_cluster: u64,
+}
+
+impl VolumeParams {
+    pub fn compute_from_bootsector(partition_addr: BlockAddress, bootsector: &BootSector) -> Self {
+        Self {
+            fat_start: BlockAddress(partition_addr.0 + bootsector.reserved_sectors_count as u64),
+            // TODO: are these supposed to be the same???
+            clusters_start: BlockAddress(
+                partition_addr.0
+                    + bootsector.reserved_sectors_count as u64
+                    + bootsector.number_of_fats as u64 * bootsector.fat_size_16 as u64,
+            ),
+            root_directory_start: BlockAddress(
+                partition_addr.0
+                    + bootsector.reserved_sectors_count as u64
+                    + (bootsector.number_of_fats as u64 * bootsector.fat_size_16 as u64),
+            ),
+            sectors_per_cluster: bootsector.sectors_per_cluster as u64,
+        }
+    }
+}
+
+struct Handler {
+    cache: Arc<BlockCache>,
+    params: VolumeParams,
 }
 
 impl Handler {
@@ -101,31 +133,13 @@ impl Handler {
         log::debug!("FAT bootsector = {bootsector:x?}");
         bootsector.validate()?;
 
-        let root_dir_sector = BlockAddress(
-            partition_addr.0
-                + bootsector.reserved_sectors_count as u64
-                + (bootsector.number_of_fats as u64 * bootsector.fat_size_16 as u64),
-        );
-
         let mut hh = Handler {
-            cache,
-            fat_start: BlockAddress(partition_addr.0 + bootsector.reserved_sectors_count as u64),
-            clusters_start: BlockAddress(
-                partition_addr.0
-                    + bootsector.reserved_sectors_count as u64
-                    + bootsector.number_of_fats as u64 * bootsector.fat_size_16 as u64,
-            ),
-            root_directory_start: root_dir_sector,
-            sectors_per_cluster: bootsector.sectors_per_cluster as u64,
+            cache: Arc::new(cache),
+            params: VolumeParams::compute_from_bootsector(partition_addr, bootsector),
         };
-        log::debug!(
-            "FAT start = {}, cluster start = {}, root_dir_start = {}",
-            hh.fat_start,
-            hh.clusters_start,
-            hh.root_directory_start
-        );
+        log::debug!("volume parameters = {:?}", hh.params);
 
-        hh.dir_entry_stream(DirectorySource::Direct(root_dir_sector))
+        hh.dir_entry_stream(DirectorySource::Direct(hh.params.root_directory_start))
             .for_each(|e| async move {
                 match e {
                     Ok(e) => {
@@ -154,15 +168,11 @@ impl Handler {
     }
 }
 
-fn compute_block_addr(
-    source: &DirectorySource,
-    clusters_start: BlockAddress,
-    sectors_per_cluster: u64,
-) -> BlockAddress {
+fn compute_block_addr(source: &DirectorySource, params: &VolumeParams) -> BlockAddress {
     match source {
         DirectorySource::Direct(a) => *a,
         DirectorySource::Clusters(i) => {
-            BlockAddress(clusters_start.0 + *i as u64 * sectors_per_cluster)
+            BlockAddress(params.clusters_start.0 + *i as u64 * params.sectors_per_cluster)
         }
     }
 }
@@ -175,83 +185,83 @@ impl Handler {
         // max # of bytes in offset before wrapping and moving to the next segment
         let size_of_segment = match source {
             DirectorySource::Direct(_) => self.cache.block_size(),
-            DirectorySource::Clusters(_) => (self.sectors_per_cluster * SECTOR_SIZE) as usize,
+            DirectorySource::Clusters(_) => {
+                (self.params.sectors_per_cluster * SECTOR_SIZE) as usize
+            }
         };
-        let fat_start = self.fat_start;
-        let clusters_start = self.clusters_start;
-        let sectors_per_cluster = self.sectors_per_cluster;
         futures::stream::unfold(
             (&self.cache, source, 0),
-            move |(cache, mut source, mut offset)| async move {
-                let mut entry_bytes = [0u8; core::mem::size_of::<DirEntry>()];
-                let mut entry_name = SmallVec::new();
+            move |(cache, mut source, mut offset)| {
+                let params = self.params.clone();
+                async move {
+                    let mut entry_bytes = [0u8; core::mem::size_of::<DirEntry>()];
+                    let mut entry_name = SmallVec::new();
 
-                let mut block_addr =
-                    compute_block_addr(&source, clusters_start, sectors_per_cluster);
+                    let mut block_addr = compute_block_addr(&source, &params);
 
-                loop {
-                    match cache
-                        .copy_bytes(block_addr, offset, &mut entry_bytes)
-                        .await
-                        .context(StorageSnafu)
-                    {
-                        Ok(_) => {}
-                        Err(e) => return Some((Err(e), (cache, source, offset))),
-                    }
+                    loop {
+                        match cache
+                            .copy_bytes(block_addr, offset, &mut entry_bytes)
+                            .await
+                            .context(StorageSnafu)
+                        {
+                            Ok(_) => {}
+                            Err(e) => return Some((Err(e), (cache, source, offset))),
+                        }
 
-                    log::trace!("{:?}", bytemuck::cast_ref::<_, DirEntry>(&entry_bytes));
+                        log::trace!("{:?}", bytemuck::cast_ref::<_, DirEntry>(&entry_bytes));
 
-                    offset += core::mem::size_of::<DirEntry>();
-                    if offset >= size_of_segment {
-                        offset = 0;
-                        log::trace!("current src={source:?}");
-                        match &mut source {
-                            DirectorySource::Direct(ref mut d) => d.0 += 1,
-                            DirectorySource::Clusters(ref mut i) => {
-                                match cache
-                                    .copy_bytes(
-                                        fat_start,
-                                        (*i * 2) as usize,
-                                        bytemuck::bytes_of_mut(i),
-                                    )
-                                    .await
-                                    .context(StorageSnafu)
-                                {
-                                    Ok(_) => {}
-                                    Err(e) => return Some((Err(e), (cache, source, offset))),
+                        offset += core::mem::size_of::<DirEntry>();
+                        if offset >= size_of_segment {
+                            offset = 0;
+                            log::trace!("current src={source:?}");
+                            match &mut source {
+                                DirectorySource::Direct(ref mut d) => d.0 += 1,
+                                DirectorySource::Clusters(ref mut i) => {
+                                    match cache
+                                        .copy_bytes(
+                                            params.fat_start,
+                                            (*i * 2) as usize,
+                                            bytemuck::bytes_of_mut(i),
+                                        )
+                                        .await
+                                        .context(StorageSnafu)
+                                    {
+                                        Ok(_) => {}
+                                        Err(e) => return Some((Err(e), (cache, source, offset))),
+                                    }
                                 }
                             }
+                            block_addr = compute_block_addr(&source, &params);
+                            log::trace!("src={source:?}; next block address: {block_addr}");
                         }
-                        block_addr =
-                            compute_block_addr(&source, clusters_start, sectors_per_cluster);
-                        log::trace!("src={source:?}; next block address: {block_addr}");
-                    }
 
-                    if entry_bytes[0] == 0 {
-                        return None;
-                    } else if entry_bytes[11] == DirEntryAttributes::LongName.bits() {
-                        entry_name.insert_many(
-                            0,
-                            (1..11)
-                                .chain(14..26)
-                                .chain(28..32)
-                                .map(|i| entry_bytes[i])
-                                .take_while(|b| *b != 0xff)
-                                .array_chunks()
-                                .map(|a: [u8; 2]| bytemuck::cast(a)),
-                        );
-                    } else {
-                        if entry_name.last().is_some_and(|t| *t == 0) {
-                            entry_name.pop();
-                            entry_name.shrink_to_fit();
+                        if entry_bytes[0] == 0 {
+                            return None;
+                        } else if entry_bytes[11] == DirEntryAttributes::LongName.bits() {
+                            entry_name.insert_many(
+                                0,
+                                (1..11)
+                                    .chain(14..26)
+                                    .chain(28..32)
+                                    .map(|i| entry_bytes[i])
+                                    .take_while(|b| *b != 0xff)
+                                    .array_chunks()
+                                    .map(|a: [u8; 2]| bytemuck::cast(a)),
+                            );
+                        } else {
+                            if entry_name.last().is_some_and(|t| *t == 0) {
+                                entry_name.pop();
+                                entry_name.shrink_to_fit();
+                            }
+                            return Some((
+                                Ok(LongDirEntry {
+                                    entry: bytemuck::cast(entry_bytes),
+                                    name: entry_name,
+                                }),
+                                (cache, source, offset),
+                            ));
                         }
-                        return Some((
-                            Ok(LongDirEntry {
-                                entry: bytemuck::cast(entry_bytes),
-                                name: entry_name,
-                            }),
-                            (cache, source, offset),
-                        ));
                     }
                 }
             },
@@ -315,9 +325,10 @@ impl RegistryHandler for Handler {
         subpath: &Path,
     ) -> Result<Box<dyn super::ByteStore>, crate::registry::RegistryError> {
         log::trace!("attempting to locate {subpath} in FAT volume");
+
         let entry = self
             .find_entry_for_path(
-                DirectorySource::Direct(self.root_directory_start),
+                DirectorySource::Direct(self.params.root_directory_start),
                 subpath.components(),
             )
             .await
@@ -326,8 +337,17 @@ impl RegistryHandler for Handler {
                 reason: "failed to find directory entry for path",
             })?
             .with_context(|| crate::registry::error::NotFoundSnafu { path: subpath })?;
+
         log::debug!("found entry {entry:?} for path {subpath}");
-        todo!()
+
+        Ok(Box::new(File {
+            cache: self.cache.clone(),
+            params: self.params.clone(),
+            start_cluster_number: entry.cluster_num_lo,
+            current_cluster_number: entry.cluster_num_lo,
+            current_offset: 0,
+            file_size: entry.file_size
+        }))
     }
 }
 

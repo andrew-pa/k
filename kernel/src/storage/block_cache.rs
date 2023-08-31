@@ -2,6 +2,7 @@ use super::*;
 use crate::memory::{
     virtual_address_allocator, PhysicalAddress, PhysicalBuffer, VirtualAddress, PAGE_SIZE,
 };
+use crate::tasks::locks::{Mutex, RwLock};
 use alloc::{boxed::Box, sync::Arc, vec::Vec};
 use async_trait::async_trait;
 use bitfield::{bitfield, BitRange};
@@ -9,7 +10,6 @@ use derive_more::Display;
 use futures::future;
 use hashbrown::HashMap;
 use snafu::{ResultExt, Snafu};
-use spin::{Mutex, RwLock};
 
 /*
  * for each loaded block we need to know
@@ -35,16 +35,19 @@ bitfield! {
 }
 
 /// A BlockCache provides a cache layer on top of a BlockStore, allowing for unaligned reads/writes and minimizing unneccessary underlying operations
+///
+/// A BlockCache is internally synchronized and thus safe to share between threads or tasks.
 pub struct BlockCache {
-    store: Arc<Mutex<dyn BlockStore>>,
+    store: Mutex<Box<dyn BlockStore>>,
     block_offset_bits: usize,
     chunk_id_bits: usize,
     block_size: usize,
     chunk_size: usize,
     blocks_per_chunk: usize,
     num_chunks: usize,
-    metadata: Arc<RwLock<Vec<ChunkMetadata>>>,
-    buffer: PhysicalBuffer,
+    metadata: RwLock<Vec<ChunkMetadata>>,
+    buffer: RwLock<PhysicalBuffer>,
+    buffer_pa: PhysicalAddress,
 }
 
 // TODO: bounds checking on device size
@@ -71,29 +74,31 @@ impl BlockCache {
         let chunk_id_bits = num_chunks.ilog2() as usize;
         let block_offset_bits = blocks_per_chunk.ilog2() as usize;
         log::debug!("creating block cache with {num_chunks} chunks, {blocks_per_chunk} blocks per chunk, {chunk_id_bits} bits for chunk ID, {block_offset_bits} bits for block offset");
+        let buffer = PhysicalBuffer::alloc(max_size_in_pages, &Default::default())
+            .context(super::MemorySnafu)?;
         Ok(BlockCache {
-            store: Arc::new(Mutex::new(store)),
+            store: Mutex::new(Box::new(store)),
             block_offset_bits,
             blocks_per_chunk,
             chunk_id_bits,
             block_size,
             chunk_size,
             num_chunks,
-            metadata: Arc::new(RwLock::new(
+            metadata: RwLock::new(
                 core::iter::repeat_with(Default::default)
                     .take(num_chunks)
                     .collect(),
-            )),
+            ),
+            buffer_pa: buffer.physical_address(),
             // TODO: in the future, the physical memory allocator should support loaning pages to
             // caches etc but for now we just allocate the entire cache upfront
-            buffer: PhysicalBuffer::alloc(max_size_in_pages, &Default::default())
-                .context(super::MemorySnafu)?,
+            buffer: RwLock::new(buffer),
         })
     }
 
-    /// Size of a single block in bytes (forwards to [BlockStore::supported_block_size]).
+    /// Size of a single block in bytes (cached value of [BlockStore::supported_block_size]).
     pub fn block_size(&self) -> usize {
-        self.store.lock().supported_block_size()
+        self.block_size
     }
 
     /// Decompose a logical address into its cache tag, chunk ID and block offset, respectively.
@@ -118,17 +123,16 @@ impl BlockCache {
     }
 
     fn chunk_phy_addr(&self, chunk_id: u64) -> PhysicalAddress {
-        self.buffer
-            .physical_address()
+        self.buffer_pa
             .offset((chunk_id * self.chunk_size as u64) as isize)
     }
 
     async fn load_chunk(&self, tag: u64, chunk_id: u64, mark_dirty: bool) -> Result<(), Error> {
-        let md = { self.metadata.read()[chunk_id as usize] };
+        let md = { self.metadata.read().await[chunk_id as usize] };
         log::trace!("loading chunk {tag}:{chunk_id}, md={md:?}");
         if !md.occupied() || md.tag() != tag {
             // chunk is not present
-            let mut store = self.store.lock();
+            let mut store = self.store.lock().await;
             if md.dirty() {
                 store
                     .write_blocks(
@@ -145,7 +149,7 @@ impl BlockCache {
                     self.blocks_per_chunk,
                 )
                 .await?;
-            let mut md = &mut self.metadata.write()[chunk_id as usize];
+            let mut md = &mut self.metadata.write().await[chunk_id as usize];
             md.set_tag(tag);
             md.set_occupied(true);
             md.set_dirty(mark_dirty);
@@ -209,13 +213,13 @@ impl BlockCache {
         let offset = (starting_chunk_id as usize * self.chunk_size
             + initial_block_offset as usize * self.block_size) as usize
             + byte_offset;
-        dest.copy_from_slice(&self.buffer.as_bytes()[offset..offset + dest.len()]);
+        dest.copy_from_slice(&self.buffer.read().await.as_bytes()[offset..offset + dest.len()]);
         Ok(())
     }
 
     /// Write bytes from a slice into the cache. Any unloaded blocks will be loaded, and writes can span multiple blocks. The cache will write the blocks back to the underlying storage when they are ejected from the cache.
     pub async fn write_bytes(
-        &mut self,
+        &self,
         mut address: BlockAddress,
         mut byte_offset: usize,
         src: &[u8],
@@ -245,13 +249,13 @@ impl BlockCache {
         let offset = (starting_chunk_id as usize * self.chunk_size
             + initial_block_offset as usize * self.block_size) as usize
             + byte_offset;
-        self.buffer.as_bytes_mut()[offset..offset + src.len()].copy_from_slice(src);
+        self.buffer.write().await.as_bytes_mut()[offset..offset + src.len()].copy_from_slice(src);
         Ok(())
     }
 
     /// Update bytes in the cache in a certain range. All blocks in the range will be loaded into the cache if they are unloaded.
     pub async fn update_bytes(
-        &mut self,
+        &self,
         address: BlockAddress,
         size_in_bytes: usize,
         f: impl FnOnce(&mut [u8]),
