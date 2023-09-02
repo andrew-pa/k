@@ -77,7 +77,7 @@ impl BootSector {
     /// Check to make sure that this partition has a valid and supported boot sector.
     pub fn validate(&self) -> Result<(), Error> {
         ensure!(
-            self.bytes_per_sector as u64 == super::SECTOR_SIZE,
+            self.bytes_per_sector as u64 == 512,
             BadMetadataSnafu {
                 message: "bytes per sector != 512",
                 value: self.bytes_per_sector

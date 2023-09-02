@@ -25,16 +25,14 @@ use data::*;
 
 const CACHE_SIZE: usize = 256 /* pages */;
 
-// assume that every FAT filesystem uses 512 byte sectors
-const SECTOR_SIZE: u64 = 512;
-
 struct File {
     cache: Arc<BlockCache>,
     params: VolumeParams,
     start_cluster_number: u16,
     current_cluster_number: u16,
-    current_offset: usize,
-    file_size: u32
+    current_cluster_start: usize,
+    offset: usize,
+    file_size: usize,
 }
 
 #[async_trait]
@@ -44,7 +42,59 @@ impl ByteStore for File {
     }
 
     async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Error> {
-        todo!()
+        if self.offset >= self.file_size || self.start_cluster_number == 0 {
+            return Ok(0);
+        }
+
+        let cluster_offset = self.offset - self.current_cluster_start;
+
+        // determine how many bytes we will actually read
+        let num_bytes_left_in_cc = self.params.bytes_per_cluster() as usize - cluster_offset;
+        let num_bytes_to_read = if buf.len() > num_bytes_left_in_cc {
+            num_bytes_left_in_cc
+        } else {
+            buf.len()
+        }
+        .min(self.file_size - self.offset);
+
+        self.cache
+            .copy_bytes(
+                self.params.sector_for_cluster(self.current_cluster_number),
+                cluster_offset,
+                &mut buf[0..num_bytes_to_read],
+            )
+            .await
+            .context(StorageSnafu)?;
+
+        self.offset += num_bytes_to_read;
+
+        // move file pointer to next spot in the file
+        // read never copies across cluster boundaries. We move to the next cluster if this read
+        // returns the rest of the current cluster.
+        if buf.len() >= num_bytes_left_in_cc {
+            self.current_cluster_start = self.offset;
+            // get the next cluster number
+            self.cache
+                .copy_bytes(
+                    self.params.fat_start,
+                    (self.current_cluster_number * 2) as usize,
+                    bytemuck::bytes_of_mut(&mut self.current_cluster_number),
+                )
+                .await
+                .context(StorageSnafu)?;
+            // TODO: only for FAT16, FAT32 needs extended value.
+            if self.current_cluster_number >= 0xfff8 {
+                if self.file_size != 0 {
+                    log::warn!(
+                        "unexpected end of cluster chain starting at #{:x}",
+                        self.start_cluster_number
+                    );
+                }
+                self.file_size = 0;
+            }
+        }
+
+        Ok(num_bytes_to_read)
     }
 
     async fn write(&mut self, buf: &[u8]) -> Result<usize, Error> {
@@ -58,10 +108,11 @@ struct VolumeParams {
     clusters_start: BlockAddress,
     root_directory_start: BlockAddress,
     sectors_per_cluster: u64,
+    bytes_per_sector: u64,
 }
 
 impl VolumeParams {
-    pub fn compute_from_bootsector(partition_addr: BlockAddress, bootsector: &BootSector) -> Self {
+    fn compute_from_bootsector(partition_addr: BlockAddress, bootsector: &BootSector) -> Self {
         Self {
             fat_start: BlockAddress(partition_addr.0 + bootsector.reserved_sectors_count as u64),
             // TODO: are these supposed to be the same???
@@ -76,7 +127,15 @@ impl VolumeParams {
                     + (bootsector.number_of_fats as u64 * bootsector.fat_size_16 as u64),
             ),
             sectors_per_cluster: bootsector.sectors_per_cluster as u64,
+            bytes_per_sector: bootsector.bytes_per_sector as u64,
         }
+    }
+
+    const fn sector_for_cluster(&self, cluster_num: u16) -> BlockAddress {
+        BlockAddress(self.clusters_start.0 + cluster_num as u64 * self.sectors_per_cluster)
+    }
+    const fn bytes_per_cluster(&self) -> u64 {
+        self.sectors_per_cluster * self.bytes_per_sector
     }
 }
 
@@ -171,9 +230,7 @@ impl Handler {
 fn compute_block_addr(source: &DirectorySource, params: &VolumeParams) -> BlockAddress {
     match source {
         DirectorySource::Direct(a) => *a,
-        DirectorySource::Clusters(i) => {
-            BlockAddress(params.clusters_start.0 + *i as u64 * params.sectors_per_cluster)
-        }
+        DirectorySource::Clusters(i) => params.sector_for_cluster(*i),
     }
 }
 
@@ -185,9 +242,7 @@ impl Handler {
         // max # of bytes in offset before wrapping and moving to the next segment
         let size_of_segment = match source {
             DirectorySource::Direct(_) => self.cache.block_size(),
-            DirectorySource::Clusters(_) => {
-                (self.params.sectors_per_cluster * SECTOR_SIZE) as usize
-            }
+            DirectorySource::Clusters(_) => self.params.bytes_per_cluster() as usize,
         };
         futures::stream::unfold(
             (&self.cache, source, 0),
@@ -345,8 +400,9 @@ impl RegistryHandler for Handler {
             params: self.params.clone(),
             start_cluster_number: entry.cluster_num_lo,
             current_cluster_number: entry.cluster_num_lo,
-            current_offset: 0,
-            file_size: entry.file_size
+            current_cluster_start: 0,
+            offset: 0,
+            file_size: entry.file_size as usize,
         }))
     }
 }

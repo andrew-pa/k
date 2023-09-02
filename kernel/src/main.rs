@@ -90,6 +90,7 @@ pub extern "C" fn kmain() {
             .unwrap();
         let mut buf = [0u8; 32];
         let len = f.read(&mut buf).await.expect("read file");
+        log::info!("got {} raw bytes: {buf:?}", len);
         let s = core::str::from_utf8(&buf[0..len]).expect("valid utf-8");
         panic!("got file contents: {s}");
     });

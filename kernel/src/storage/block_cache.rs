@@ -29,7 +29,7 @@ bitfield! {
     #[derive(Copy, Clone, Default)]
     struct ChunkMetadata(u64);
     impl Debug;
-    tag, set_tag: 63, 60;
+    tag, set_tag: 63, 2;
     bool, occupied, set_occupied: 1;
     bool, dirty, set_dirty: 0;
 }
@@ -107,11 +107,20 @@ impl BlockCache {
             .0
             .bit_range(63, self.chunk_id_bits + self.block_offset_bits);
         let chunk_id = address.0.bit_range(
-            self.chunk_id_bits + self.block_offset_bits,
+            self.chunk_id_bits + self.block_offset_bits - 1,
             self.block_offset_bits,
         );
         let block_offset = address.0.bit_range(self.block_offset_bits - 1, 0);
-        // log::trace!("decomposing {:b} => {tag:b}:{chunk_id:b}:{block_offset:b}", address.0);
+        log::trace!(
+            "decomposing {:b} => {tag:b}:{chunk_id:b}:{block_offset:b}",
+            address.0
+        );
+        assert!(
+            (chunk_id as usize) < self.num_chunks,
+            "chunk id {chunk_id} >= # chunks {}",
+            self.num_chunks
+        );
+        assert!((block_offset as usize) < self.block_size);
         (tag, chunk_id, block_offset)
     }
 
@@ -129,9 +138,9 @@ impl BlockCache {
 
     async fn load_chunk(&self, tag: u64, chunk_id: u64, mark_dirty: bool) -> Result<(), Error> {
         let md = { self.metadata.read().await[chunk_id as usize] };
-        log::trace!("loading chunk {tag}:{chunk_id}, md={md:?}");
         if !md.occupied() || md.tag() != tag {
             // chunk is not present
+            log::trace!("loading chunk {tag}:{chunk_id}, md={md:?}");
             let mut store = self.store.lock().await;
             if md.dirty() {
                 store
