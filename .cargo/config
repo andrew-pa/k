@@ -1,5 +1,4 @@
 [target.aarch64-unknown-none]
-rustflags = ["-C", "link-arg=-T./link.ld"]
 runner = "./qemu-test.sh"
 
 [build]

@@ -30,15 +30,21 @@ struct File {
     params: VolumeParams,
     start_cluster_number: u16,
     current_cluster_number: u16,
-    current_cluster_start: usize,
-    offset: usize,
-    file_size: usize,
+    current_cluster_start: u32,
+    offset: u32,
+    file_size: u32,
 }
 
 #[async_trait]
 impl ByteStore for File {
     async fn seek(&mut self, pos: SeekFrom) -> Result<u64, Error> {
-        todo!()
+        // TODO: all of these may require a large jump in the cluster chain
+        match pos {
+            SeekFrom::Start(_) => todo!(),
+            SeekFrom::End(_) => todo!(),
+            SeekFrom::Current(_) => todo!(),
+        }
+        Ok(self.offset as u64)
     }
 
     async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Error> {
@@ -46,7 +52,7 @@ impl ByteStore for File {
             return Ok(0);
         }
 
-        let cluster_offset = self.offset - self.current_cluster_start;
+        let cluster_offset = (self.offset - self.current_cluster_start) as usize;
 
         // determine how many bytes we will actually read
         let num_bytes_left_in_cc = self.params.bytes_per_cluster() as usize - cluster_offset;
@@ -55,7 +61,7 @@ impl ByteStore for File {
         } else {
             buf.len()
         }
-        .min(self.file_size - self.offset);
+        .min((self.file_size - self.offset) as usize);
 
         self.cache
             .copy_bytes(
@@ -66,7 +72,7 @@ impl ByteStore for File {
             .await
             .context(StorageSnafu)?;
 
-        self.offset += num_bytes_to_read;
+        self.offset += num_bytes_to_read as u32;
 
         // move file pointer to next spot in the file
         // read never copies across cluster boundaries. We move to the next cluster if this read
@@ -402,7 +408,7 @@ impl RegistryHandler for Handler {
             current_cluster_number: entry.cluster_num_lo,
             current_cluster_start: 0,
             offset: 0,
-            file_size: entry.file_size as usize,
+            file_size: entry.file_size,
         }))
     }
 }

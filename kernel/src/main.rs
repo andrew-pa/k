@@ -2,7 +2,6 @@
 #![no_main]
 #![recursion_limit = "256"]
 #![feature(int_roundings)]
-#![feature(lang_items)]
 #![feature(allocator_api)]
 #![feature(linked_list_cursors)]
 #![feature(custom_test_frameworks)]

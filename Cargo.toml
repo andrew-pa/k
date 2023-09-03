@@ -1,2 +1,3 @@
 [workspace]
 members = ["kernel", "chashmap", "owning-ref-rs"]
+resolver = "2"
