@@ -45,6 +45,9 @@ pub trait ByteStore {
     async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Error>;
     /// Write a buffer into this writer, returning how many bytes were written.
     async fn write(&mut self, buf: &[u8]) -> Result<usize, Error>;
+
+    /// Returns the length of the store in bytes.
+    fn len(&self) -> u64;
 }
 
 pub mod fat;

@@ -37,6 +37,10 @@ struct File {
 
 #[async_trait]
 impl ByteStore for File {
+    fn len(&self) -> u64 {
+        self.file_size as u64
+    }
+
     async fn seek(&mut self, pos: SeekFrom) -> Result<u64, Error> {
         // TODO: all of these may require a large jump in the cluster chain
         match pos {
@@ -90,13 +94,14 @@ impl ByteStore for File {
                 .context(StorageSnafu)?;
             // TODO: only for FAT16, FAT32 needs extended value.
             if self.current_cluster_number >= 0xfff8 {
-                if self.file_size != 0 {
+                if self.offset < self.file_size {
                     log::warn!(
-                        "unexpected end of cluster chain starting at #{:x}",
-                        self.start_cluster_number
+                        "unexpected end of cluster chain starting at #{:x}, current cluster number = {:x}, file size = {}",
+                        self.start_cluster_number,
+                        self.current_cluster_number,
+                        self.file_size
                     );
                 }
-                self.file_size = 0;
             }
         }
 

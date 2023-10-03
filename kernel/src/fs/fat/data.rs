@@ -184,7 +184,7 @@ impl LongDirEntry {
     pub fn is_named(&self, name: &str) -> Result<bool, FatError> {
         if self.name.is_empty() {
             if name.len() <= 11 {
-                let (name, ext) = name.split_once('.').unwrap_or_else(|| (&name[0..8], ""));
+                let (name, ext) = name.split_once('.').unwrap_or_else(|| (&name[0..], ""));
                 let ename = (&self.short_name[0..8]);
                 let eext = &self.short_name[8..11];
                 // compare by bytes b/c if the name isn't ASCII then it can't match

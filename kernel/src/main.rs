@@ -91,7 +91,13 @@ pub extern "C" fn kmain() {
         let len = f.read(&mut buf).await.expect("read file");
         log::info!("got {} raw bytes: {buf:?}", len);
         let s = core::str::from_utf8(&buf[0..len]).expect("valid utf-8");
-        panic!("got file contents: {s}");
+        log::info!("file text = {s}");
+
+        log::info!("spawning init process");
+        let init_pid = process::spawn_process("/fat/init")
+            .await
+            .expect("spawn init process");
+        log::info!("init pid = {init_pid}");
     });
 
     #[cfg(test)]

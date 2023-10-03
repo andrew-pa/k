@@ -35,5 +35,8 @@ chashmap = { path = "../chashmap" }
 # hardware interface
 qemu-exit = "3.0.1"
 
+# software interface
+elf = { version = "0.7.2", default-features = false }
+
 [dev-dependencies]
 paste = "1"
