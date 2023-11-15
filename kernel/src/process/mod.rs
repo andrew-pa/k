@@ -1,6 +1,8 @@
 use crate::{
     exception::Registers,
-    memory::{paging::PageTable, PhysicalBuffer, VirtualAddress, PAGE_SIZE},
+    memory::{
+        paging::PageTable, physical_memory_allocator, PhysicalBuffer, VirtualAddress, PAGE_SIZE,
+    },
     CHashMapG,
 };
 use bitfield::bitfield;
@@ -216,14 +218,12 @@ pub async fn spawn_process(
     let mut pt = PageTable::empty(false, pid as u16).context(MemorySnafu {
         reason: "create process page tables",
     })?;
-    for seg in bin.segments().context(OtherSnafu {
+
+    let segments = bin.segments().context(OtherSnafu {
         reason: "expected binary to have at least one segment",
-    })? {
-        log::debug!("have segment {seg:x?}");
-    }
-    for seg in bin.segments().context(OtherSnafu {
-        reason: "expected binary to have at least one segment",
-    })? {
+    })?;
+
+    for seg in segments {
         // only consider PT_LOAD=1 segements
         if seg.p_type != 1 {
             continue;
@@ -269,6 +269,28 @@ pub async fn spawn_process(
         .context(MemoryMapSnafu)?;
     }
 
+    // create process stack
+    let stack_page_count = 512;
+    let stack_vaddr = VirtualAddress(0x0000_ffff_0000_0000);
+    let stack_buf = {
+        physical_memory_allocator()
+            .alloc_contig(stack_page_count)
+            .context(MemorySnafu {
+                reason: "allocate process stack segment",
+            })?
+    };
+    log::trace!("stack buffer @ {stack_buf}");
+    pt.map_range(
+        stack_buf,
+        stack_vaddr,
+        stack_page_count,
+        true,
+        &Default::default(),
+    )
+    .context(MemoryMapSnafu);
+
+    log::debug!("process page table: {pt:?}");
+
     let tid = next_thread_id();
 
     // create process structure
@@ -284,8 +306,8 @@ pub async fn spawn_process(
     spawn_thread(Thread::user_thread(
         pid,
         tid,
-        VirtualAddress(todo!("entry")),
-        VirtualAddress(todo!("stack")),
+        VirtualAddress(bin.ehdr.e_entry as usize),
+        stack_vaddr.offset((stack_page_count * PAGE_SIZE) as isize - 64),
         ThreadPriority::Normal,
     ));
 

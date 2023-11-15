@@ -77,7 +77,7 @@ impl Executor {
         let mut waker_cache = HashMap::new();
 
         loop {
-            log::debug!("top of loop");
+            // log::trace!("top of loop");
             while let Some((task_id, task)) = self.new_task_queue.pop() {
                 log::trace!("adding new task {task_id}");
                 tasks.insert(task_id, task);
@@ -87,7 +87,7 @@ impl Executor {
                     .expect("ready task queue overflow");
             }
 
-            log::debug!("dequeuing task");
+            // log::trace!("dequeuing task");
             while let Some(task_id) = self.ready_queue.pop() {
                 log::trace!("polling {task_id}");
                 let task = match tasks.get_mut(&task_id) {
@@ -108,7 +108,7 @@ impl Executor {
                     Poll::Pending => {}
                 }
             }
-            log::debug!("bottom of loop");
+            // log::trace!("bottom of loop");
             // super::wait_for_interrupt();
         }
     }

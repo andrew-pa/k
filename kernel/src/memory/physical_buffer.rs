@@ -69,7 +69,10 @@ impl PhysicalBuffer {
     /// The caller is responsible for returning the physical pages to the physical_memory_allocator
     pub fn unmap(self) -> (PhysicalAddress, usize) {
         self.unmap_virtual();
-        (self.phy_addr, self.page_count)
+        let res = (self.phy_addr, self.page_count);
+        // make sure that we don't call drop on the buffer so that the physical pages stay allocated.
+        core::mem::forget(self);
+        res
     }
 
     pub fn as_bytes(&self) -> &[u8] {

@@ -236,6 +236,7 @@ impl core::fmt::Debug for PageTable {
                         n += 1;
                     }
                     write!(f, "x{n}...")?;
+                    index += n;
                 }
                 write!(f, ",\n")?;
                 index += 1;
@@ -299,11 +300,17 @@ impl PageTable {
 
     pub unsafe fn activate(&self) {
         log::debug!(
-            "activating table @ {:x}, ASID {:x}",
-            self.level0_phy_addr.0,
+            "activating table @ {}, ASID {:x}",
+            self.level0_phy_addr,
             self.asid
         );
+        let cur_tcr = unsafe { get_tcr() };
+        log::debug!("current TCR = {cur_tcr:#?}");
         // CnP bit is set to zero by assumption rn, see D17.2.144
+        // TODO: this seems rather incorrect, since it basically shifts the page table address down
+        // by one bit because it uses the (ostensibly) ending zero in the address as the CnP bit.
+        // To do this correctly we need to know the value of TCR_EL1.TxSZ + granule size, and then
+        // shift the page table address up accordingly
         let v = ((self.asid as usize) << 48) | self.level0_phy_addr.0;
         log::debug!(
             "TTBR{}_EL1 ← {:16x}",
@@ -568,6 +575,7 @@ bitfield! {
     pub asid_size, set_asid_size: 36;
     pub ipas, set_ipas: 34, 32;
 
+    /// TG1
     pub granule_size1, set_granule_size1: 31, 30;
     pub shareability1, set_shareability1: 29, 28;
     pub outer_cacheablity1, set_outer_cacheablity1: 27, 26;
@@ -576,6 +584,7 @@ bitfield! {
     pub a1, set_a1: 22;
     pub size_offset1, set_size_offset1: 21, 16;
 
+    /// TG0
     pub granule_size0, set_granule_size0: 15, 14;
     pub shareability0, set_shareability0: 13, 12;
     pub outer_cacheablity0, set_outer_cacheablity0: 11, 10;
@@ -602,7 +611,8 @@ pub unsafe fn set_tcr(new_tcr: TranslationControlReg) {
     )
 }
 
-pub unsafe fn flush_tlb_total() {
+/// Flush the TLB for everything in EL1
+pub unsafe fn flush_tlb_total_el1() {
     core::arch::asm!(
         "DSB ISHST",    // ensure writes to tables have completed
         "TLBI VMALLE1", // flush entire TLB. The programming guide uses the 'ALLE1'
@@ -634,18 +644,61 @@ pub fn init_kernel_page_table() {
     }
 }
 
+/// A special guard type that wraps a [spin::MutexGuard] on a [PageTable].
+/// If mutated, then when the guard is dropped the TLB is automatically flushed.
+pub struct KernelTableGuard {
+    table: spin::MutexGuard<'static, PageTable>,
+    mutated: bool,
+}
+
+impl From<spin::MutexGuard<'static, PageTable>> for KernelTableGuard {
+    fn from(table: spin::MutexGuard<'static, PageTable>) -> Self {
+        Self {
+            table,
+            mutated: false,
+        }
+    }
+}
+
+impl core::ops::Deref for KernelTableGuard {
+    type Target = PageTable;
+
+    fn deref(&self) -> &Self::Target {
+        self.table.deref()
+    }
+}
+
+impl core::ops::DerefMut for KernelTableGuard {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        // of course, you could deref_mut and not mutate
+        self.mutated = true;
+        self.table.deref_mut()
+    }
+}
+
+impl Drop for KernelTableGuard {
+    fn drop(&mut self) {
+        if self.mutated {
+            unsafe {
+                flush_tlb_total_el1();
+            }
+        }
+    }
+}
+
 /// Kernel memory map:
 /// | Virtual Address               | What's there               |
 /// |-------------------------------|----------------------------|
 /// | `0xffff_0000_0000_0000`, 2GiB | Identity mapped to first 2GiB of PA including kernel code/data |
 /// | `0xffff_0010_0000_0000`, 1TiB | Memory mapped with addresses from VirtualAddressAllocator |
 /// | `0xffff_ff00_0000_0000`, Flex | Kernel heap, allocated on demand |
-pub fn kernel_table() -> spin::MutexGuard<'static, PageTable> {
+pub fn kernel_table() -> KernelTableGuard {
     unsafe {
         KERNEL_TABLE
             .get()
             .as_ref()
             .expect("kernel page table initialized")
             .lock()
+            .into()
     }
 }
