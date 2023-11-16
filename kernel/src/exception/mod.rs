@@ -199,11 +199,36 @@ bitfield! {
     u32, iss, _: 24, 0;
 }
 
+struct ExceptionClass(u8);
+
+impl core::fmt::Debug for ExceptionClass {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "0b{:b}=", self.0)?;
+        match self.0 {
+            0b000000 => write!(f, "[Misc]"),
+            0b000001 => write!(f, "[Trapped WF* instruction]"),
+            0b000111 => write!(f, "[Access to SME, SVE, Advanced SIMD or floating-point functionality trapped by CPACR_EL1.FPEN, CPTR_EL2.FPEN, CPTR_EL2.TFP, or CPTR_EL3.TFP control]"),
+            0b001010 => write!(f, "[Trapped execution of an LD64B or ST64B* instruction.]"),
+            0b001101 => write!(f, "[Branch Target Exception]"),
+            0b001110 => write!(f, "[Illegal Execution state]"),
+            0b010101 => write!(f, "[SVC instruction]"),
+            0b011000 => write!(f, "[Trapped MSR, MRS or System instruction execution in AArch64 state, that is not reported using EC 0b000000, 0b000001, or 0b000111]"),
+            0b100000 => write!(f, "[Instruction Abort from a lower Exception level]"),
+            0b100001 => write!(f, "[Instruction Abort taken without a change in Exception level]"),
+            0b100010 => write!(f, "[PC alignment fault exception]"),
+            0b100100 => write!(f, "[Data Abort exception from a lower Exception level]"),
+            0b100101 => write!(f, "[Data Abort exception taken without a change in Exception level]"),
+            0b100110 => write!(f, "[SP alignment fault exception]"),
+            c => write!(f, "[Unknown]")
+        }
+    }
+}
+
 impl Display for ExceptionSyndromeRegister {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("ESR")
             .field("ISS2", &format_args!("0x{:x}", self.iss2()))
-            .field("EC", &format_args!("0b{:b}", self.ec()))
+            .field("EC", &ExceptionClass(self.ec()))
             .field("IL", &self.il())
             .field(
                 "ISS",
@@ -236,7 +261,6 @@ unsafe extern "C" fn handle_synchronous_exception(regs: *mut Registers, esr: usi
         }
 
         process::scheduler::scheduler().resume_current_thread(regs, previous_asid);
-        log::trace!("end of handle_synchronous_exception");
     } else {
         // TODO: stack is sus??
         // let mut v: usize;

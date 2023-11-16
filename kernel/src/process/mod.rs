@@ -1,11 +1,12 @@
 use crate::{
     exception::Registers,
     memory::{
-        paging::PageTable, physical_memory_allocator, PhysicalBuffer, VirtualAddress, PAGE_SIZE,
+        paging::{PageTable, PageTableEntryOptions},
+        physical_memory_allocator, PhysicalBuffer, VirtualAddress, PAGE_SIZE,
     },
     CHashMapG,
 };
-use bitfield::bitfield;
+use bitfield::{bitfield, Bit};
 use core::{cell::OnceCell, error::Error, sync::atomic::AtomicU32};
 use smallvec::{smallvec, SmallVec};
 use snafu::{ensure, OptionExt, ResultExt, Snafu};
@@ -258,13 +259,16 @@ pub async fn spawn_process(
         // let go of buffer, we will free pages by walking the page table when the process dies
         let (pa, _) = buf.unmap();
         log::trace!("segment phys addr = {pa}");
-        // TODO: set correct page flags
+        // TODO: set correct page flags beyond R/W, perhaps also parse p_flags more rigorously
         pt.map_range(
             pa,
             aligned_vaddr,
             (seg.p_memsz as usize).div_ceil(PAGE_SIZE),
             true,
-            &Default::default(),
+            &PageTableEntryOptions {
+                read_only: !seg.p_flags.bit(1),
+                el0_access: true,
+            },
         )
         .context(MemoryMapSnafu)?;
     }
@@ -285,7 +289,10 @@ pub async fn spawn_process(
         stack_vaddr,
         stack_page_count,
         true,
-        &Default::default(),
+        &PageTableEntryOptions {
+            read_only: false,
+            el0_access: true,
+        },
     )
     .context(MemoryMapSnafu);
 

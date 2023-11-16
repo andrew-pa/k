@@ -22,8 +22,14 @@ fn fact(n: usize) -> usize {
 pub extern "C" fn _start() {
     // fact(5);
     unsafe {
+        let mut i: usize = 0;
         loop {
-            asm!("svc #3")
+            i = i.wrapping_add(1);
+            asm!(
+                "mov x0, {i}",
+                "svc #3",
+                i = in(reg) i
+            )
         }
     }
 }

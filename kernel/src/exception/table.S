@@ -3,7 +3,6 @@
 .global _exception_vector_table
 .global install_exception_vector_table
 
-// save registers x2...x30, assuming that x0,x1 have already been saved
 .macro save_regs
     stp x0, x1, [sp, #0*16]
     stp x2, x3, [sp, #1*16]
