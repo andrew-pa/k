@@ -218,16 +218,25 @@ unsafe extern "C" fn handle_synchronous_exception(regs: *mut Registers, esr: usi
     let esr = ExceptionSyndromeRegister(esr as u64);
 
     if esr.ec() == 0b010101 {
+        let pid = process::scheduler::scheduler().pause_current_thread(regs);
+        let previous_asid = pid
+            .and_then(|pid| process::processes().get(&pid))
+            .map(|proc| proc.page_tables.asid);
+
         // system call
         let id = esr.iss() as u16;
         match system_call_handlers().get(&id) {
             Some(h) => (*h)(id, regs),
             None => log::warn!(
-                "unknown system call: id = 0x{:x}, registers = {:?}",
+                "unknown system call: pid={:?}, id = 0x{:x}, registers = {:?}",
+                pid,
                 id,
                 regs.as_ref()
             ),
         }
+
+        process::scheduler::scheduler().resume_current_thread(regs, previous_asid);
+        log::trace!("end of handle_synchronous_exception");
     } else {
         // TODO: stack is sus??
         // let mut v: usize;
@@ -246,13 +255,12 @@ unsafe extern "C" fn handle_interrupt(regs: *mut Registers, _esr: usize, _far: u
     let ic = interrupt_controller();
 
     let pid = process::scheduler::scheduler().pause_current_thread(regs);
-    // log::trace!("SPsel = {}, EL={}", sp_sel(), current_el());
     let previous_asid = pid
         .and_then(|pid| process::processes().get(&pid))
         .map(|proc| proc.page_tables.asid);
 
     while let Some(id) = ic.ack_interrupt() {
-        log::trace!("handling interrupt {id}");
+        log::trace!("handling interrupt {id} ELR={}", read_exception_link_reg());
         match interrupt_handlers().get_mut(&id) {
             Some(mut h) => (*h)(id, regs),
             None => log::warn!("unhandled interrupt {id}"),

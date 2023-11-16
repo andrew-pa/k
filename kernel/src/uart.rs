@@ -34,11 +34,15 @@ impl log::Log for DebugUartLogger {
         let mut uart = DebugUart {
             base: 0xffff_0000_0900_0000 as *mut u8,
         };
+        write!(uart, "[{:<5} {} T", record.level(), crate::timer::counter()).unwrap();
+        if let Some(tid) = crate::process::scheduler::current_thread_id() {
+            write!(uart, "{tid}").unwrap();
+        } else {
+            write!(uart, "?").unwrap();
+        }
         writeln!(
             uart,
-            "[{:<5} {} {}.{}] {}",
-            record.level(),
-            crate::timer::counter(),
+            " {}.{}] {}",
             record.module_path().unwrap_or("unknown module"),
             record.line().unwrap_or(0),
             record.args()

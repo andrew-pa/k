@@ -104,3 +104,11 @@ pub fn init_scheduler(first_thread: ThreadId) {
 pub fn scheduler() -> MutexGuard<'static, ThreadScheduler> {
     unsafe { SCHD.get().unwrap().lock() }
 }
+
+pub fn current_thread_id() -> Option<ThreadId> {
+    unsafe {
+        SCHD.get()
+            .and_then(|s| s.try_lock())
+            .map(|s| s.currently_running())
+    }
+}

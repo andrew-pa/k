@@ -5,6 +5,7 @@
 
 // save registers x2...x30, assuming that x0,x1 have already been saved
 .macro save_regs
+    stp x0, x1, [sp, #0*16]
     stp x2, x3, [sp, #1*16]
     stp x4, x5, [sp, #2*16]
     stp x6, x7, [sp, #3*16]
@@ -43,11 +44,6 @@
 
 .macro exception_handler fn_to_call
     sub sp, sp, #8*30
-    stp x0, x1, [sp, #0*16]
-
-    ldr x0, #0x1e0
-    msr DAIF, x0
-
     save_regs
 
     mov x0, sp
@@ -57,8 +53,6 @@
 
     restore_regs
     add sp, sp, #8*30
-
-    msr DAIF, xzr
 
     eret
 .endm

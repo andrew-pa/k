@@ -304,19 +304,17 @@ impl PageTable {
             self.level0_phy_addr,
             self.asid
         );
-        let cur_tcr = unsafe { get_tcr() };
-        log::debug!("current TCR = {cur_tcr:#?}");
         // CnP bit is set to zero by assumption rn, see D17.2.144
         // TODO: this seems rather incorrect, since it basically shifts the page table address down
         // by one bit because it uses the (ostensibly) ending zero in the address as the CnP bit.
         // To do this correctly we need to know the value of TCR_EL1.TxSZ + granule size, and then
         // shift the page table address up accordingly
         let v = ((self.asid as usize) << 48) | self.level0_phy_addr.0;
-        log::debug!(
-            "TTBR{}_EL1 ← {:16x}",
-            if self.high_addresses { 1 } else { 0 },
-            v
-        );
+        // log::trace!(
+        //     "TTBR{}_EL1 ← {:16x}",
+        //     if self.high_addresses { 1 } else { 0 },
+        //     v
+        // );
         if !self.high_addresses {
             core::arch::asm!("msr TTBR0_EL1, {addr}",
                 addr = in(reg) v)
