@@ -19,6 +19,9 @@ pub use spawn::{spawn_process, SpawnError};
 mod reg;
 pub use reg::*;
 
+mod queue;
+use queue::{CompletionQueue, SubmissionQueue};
+
 pub type ProcessId = u32;
 pub type ThreadId = u32;
 
@@ -26,6 +29,8 @@ pub struct Process {
     pub id: ProcessId,
     pub page_tables: PageTable,
     pub threads: SmallVec<[ThreadId; 4]>,
+    pub submission_queues: SmallVec<[SubmissionQueue; 1]>,
+    pub completion_queues: SmallVec<[CompletionQueue; 1]>,
 }
 
 #[derive(Copy, Clone, Debug)]

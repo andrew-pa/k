@@ -88,8 +88,8 @@ impl VirtualAddress {
     }
 
     pub fn offset(self, byte_offset: isize) -> VirtualAddress {
-        // TODO: is saturating right or should we panic on overflow?
-        VirtualAddress(self.0.saturating_add_signed(byte_offset))
+        // TODO: is wrapping right or should we panic on overflow?
+        VirtualAddress(self.0.wrapping_add_signed(byte_offset))
     }
 
     pub fn align_offset(&self, alignment: usize) -> usize {

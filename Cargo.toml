@@ -1,3 +1,3 @@
 [workspace]
-members = ["kernel", "init", "chashmap", "owning-ref-rs"]
+members = ["kernel", "init", "chashmap", "owning-ref-rs", "kapi"]
 resolver = "2"

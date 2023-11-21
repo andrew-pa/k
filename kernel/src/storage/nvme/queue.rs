@@ -336,14 +336,15 @@ impl CompletionQueue {
         interrupt_index: Option<u16>,
     ) -> Result<Self, QueueCreateError> {
         assert!(id > 0);
-        let mut s = Self::new(
-            id,
-            entry_count,
-            doorbell_base,
-            doorbell_stride,
-            Some(parent.clone()),
-        )
-        .context(MemorySnafu)?;
+        let mut s =
+            Self::new(
+                id,
+                entry_count,
+                doorbell_base,
+                doorbell_stride,
+                Some(parent.clone()),
+            )
+            .context(MemorySnafu)?;
         // TODO: for now all queues are physically continuous
         parent
             .lock()

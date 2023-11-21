@@ -464,13 +464,14 @@ impl<K: PartialEq + Hash, V, S: BuildHasher, R: RawRwLock> Table<K, V, S, R> {
             // We'll only transfer the bucket if it is a KV pair.
             if let Bucket::Contains(key, val) = i.into_inner() {
                 // Find a bucket where the KV pair can be inserted.
-                let bucket = self.scan_mut_no_lock(&key, |x| match *x {
-                    // Halt on an empty bucket.
-                    Bucket::Empty => true,
-                    // We'll assume that the rest of the buckets either contains other KV pairs (in
-                    // particular, no buckets have been removed in the newly construct table).
-                    _ => false,
-                });
+                let bucket =
+                    self.scan_mut_no_lock(&key, |x| match *x {
+                        // Halt on an empty bucket.
+                        Bucket::Empty => true,
+                        // We'll assume that the rest of the buckets either contains other KV pairs (in
+                        // particular, no buckets have been removed in the newly construct table).
+                        _ => false,
+                    });
 
                 // Set the bucket to the KV pair.
                 *bucket = Bucket::Contains(key, val);
@@ -615,13 +616,14 @@ impl<'a, K: fmt::Debug, V: fmt::Debug, S, R: RawRwLock> fmt::Debug for ReadGuard
 /// on drop.
 pub struct WriteGuard<'a, K: 'a, V: 'a, S, R: RawRwLock> {
     /// The inner hecking long type.
-    inner: OwningHandle<
+    inner:
         OwningHandle<
-            StableRwLockReadGuard<'a, R, Table<K, V, S, R>>,
-            StableRwLockWriteGuard<'a, R, Bucket<K, V>>,
+            OwningHandle<
+                StableRwLockReadGuard<'a, R, Table<K, V, S, R>>,
+                StableRwLockWriteGuard<'a, R, Bucket<K, V>>,
+            >,
+            &'a mut V,
         >,
-        &'a mut V,
-    >,
 }
 
 impl<'a, K, V, S, R: RawRwLock> ops::Deref for WriteGuard<'a, K, V, S, R> {
@@ -841,11 +843,12 @@ impl<K: PartialEq + Hash, V, S: BuildHasher, R: RawRwLock> CHashMap<K, V, S, R> 
         Q: Hash + PartialEq,
     {
         // Acquire the read lock and lookup in the table.
-        if let Ok(inner) = OwningRef::new(OwningHandle::new_with_fn(
-            StableRwLockReadGuard(self.table.read()),
-            |x| unsafe { &*x }.lookup(key),
-        ))
-        .try_map(|x| x.value_ref())
+        if let Ok(inner) =
+            OwningRef::new(OwningHandle::new_with_fn(
+                StableRwLockReadGuard(self.table.read()),
+                |x| unsafe { &*x }.lookup(key),
+            ))
+            .try_map(|x| x.value_ref())
         {
             // The bucket contains data.
             Some(ReadGuard { inner })

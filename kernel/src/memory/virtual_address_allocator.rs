@@ -85,12 +85,9 @@ static mut VAA: OnceCell<Mutex<VirtualAddressAllocator>> = OnceCell::new();
 
 pub fn init_virtual_address_allocator() {
     unsafe {
-        VAA.set(Mutex::new(VirtualAddressAllocator::new(
-            START_ADDRESS,
-            TOTAL_SIZE,
-        )))
-        .ok()
-        .expect("init virtual address allocator once");
+        VAA.set(Mutex::new(VirtualAddressAllocator::new(START_ADDRESS, TOTAL_SIZE)))
+            .ok()
+            .expect("init virtual address allocator once");
     }
 }
 

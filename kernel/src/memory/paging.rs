@@ -430,9 +430,9 @@ impl PageTable {
 
             unsafe {
                 table.as_mut().expect("final table ptr is valid")[i3] =
-                    options.apply(PageTableEntry::page_entry(PhysicalAddress(
-                        phy_start.0 + page_index * PAGE_SIZE,
-                    )));
+                    options.apply(PageTableEntry::page_entry(
+                        PhysicalAddress(phy_start.0 + page_index * PAGE_SIZE)
+                    ));
             }
             page_index += 1;
         }
@@ -448,12 +448,14 @@ impl PageTable {
             let (tag, i0, i1, i2, i3, po) = page_addr.to_parts();
             let mut table = self.level0_table;
             // TODO: surely there is a clean way to generate this slice with iterators?
-            for (lvl, i, block_size) in [
-                (0, i0, 0),
-                (1, i1, 512 * 512), // 1GiB in pages
-                (2, i2, 512),       // 2MiB in pages
-                (3, i3, 1),
-            ] {
+            for (lvl, i, block_size) in
+                [
+                    (0, i0, 0),
+                    (1, i1, 512 * 512), // 1GiB in pages
+                    (2, i2, 512),       // 2MiB in pages
+                    (3, i3, 1),
+                ]
+            {
                 let tr = unsafe { table.as_mut().expect("table ptr is valid") };
                 if let Some(existing_table) = tr[i].table_ref(lvl) {
                     table = existing_table;

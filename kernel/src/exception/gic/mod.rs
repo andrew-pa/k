@@ -170,10 +170,11 @@ impl GenericInterruptController {
 
     fn read_bit_for_id(&self, interface: *mut u32, register: isize, id: InterruptId) -> bool {
         let (word_offset, bit_offset) = id_to_bit_offset(id);
-        let reg = unsafe {
-            let ptr = interface.offset(register).offset(word_offset);
-            ptr.read_volatile()
-        };
+        let reg =
+            unsafe {
+                let ptr = interface.offset(register).offset(word_offset);
+                ptr.read_volatile()
+            };
         reg & (1 << bit_offset) != 0
     }
 

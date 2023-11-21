@@ -252,12 +252,14 @@ unsafe extern "C" fn handle_synchronous_exception(regs: *mut Registers, esr: usi
         let id = esr.iss() as u16;
         match system_call_handlers().get(&id) {
             Some(h) => (*h)(id, regs),
-            None => log::warn!(
-                "unknown system call: pid={:?}, id = 0x{:x}, registers = {:?}",
-                pid,
-                id,
-                regs.as_ref()
-            ),
+            None => {
+                log::warn!(
+                    "unknown system call: pid={:?}, id = 0x{:x}, registers = {:?}",
+                    pid,
+                    id,
+                    regs.as_ref()
+                )
+            }
         }
 
         process::scheduler::scheduler().resume_current_thread(regs, previous_asid);
