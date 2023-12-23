@@ -6,6 +6,7 @@
 #![feature(linked_list_cursors)]
 #![feature(custom_test_frameworks)]
 #![feature(iter_array_chunks)]
+#![feature(non_null_convenience)]
 #![test_runner(kernel::test_runner)]
 #![reexport_test_harness_main = "test_main"]
 #![allow(unused)]

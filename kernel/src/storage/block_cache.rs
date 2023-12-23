@@ -106,11 +106,10 @@ impl BlockCache {
         let tag = address
             .0
             .bit_range(63, self.chunk_id_bits + self.block_offset_bits);
-        let chunk_id =
-            address.0.bit_range(
-                self.chunk_id_bits + self.block_offset_bits - 1,
-                self.block_offset_bits,
-            );
+        let chunk_id = address.0.bit_range(
+            self.chunk_id_bits + self.block_offset_bits - 1,
+            self.block_offset_bits,
+        );
         let block_offset = address.0.bit_range(self.block_offset_bits - 1, 0);
         log::trace!(
             "decomposing {:b} => {tag:b}:{chunk_id:b}:{block_offset:b}",
@@ -174,17 +173,16 @@ impl BlockCache {
         num_chunks_inclusive: u64,
         mark_dirty: bool,
     ) -> Result<(), Error> {
-        let res =
-            future::join_all((0..num_chunks_inclusive).map(|i| {
-                let mut tag = starting_tag;
-                let mut chunk_id = starting_chunk_id + i;
-                if chunk_id > self.num_chunks as u64 {
-                    tag += chunk_id / self.num_chunks as u64;
-                    chunk_id = chunk_id % self.num_chunks as u64;
-                }
-                self.load_chunk(tag, chunk_id, mark_dirty)
-            }))
-            .await;
+        let res = future::join_all((0..num_chunks_inclusive).map(|i| {
+            let mut tag = starting_tag;
+            let mut chunk_id = starting_chunk_id + i;
+            if chunk_id > self.num_chunks as u64 {
+                tag += chunk_id / self.num_chunks as u64;
+                chunk_id = chunk_id % self.num_chunks as u64;
+            }
+            self.load_chunk(tag, chunk_id, mark_dirty)
+        }))
+        .await;
         for e in res.into_iter().flat_map(Result::err) {
             return Err(e);
         }
