@@ -21,8 +21,10 @@ fn fact(n: usize) -> usize {
 #[no_mangle]
 pub extern "C" fn _start() {
     // fact(5);
+    let sus_addr = 0xdeadbeef as *mut usize;
+    let x = unsafe { sus_addr.read_volatile() };
     unsafe {
-        let mut i: usize = 0;
+        let mut i: usize = x;
         loop {
             i = i.wrapping_add(1);
             asm!(

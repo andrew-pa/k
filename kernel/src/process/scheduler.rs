@@ -4,6 +4,7 @@ use spin::{Mutex, MutexGuard};
 use super::*;
 
 pub struct ThreadScheduler {
+    /// Threads to run at each priority level, forming a queue with (<threads in queue>, <index of queue head>)
     queues: [(Vec<ThreadId>, usize); 3],
     current_thread: ThreadId,
 }
@@ -21,15 +22,33 @@ impl ThreadScheduler {
     }
 
     pub fn schedule_next_thread(&mut self) {
-        for (threads, next_thread) in self.queues.iter_mut() {
-            if threads.len() == 0 {
+        for (queue, next) in self.queues.iter_mut() {
+            if queue.len() == 0 {
                 continue;
             }
-            // TODO: check thread state, is it waiting?
-            self.current_thread = threads[*next_thread];
-            *next_thread = (*next_thread + 1) % threads.len();
+            // skip any threads that are waiting in this queue
+            let mut skips = queue.len();
+            while threads()
+                .get(&queue[*next])
+                .expect("valid thread ids in queue")
+                .state
+                == ThreadState::Waiting
+            {
+                skips -= 1;
+                *next = (*next + 1) % queue.len();
+            }
+            if skips == 0 {
+                // every thread in the queue is waiting
+                continue;
+            }
+            self.current_thread = queue[*next];
+            *next = (*next + 1) % queue.len();
             break;
         }
+    }
+
+    pub fn make_task_executor_current(&mut self) {
+        self.current_thread = TASK_THREAD;
     }
 
     pub fn add_thread(&mut self, thread: ThreadId) {

@@ -6,7 +6,7 @@ use spin::{Mutex, MutexGuard};
 
 use crate::{
     current_el,
-    memory::PhysicalAddress,
+    memory::{PhysicalAddress, VirtualAddress},
     process::{self, read_exception_link_reg, read_stack_pointer},
     sp_sel, timer, CHashMapG,
 };
@@ -243,12 +243,12 @@ unsafe extern "C" fn handle_synchronous_exception(regs: *mut Registers, esr: usi
     let esr = ExceptionSyndromeRegister(esr as u64);
 
     if esr.ec() == 0b010101 {
+        // system call
         let pid = process::scheduler::scheduler().pause_current_thread(regs);
         let previous_asid = pid
             .and_then(|pid| process::processes().get(&pid))
             .map(|proc| proc.page_tables.asid);
 
-        // system call
         let id = esr.iss() as u16;
         match system_call_handlers().get(&id) {
             Some(h) => (*h)(id, regs),
@@ -263,6 +263,39 @@ unsafe extern "C" fn handle_synchronous_exception(regs: *mut Registers, esr: usi
         }
 
         process::scheduler::scheduler().resume_current_thread(regs, previous_asid);
+    } else if esr.ec() == 0b100100 {
+        // page fault in user space
+        let (pid, tid) = {
+            let mut schd = process::scheduler::scheduler();
+            (schd.pause_current_thread(regs)
+                .expect("this exception is only for page faults in a lower exception level and since the kernel runs at EL1, that means that we can only get here from a fault in EL0, therefore there must be a current process running (or something is very wrong)"),
+                schd.currently_running())
+        };
+
+        let proc_asid = process::processes()
+            .get(&pid)
+            .map(|p| p.page_tables.asid)
+            .expect("valid process ID from scheduler");
+
+        process::threads()
+            .get_mut(&tid)
+            .expect("valid thread id from scheduler")
+            .state = process::ThreadState::Waiting;
+
+        log::trace!("user space page fault at {far:x}, pid={pid}, tid={tid}");
+
+        crate::tasks::spawn(async move {
+            let mut proc = process::processes()
+                .get_mut(&pid)
+                .expect("valid process ID from scheduler");
+            proc.on_page_fault(tid, VirtualAddress(far)).await;
+        });
+
+        {
+            let mut schd = process::scheduler::scheduler();
+            schd.make_task_executor_current();
+            schd.resume_current_thread(regs, Some(proc_asid));
+        }
     } else {
         // TODO: stack is sus??
         // let mut v: usize;

@@ -169,6 +169,7 @@ pub async fn spawn_process(
         id: pid,
         page_tables: pt,
         threads: smallvec![tid],
+        mapped_resources: Vec::new(),
     };
     let p = processes().insert(pid, proc);
     assert!(p.is_none());

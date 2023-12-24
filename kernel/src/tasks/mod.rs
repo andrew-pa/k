@@ -7,6 +7,7 @@ use core::{
     task::{Context, Poll, Waker},
 };
 use crossbeam::queue::ArrayQueue;
+use futures::FutureExt;
 use hashbrown::HashMap;
 use spin::Mutex;
 
