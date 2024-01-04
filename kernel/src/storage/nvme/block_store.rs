@@ -29,6 +29,7 @@ impl BlockStore for NamespaceBlockStore {
         destination_addr: PhysicalAddress,
         num_blocks: usize,
     ) -> Result<usize, Error> {
+        log::trace!("read blocks {source_addr}[..{num_blocks}] -> {destination_addr}");
         let cmp = self.io_cq.wait_for_completion(
             self.io_sq.begin()
                 .expect("NVMe submission queue full. TODO: we should be able to await for a new spot in the queue rather than panic")
@@ -52,6 +53,7 @@ impl BlockStore for NamespaceBlockStore {
         destination_addr: BlockAddress,
         num_blocks: usize,
     ) -> Result<usize, Error> {
+        log::trace!("write blocks {destination_addr} <- {source_addr}[..{num_blocks}]");
         let cmp = self.io_cq.wait_for_completion(
             self.io_sq.begin()
                 .expect("NVMe submission queue full. TODO: we should be able to await for a new spot in the queue rather than panic")

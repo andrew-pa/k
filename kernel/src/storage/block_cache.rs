@@ -11,6 +11,12 @@ use futures::future;
 use hashbrown::HashMap;
 use snafu::{ResultExt, Snafu};
 
+// TODO: we could entirely get rid of this and use the MMU instead, given that all block
+// stores could be addressed within the kernel's address space.
+// what we would have is a new heap space that was mapped in the kernel that you could allocate in
+// and associate with some block device and then it's just typical memory paging type thing with
+// page faults and loading pages on demand, same as user space.
+
 /*
  * for each loaded block we need to know
  * - virtual address of block copy in memory
@@ -99,6 +105,10 @@ impl BlockCache {
     /// Size of a single block in bytes (cached value of [BlockStore::supported_block_size]).
     pub fn block_size(&self) -> usize {
         self.block_size
+    }
+
+    pub fn underlying_store(&self) -> &Mutex<Box<dyn BlockStore>> {
+        &self.store
     }
 
     /// Decompose a logical address into its cache tag, chunk ID and block offset, respectively.

@@ -84,15 +84,16 @@ pub extern "C" fn kmain() {
         };
         log::info!("mount FAT filesystem");
         fs::fat::mount(Path::new("/fat"), bs).await.unwrap();
-        let mut f = registry::registry()
-            .open_byte_store(Path::new("/fat/abcdefghij/test.txt"))
-            .await
-            .unwrap();
-        let mut buf = [0u8; 32];
-        let len = f.read(&mut buf).await.expect("read file");
-        log::info!("got {} raw bytes: {buf:?}", len);
-        let s = core::str::from_utf8(&buf[0..len]).expect("valid utf-8");
-        log::info!("file text = {s}");
+
+        // let mut f = registry::registry()
+        //     .open_byte_store(Path::new("/fat/abcdefghij/test.txt"))
+        //     .await
+        //     .unwrap();
+        // let mut buf = [0u8; 32];
+        // let len = f.read(&mut buf).await.expect("read file");
+        // log::info!("got {} raw bytes: {buf:?}", len);
+        // let s = core::str::from_utf8(&buf[0..len]).expect("valid utf-8");
+        // log::info!("file text = {s}");
 
         log::info!("spawning init process");
         let init_pid = process::spawn_process("/fat/init")

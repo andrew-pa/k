@@ -221,10 +221,7 @@ impl RegistryHandler for NvmeDeviceRegistryHandler {
         }))
     }
 
-    async fn open_byte_store(
-        &self,
-        subpath: &Path,
-    ) -> Result<Box<dyn crate::fs::ByteStore>, RegistryError> {
+    async fn open_file(&self, subpath: &Path) -> Result<Box<dyn crate::fs::File>, RegistryError> {
         Err(RegistryError::Unsupported)
     }
 }

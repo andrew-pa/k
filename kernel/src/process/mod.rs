@@ -2,7 +2,7 @@ use crate::{
     exception::Registers,
     memory::{
         paging::{PageTable, PageTableEntryOptions},
-        physical_memory_allocator, PhysicalBuffer, VirtualAddress, PAGE_SIZE,
+        physical_memory_allocator, PhysicalAddress, PhysicalBuffer, VirtualAddress, PAGE_SIZE,
     },
     CHashMapG,
 };
@@ -29,7 +29,36 @@ pub type ThreadId = u32;
 
 #[async_trait]
 pub trait Resource {
-    async fn on_page_fault(&mut self, offset: usize);
+    /// Size of the resource in bytes
+    fn len(&self) -> usize;
+
+    /// Process an access to an address in the mapped range of the resource that is not yet backed by memory
+    async fn on_page_fault(
+        &mut self,
+        base_address: VirtualAddress,
+        accessed_address: VirtualAddress,
+        page_tables: &mut PageTable,
+    ) -> Result<(), ()>;
+}
+
+#[async_trait]
+impl<F: crate::fs::File + Send> Resource for F {
+    fn len(&self) -> usize {
+        self.len() as usize
+    }
+
+    async fn on_page_fault(
+        &mut self,
+        base_address: VirtualAddress,
+        accessed_address: VirtualAddress,
+        page_tables: &mut PageTable,
+    ) -> Result<(), ()> {
+        // compute address of affected page
+        // allocate new memory
+        // map memory in page tables
+        // load data from file
+        Ok(())
+    }
 }
 
 pub struct MappedResource {
@@ -99,9 +128,22 @@ impl Process {
     pub async fn on_page_fault(&mut self, tid: ThreadId, address: VirtualAddress) {
         log::trace!("on_page_fault {address}");
         if let Some(res) = self.mapped_resources.iter_mut().find(|r| r.maps(address)) {
-            res.resource
-                .on_page_fault(address.0 - res.base_address.0)
-                .await;
+            match res
+                .resource
+                .on_page_fault(res.base_address, address, &mut self.page_tables)
+                .await
+            {
+                Ok(()) => {
+                    // resume thread
+                }
+                Err(e) => {
+                    log::error!(
+                        "page fault handler failed for process {} at address {address}",
+                        self.id
+                    );
+                    // TODO: how do we inform the process it has an error?
+                }
+            }
         } else {
             log::error!(
                 "process {}, thread {}: unhandled page fault at {address}",

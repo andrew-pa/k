@@ -38,38 +38,27 @@ pub async fn spawn_process(
     let path = binary_path.as_ref();
     log::debug!("spawning process with binary file at {path}");
     let mut f = registry()
-        .open_byte_store(path)
+        .open_file(path)
         .await
         .with_context(|_| RegistrySnafu { path })?;
 
-    // we will directly map portions of the buffer into the new process's address space, so we directly use physical memory.
     let f_len = f.len() as usize;
     log::debug!("binary file size = {f_len}");
-    let mut data = alloc::vec![0u8; f_len];
-
-    // actually read the file
-    let mut i = 0;
-    while i < f_len {
-        log::trace!("reading binary, offset = {i:x}");
-        let nb = f.read(&mut data[i..]).await.context(FileSystemSnafu {
-            reason: "read binary file",
+    let mut src_data = PhysicalBuffer::alloc(f_len.div_ceil(PAGE_SIZE), &Default::default())
+        .context(MemorySnafu {
+            reason: "allocate temporary buffer for binary",
         })?;
-        if nb == 0 {
-            break;
-        }
-        i += nb;
-    }
-    ensure!(
-        i == f_len,
-        OtherSnafu {
-            reason: "file read to unexpected size"
-        }
-    );
+    f.load_pages(0, src_data.physical_address(), src_data.page_count())
+        .await
+        .context(FileSystemSnafu {
+            reason: "read binary from disk",
+        })?;
 
     // parse ELF binary
-    let bin: elf::ElfBytes<elf::endian::AnyEndian> =
-        elf::ElfBytes::minimal_parse(&data).map_err(|reason| BinFormatSnafu { reason }.build())?;
-    log::debug!("ELF header = {:#x?}", bin.ehdr);
+    let bin: elf::ElfBytes<elf::endian::LittleEndian> =
+        elf::ElfBytes::minimal_parse(src_data.as_bytes())
+            .map_err(|reason| BinFormatSnafu { reason }.build())?;
+    // log::debug!("ELF header = {:#x?}", bin.ehdr);
 
     // allocate a process ID
     let pid = unsafe {
@@ -101,7 +90,7 @@ pub async fn spawn_process(
         log::trace!(
             "segment aligned p_vaddr = {aligned_vaddr}, alignment_offset = {alignment_offset:x}"
         );
-        let mut buf = PhysicalBuffer::alloc(
+        let mut dest_memory_segment = PhysicalBuffer::alloc(
             (seg.p_memsz as usize).div_ceil(PAGE_SIZE),
             &Default::default(),
         )
@@ -112,15 +101,16 @@ pub async fn spawn_process(
         let end = start + (seg.p_filesz as usize);
         log::trace!("copying {start}..{end}");
         if end > start {
-            (&mut buf.as_bytes_mut()[alignment_offset..(alignment_offset + seg.p_filesz as usize)])
-                .copy_from_slice(&data[start..end]);
+            (&mut dest_memory_segment.as_bytes_mut()
+                [alignment_offset..(alignment_offset + seg.p_filesz as usize)])
+                .copy_from_slice(&src_data.as_bytes()[start..end]);
         }
         if seg.p_memsz > seg.p_filesz {
             log::trace!("zeroing {} bytes", seg.p_memsz - seg.p_filesz);
-            (&mut buf.as_bytes_mut()[seg.p_filesz as usize..]).fill(0);
+            (&mut dest_memory_segment.as_bytes_mut()[seg.p_filesz as usize..]).fill(0);
         }
         // let go of buffer, we will free pages by walking the page table when the process dies
-        let (pa, _) = buf.unmap();
+        let (pa, _) = dest_memory_segment.unmap();
         log::trace!("segment phys addr = {pa}");
         // TODO: set correct page flags beyond R/W, perhaps also parse p_flags more rigorously
         pt.map_range(

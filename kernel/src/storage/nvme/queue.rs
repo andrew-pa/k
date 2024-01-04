@@ -19,10 +19,10 @@ pub struct Command<'sq> {
 
 impl core::fmt::Debug for Command<'_> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        let mut x = f.debug_struct("Command");
-        x.field("parent-queue", &self.parent.id);
-        for w in self.cmd.iter() {
-            x.field("dw", &format_args!("0x{:x}", w));
+        let mut x = f.debug_map();
+        x.entry(&"parent-queue", &self.parent.id);
+        for (i, w) in self.cmd.iter().enumerate() {
+            x.entry(&format_args!("dw{i}"), &format_args!("0x{:x}", w));
         }
         x.finish()
     }

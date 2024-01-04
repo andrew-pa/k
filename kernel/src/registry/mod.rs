@@ -1,6 +1,6 @@
 use core::cell::OnceCell;
 
-use crate::{fs::ByteStore, storage::BlockStore};
+use crate::{fs::File, storage::BlockStore};
 use alloc::{boxed::Box, string::String, vec::Vec};
 use async_trait::async_trait;
 
@@ -33,8 +33,8 @@ pub enum RegistryError {
 pub enum ResourceType {
     /// A [BlockStore][crate::storage::BlockStore] implementation
     BlockStore,
-    /// A [ByteStore][crate::fs::ByteStore] implementation
-    ByteStore,
+    /// A [File][crate::fs::File] implementation
+    File,
     /// Represents that the path refers to a directory rather than a single resource
     Directory,
 }
@@ -44,8 +44,8 @@ pub enum ResourceType {
 pub trait RegistryHandler {
     /// Open a [BlockStore][crate::storage::BlockStore] resource at `subpath`.
     async fn open_block_store(&self, subpath: &Path) -> Result<Box<dyn BlockStore>, RegistryError>;
-    /// Open a [ByteStore][crate::fs::ByteStore] resource at `subpath`.
-    async fn open_byte_store(&self, subpath: &Path) -> Result<Box<dyn ByteStore>, RegistryError>;
+    /// Open a [File][crate::fs::File] resource at `subpath`.
+    async fn open_file(&self, subpath: &Path) -> Result<Box<dyn File>, RegistryError>;
 }
 
 // TODO: storing these as strings is bad as short strings might take up an unexpectedly large
@@ -159,11 +159,11 @@ impl Registry {
         h.open_block_store(subpath).await
     }
 
-    /// Open a [ByteStore][crate::fs::ByteStore] resource located at `p` using the handler
+    /// Open a [File][crate::fs::File] resource located at `p` using the handler
     /// registered for that path, if present.
-    pub async fn open_byte_store(&self, p: &Path) -> Result<Box<dyn ByteStore>, RegistryError> {
+    pub async fn open_file(&self, p: &Path) -> Result<Box<dyn File>, RegistryError> {
         let (subpath, h) = self.find_handler(p)?;
-        h.open_byte_store(subpath).await
+        h.open_file(subpath).await
     }
 }
 

@@ -13,30 +13,107 @@ use snafu::{ensure, OptionExt, ResultExt};
 use widestring::Utf16Str;
 
 use crate::{
-    fs::{BadMetadataSnafu, OtherSnafu},
+    fs::{BadMetadataSnafu, OtherSnafu, OutOfBoundsSnafu},
+    memory::{PhysicalAddress, PAGE_SIZE},
     registry::{registry_mut, Path, RegistryHandler},
     storage::{block_cache::BlockCache, BlockAddress, BlockStore},
 };
 
-use super::{ByteStore, Error, SeekFrom, StorageSnafu};
+use super::{Error, File, StorageSnafu};
 
 mod data;
 use data::*;
 
 const CACHE_SIZE: usize = 256 /* pages */;
 
-struct File {
+struct FatFile {
     cache: Arc<BlockCache>,
     params: VolumeParams,
     start_cluster_number: u16,
-    current_cluster_number: u16,
-    current_cluster_start: u32,
-    offset: u32,
     file_size: u32,
 }
 
 #[async_trait]
-impl ByteStore for File {
+impl File for FatFile {
+    fn len(&self) -> u64 {
+        self.file_size as u64
+    }
+
+    async fn load_pages(
+        &mut self,
+        src_offset: u64,
+        dest_address: PhysicalAddress,
+        num_pages: usize,
+    ) -> Result<(), Error> {
+        // assume: src_offset is page aligned and chunks go evenly into pages, so we never start in the middle of a chunk
+        ensure!(
+            src_offset <= self.file_size as u64,
+            OutOfBoundsSnafu {
+                value: src_offset as usize,
+                bound: self.file_size as usize,
+                message: "load_pages: source offset beyond end of file"
+            }
+        );
+
+        let mut cur_cluster_num = self.start_cluster_number;
+        let mut cur_offset = 0;
+        let end_offset = (src_offset + (num_pages * PAGE_SIZE) as u64).min(self.file_size as u64);
+
+        // move to the start of the range to load
+        while cur_offset < src_offset {
+            self.cache
+                .copy_bytes(
+                    self.params.fat_start,
+                    (cur_cluster_num * 2) as usize,
+                    bytemuck::bytes_of_mut(&mut cur_cluster_num),
+                )
+                .await
+                .context(StorageSnafu)?;
+            cur_offset += self.params.bytes_per_cluster();
+            // TODO: possible to get the end-of-file cluster number here
+        }
+
+        // copy clusters until full
+        while cur_offset < end_offset {
+            // do read
+            self.cache
+                .underlying_store()
+                .lock()
+                .await
+                .read_blocks(
+                    self.params.sector_for_cluster(cur_cluster_num),
+                    dest_address.offset((cur_offset - src_offset) as isize),
+                    self.params.sectors_per_cluster as usize,
+                )
+                .await
+                .context(StorageSnafu)?;
+
+            // move to next cluster
+            self.cache
+                .copy_bytes(
+                    self.params.fat_start,
+                    (cur_cluster_num * 2) as usize,
+                    bytemuck::bytes_of_mut(&mut cur_cluster_num),
+                )
+                .await
+                .context(StorageSnafu)?;
+            cur_offset += self.params.bytes_per_cluster();
+        }
+
+        Ok(())
+    }
+
+    async fn flush_pages(
+        &mut self,
+        dest_offset: u64,
+        src_address: PhysicalAddress,
+        num_pages: usize,
+    ) -> Result<(), Error> {
+        todo!()
+    }
+}
+
+/*{
     fn len(&self) -> u64 {
         self.file_size as u64
     }
@@ -111,7 +188,7 @@ impl ByteStore for File {
     async fn write(&mut self, buf: &[u8]) -> Result<usize, Error> {
         todo!()
     }
-}
+}*/
 
 #[derive(Debug, Clone)]
 struct VolumeParams {
@@ -145,6 +222,7 @@ impl VolumeParams {
     const fn sector_for_cluster(&self, cluster_num: u16) -> BlockAddress {
         BlockAddress(self.clusters_start.0 + cluster_num as u64 * self.sectors_per_cluster)
     }
+
     const fn bytes_per_cluster(&self) -> u64 {
         self.sectors_per_cluster * self.bytes_per_sector
     }
@@ -386,10 +464,10 @@ impl RegistryHandler for Handler {
         Err(crate::registry::error::UnsupportedSnafu.build())
     }
 
-    async fn open_byte_store(
+    async fn open_file(
         &self,
         subpath: &Path,
-    ) -> Result<Box<dyn super::ByteStore>, crate::registry::RegistryError> {
+    ) -> Result<Box<dyn super::File>, crate::registry::RegistryError> {
         log::trace!("attempting to locate {subpath} in FAT volume");
 
         let entry = self
@@ -406,13 +484,10 @@ impl RegistryHandler for Handler {
 
         log::debug!("found entry {entry:?} for path {subpath}");
 
-        Ok(Box::new(File {
+        Ok(Box::new(FatFile {
             cache: self.cache.clone(),
             params: self.params.clone(),
             start_cluster_number: entry.cluster_num_lo,
-            current_cluster_number: entry.cluster_num_lo,
-            current_cluster_start: 0,
-            offset: 0,
             file_size: entry.file_size,
         }))
     }
