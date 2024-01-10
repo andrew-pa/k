@@ -155,17 +155,16 @@ impl BlockCache {
             if md.dirty() {
                 store
                     .write_blocks(
-                        self.chunk_phy_addr(chunk_id),
+                        &[(self.chunk_phy_addr(chunk_id), self.blocks_per_chunk)],
                         self.compose_address(md.tag(), chunk_id),
-                        self.blocks_per_chunk,
                     )
                     .await?;
             }
+            // because the cache has 1 page = 1 chunk, it only ever accesses one page at a time
             store
                 .read_blocks(
                     self.compose_address(tag, chunk_id),
-                    self.chunk_phy_addr(chunk_id),
-                    self.blocks_per_chunk,
+                    &[(self.chunk_phy_addr(chunk_id), self.blocks_per_chunk)],
                 )
                 .await?;
             let mut md = &mut self.metadata.write().await[chunk_id as usize];

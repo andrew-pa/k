@@ -1,3 +1,4 @@
+use bytemuck::{Pod, Zeroable};
 use derive_more::Display;
 use snafu::Snafu;
 
@@ -24,12 +25,14 @@ pub unsafe fn zero_bss_section() {
 // M1 Macs use 16kB pages though I think?? Switching is probably not that hard for a from-scratch project
 pub const PAGE_SIZE: usize = 4 * 1024;
 
-#[derive(Copy, Clone, Display, PartialEq, Eq, PartialOrd, Ord, Default)]
+#[derive(Copy, Clone, Display, PartialEq, Eq, PartialOrd, Ord, Default, Pod, Zeroable)]
 #[display(fmt = "p:0x{:x}", _0)]
+#[repr(transparent)]
 pub struct PhysicalAddress(pub usize);
 
-#[derive(Copy, Clone, Display, PartialEq, Eq, PartialOrd, Ord, Default)]
+#[derive(Copy, Clone, Display, PartialEq, Eq, PartialOrd, Ord, Default, Pod, Zeroable)]
 #[display(fmt = "v:0x{:x}", _0)]
+#[repr(transparent)]
 pub struct VirtualAddress(pub usize);
 
 impl PhysicalAddress {

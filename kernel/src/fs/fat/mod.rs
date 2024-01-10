@@ -75,15 +75,17 @@ impl File for FatFile {
 
         // copy clusters until full
         while cur_offset < end_offset {
-            // do read
+            // read the cluster into memory
             self.cache
                 .underlying_store()
                 .lock()
                 .await
                 .read_blocks(
                     self.params.sector_for_cluster(cur_cluster_num),
-                    dest_address.offset((cur_offset - src_offset) as isize),
-                    self.params.sectors_per_cluster as usize,
+                    &[(
+                        dest_address.offset((cur_offset - src_offset) as isize),
+                        self.params.sectors_per_cluster as usize,
+                    )],
                 )
                 .await
                 .context(StorageSnafu)?;

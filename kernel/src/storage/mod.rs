@@ -1,5 +1,5 @@
 use crate::memory::PhysicalAddress;
-use alloc::boxed::Box;
+use alloc::{boxed::Box, vec::Vec};
 use async_trait::async_trait;
 use derive_more::Display;
 use snafu::Snafu;
@@ -17,7 +17,14 @@ impl core::fmt::Debug for BlockAddress {
 
 #[derive(Debug, Snafu)]
 pub enum Error {
-    Memory { source: crate::memory::MemoryError },
+    Memory {
+        source: crate::memory::MemoryError,
+    },
+    /// A source/destination vector was provided that is invalid
+    BadVector {
+        reason: &'static str,
+        entry: Option<(PhysicalAddress, usize)>,
+    },
     DeviceError,
 }
 
@@ -29,24 +36,27 @@ pub trait BlockStore: Send {
     /// Block size supported by this store, in bytes
     fn supported_block_size(&self) -> usize;
 
-    /// Read num_blocks from the store at source_addr.
-    /// Destination must be a buffer of size supported_block_size() * num_blocks.
+    /// Read num_blocks from the store at source_addr, copying the data to the regions in destinations sequentially.
+    /// Each destination is comprised of a (physical address, block count N) pair that indicates
+    /// the place to write N blocks to before moving to the next destination.
+    /// The destination vector must have a total size of num_blocks.
     /// Returns the number of blocks read, or an error if one occurred
-    async fn read_blocks(
+    // TODO: probably shouldn't need &mut self?
+    async fn read_blocks<'a>(
         &mut self,
         source_addr: BlockAddress,
-        destination_addr: PhysicalAddress,
-        num_blocks: usize,
+        destinations: &'a [(PhysicalAddress, usize)],
     ) -> Result<usize, Error>;
 
-    /// Write the data at source into the blocks starting at dest_addr.
-    /// The size of source must be a multiple of supported_block_size()
+    /// Write the data at each source region sequentially into the blocks starting at dest_addr.
+    /// Each source is comprised of a (physical address, block count N) pair that indicates
+    /// the place to read N blocks from before moving to the next source.
+    /// The source vector must have a total size of num_blocks.
     /// Returns the number of blocks written, or an error if one occurred
-    async fn write_blocks(
+    async fn write_blocks<'a>(
         &mut self,
-        source_addr: PhysicalAddress,
+        source_addrs: &'a [(PhysicalAddress, usize)],
         destination_addr: BlockAddress,
-        num_blocks: usize,
     ) -> Result<usize, Error>;
 }
 
@@ -56,25 +66,23 @@ impl BlockStore for Box<dyn BlockStore> {
         self.as_ref().supported_block_size()
     }
 
-    async fn read_blocks(
+    async fn read_blocks<'a>(
         &mut self,
         source_addr: BlockAddress,
-        destination_addr: PhysicalAddress,
-        num_blocks: usize,
+        destination_addrs: &'a [(PhysicalAddress, usize)],
     ) -> Result<usize, Error> {
         self.as_mut()
-            .read_blocks(source_addr, destination_addr, num_blocks)
+            .read_blocks(source_addr, destination_addrs)
             .await
     }
 
-    async fn write_blocks(
+    async fn write_blocks<'a>(
         &mut self,
-        source_addr: PhysicalAddress,
+        source_addrs: &'a [(PhysicalAddress, usize)],
         destination_addr: BlockAddress,
-        num_blocks: usize,
     ) -> Result<usize, Error> {
         self.as_mut()
-            .write_blocks(source_addr, destination_addr, num_blocks)
+            .write_blocks(source_addrs, destination_addr)
             .await
     }
 }
