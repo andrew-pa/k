@@ -1,9 +1,10 @@
 use crate::{
-    memory::PhysicalAddress,
+    memory::{PhysicalAddress, PAGE_SIZE},
     storage::{BlockAddress, BlockStore, Error},
 };
 use alloc::boxed::Box;
 use async_trait::async_trait;
+use snafu::ResultExt;
 
 use super::{interrupt::CompletionQueueHandle, queue::SubmissionQueue};
 
@@ -23,48 +24,70 @@ impl BlockStore for NamespaceBlockStore {
         self.supported_block_size
     }
 
-    async fn read_blocks(
+    async fn read_blocks<'a>(
         &mut self,
         source_addr: BlockAddress,
-        destination_addr: PhysicalAddress,
-        num_blocks: usize,
+        destination_addrs: &'a [(PhysicalAddress, usize)],
     ) -> Result<usize, Error> {
-        log::trace!("read blocks {source_addr}[..{num_blocks}] -> {destination_addr}");
+        // log::trace!("read blocks {source_addr}[..{num_blocks}] -> {destination_addrs:?}");
+        let total_num_blocks: u16 = destination_addrs
+            .iter()
+            .map(|(_, n)| n)
+            .sum::<usize>()
+            .try_into()
+            .map_err(|_| {
+                crate::storage::BadVectorSnafu {
+                    reason: "cannot read more than 2^16 total blocks from NVMe device",
+                    entry: None,
+                }
+                .build()
+            })?;
         let cmp = self.io_cq.wait_for_completion(
             self.io_sq.begin()
                 .expect("NVMe submission queue full. TODO: we should be able to await for a new spot in the queue rather than panic")
                 .set_namespace_id(self.namespace_id)
-                .set_data_ptr_single(destination_addr)
-                .read(source_addr, num_blocks as u16)
+                .set_data_ptrs(destination_addrs, PAGE_SIZE / self.supported_block_size)?
+                .read(source_addr, total_num_blocks as u16)
         ).await;
         match (cmp.status.status_code_type(), cmp.status.status_code()) {
-            (0, 0) => Ok(num_blocks),
+            (0, 0) => Ok(total_num_blocks as usize),
             _ => {
-                log::error!("failed to do NVMe read at {source_addr} of size {num_blocks} to {destination_addr}: {cmp:?}");
+                // log::error!("failed to do NVMe read at {source_addr} of size {num_blocks} to {destination_addrs:?}: {cmp:?}");
                 // TODO: this could maybe be more specific
                 Err(Error::DeviceError)
             }
         }
     }
 
-    async fn write_blocks(
+    async fn write_blocks<'a>(
         &mut self,
-        source_addr: PhysicalAddress,
+        source_addrs: &'a [(PhysicalAddress, usize)],
         destination_addr: BlockAddress,
-        num_blocks: usize,
     ) -> Result<usize, Error> {
-        log::trace!("write blocks {destination_addr} <- {source_addr}[..{num_blocks}]");
+        // log::trace!("write blocks {destination_addr} <- {source_addrs:?}[..{num_blocks}]");
+        let total_num_blocks: u16 = source_addrs
+            .iter()
+            .map(|(_, n)| n)
+            .sum::<usize>()
+            .try_into()
+            .map_err(|_| {
+                crate::storage::BadVectorSnafu {
+                    reason: "cannot read more than 2^16 total blocks from NVMe device",
+                    entry: None,
+                }
+                .build()
+            })?;
         let cmp = self.io_cq.wait_for_completion(
             self.io_sq.begin()
                 .expect("NVMe submission queue full. TODO: we should be able to await for a new spot in the queue rather than panic")
                 .set_namespace_id(self.namespace_id)
-                .set_data_ptr_single(source_addr)
-                .write(destination_addr, num_blocks as u16)
+                .set_data_ptrs(source_addrs, PAGE_SIZE / self.supported_block_size)?
+                .write(destination_addr, total_num_blocks as u16)
         ).await;
         match (cmp.status.status_code_type(), cmp.status.status_code()) {
-            (0, 0) => Ok(num_blocks),
+            (0, 0) => Ok(total_num_blocks as usize),
             _ => {
-                log::error!("failed to do NVMe write from {source_addr} of size {num_blocks} to {destination_addr}: {cmp:?}");
+                // log::error!("failed to do NVMe write from {source_addrs:?} of size {num_blocks} to {destination_addr}: {cmp:?}");
                 // TODO: this could maybe be more specific
                 Err(Error::DeviceError)
             }

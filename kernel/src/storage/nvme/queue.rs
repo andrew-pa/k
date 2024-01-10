@@ -1,8 +1,9 @@
 use alloc::sync::Arc;
 use bitfield::BitRangeMut;
+use bytemuck::{bytes_of, bytes_of_mut, Pod, Zeroable};
 use derive_more::Display;
 use hashbrown::HashMap;
-use snafu::Snafu;
+use snafu::{ensure, Snafu};
 use spin::Mutex;
 
 use super::{command::QueuePriority, *};
@@ -11,10 +12,40 @@ use crate::{
     memory::{paging::PageTableEntryOptions, MemoryError, PhysicalAddress, PhysicalBuffer},
 };
 
+// TODO: detect if the NVMe device has SGL and use it instead. Alas, QEMU does not appear to
+// support it, so for now the PRP list will have to do.
+#[repr(C)]
+#[derive(Pod, Zeroable, Clone, Copy, Debug)]
+struct ScatterGatherDescriptor([u8; 16]);
+
+impl ScatterGatherDescriptor {
+    #[inline]
+    fn typical(r#type: u8, address: u64, length: u64) -> ScatterGatherDescriptor {
+        let mut d = [0u8; 16];
+        d[0..8].copy_from_slice(bytes_of(&address));
+        d[8..12].copy_from_slice(bytes_of(&length));
+        d[15] = r#type << 4;
+        ScatterGatherDescriptor(d)
+    }
+
+    pub(super) fn data_block(address: u64, length: u64) -> ScatterGatherDescriptor {
+        ScatterGatherDescriptor::typical(0, address, length)
+    }
+
+    pub(super) fn next_segment(address: u64, length: u64) -> ScatterGatherDescriptor {
+        ScatterGatherDescriptor::typical(2, address, length)
+    }
+
+    pub(super) fn next_segment_final(address: u64, length: u64) -> ScatterGatherDescriptor {
+        ScatterGatherDescriptor::typical(3, address, length)
+    }
+}
+
 pub struct Command<'sq> {
     parent: &'sq mut SubmissionQueue,
     new_tail: u16,
-    pub cmd: &'sq mut [u32],
+    cmd: &'sq mut [u32],
+    extra_data_ptr_buffers: SmallVec<[PhysicalBuffer; 1]>,
 }
 
 impl core::fmt::Debug for Command<'_> {
@@ -29,13 +60,14 @@ impl core::fmt::Debug for Command<'_> {
 }
 
 impl<'sq> Command<'sq> {
-    pub fn submit(self) {
+    pub fn submit(self) -> SmallVec<[PhysicalBuffer; 1]> {
         log::trace!("submitting NVMe command {self:?}");
         self.parent.tail = self.new_tail;
         unsafe {
             self.parent.tail_doorbell.write_volatile(self.parent.tail);
         }
         log::trace!("submitted!");
+        self.extra_data_ptr_buffers
     }
 
     // low-level accessors
@@ -65,9 +97,61 @@ impl<'sq> Command<'sq> {
 
     #[inline]
     pub fn set_data_ptr_single(mut self, ptr: PhysicalAddress) -> Command<'sq> {
+        // set data ptr to PRP mode
+        // self.cmd[0].set_bit_range(15, 14, 0);
+
         self.set_qword(6, ptr.0 as u64)
     }
 
+    /// Sets the NVMe command data pointer to point to the regions specified in the format
+    /// given by [crate::storage::BlockStore]. Assumes the vector is valid.
+    pub fn set_data_ptrs(
+        mut self,
+        regions: &[(PhysicalAddress, usize)],
+        blocks_per_page: usize,
+    ) -> Result<Command<'sq>, crate::storage::Error> {
+        ensure!(
+            regions.len() > 0,
+            crate::storage::BadVectorSnafu {
+                reason: "must have at least one entry",
+                entry: None
+            }
+        );
+
+        // the four dwords that make up the "Data Pointer" field in the command form the first
+        // PRP "page", although there is only space for two entries.
+        let mut prp_page: &mut [PhysicalAddress] = bytemuck::cast_slice_mut(&mut self.cmd[6..8]);
+        let mut current_offset = 0;
+
+        for region in regions {
+            let mut num_blocks = 0;
+            let mut next_page_addr = region.0;
+            while num_blocks < region.1 {
+                prp_page[current_offset] = next_page_addr;
+                next_page_addr = next_page_addr.offset(PAGE_SIZE as isize);
+                current_offset += 1;
+                num_blocks += blocks_per_page;
+
+                if current_offset == prp_page.len() - 1 {
+                    let mut buf = PhysicalBuffer::alloc(1, &Default::default())
+                        .context(crate::storage::MemorySnafu)?;
+                    prp_page[current_offset] = buf.physical_address();
+                    current_offset = 0;
+                    self.extra_data_ptr_buffers.push(buf);
+                    prp_page = bytemuck::cast_slice_mut(
+                        self.extra_data_ptr_buffers
+                            .last_mut()
+                            .unwrap()
+                            .as_bytes_mut(),
+                    );
+                }
+            }
+        }
+
+        Ok(self)
+    }
+
+    /// Set a qword (64-bit) value in the command. Index is in terms of dwords.
     #[inline]
     pub fn set_qword(mut self, idx: usize, data: u64) -> Command<'sq> {
         self.cmd[idx] = data as u32;
@@ -224,6 +308,7 @@ impl SubmissionQueue {
                 cmd,
                 new_tail: (self.tail + 1) % self.entry_count,
                 parent: self,
+                extra_data_ptr_buffers: SmallVec::new(),
             })
         }
     }

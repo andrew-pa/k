@@ -189,7 +189,7 @@ impl RegistryHandler for NvmeDeviceRegistryHandler {
             self.admin_cq.lock().busy_wait_for_completion()
         };
 
-        let (size, cap, util, lbaf) = unsafe {
+        let (size, cap, util, lbaf, sgl_support) = unsafe {
             let info: *const u8 = id_res_buf.virtual_address().as_ptr();
             let info64 = info as *const u64;
 
@@ -197,14 +197,17 @@ impl RegistryHandler for NvmeDeviceRegistryHandler {
             let flbas = info.offset(26).read_volatile() & 0x7;
             let lbaf = info.offset(128 + 4 * flbas as isize) as *const LogicalBlockAddressFormat;
 
+            let sgl_support = info.offset(536);
+
             (
                 info64.read_volatile(),
                 info64.offset(1).read_volatile(),
                 info64.offset(2).read_volatile(),
                 lbaf.read_volatile(),
+                sgl_support.read(),
             )
         };
-        log::debug!("NVMe namespace {namespace_id} has size={size}, capacity={cap} and utilitization={util}, format={lbaf:?}");
+        log::debug!("NVMe namespace {namespace_id} has size={size}, capacity={cap} and utilitization={util}, format={lbaf:?}, SGL support={sgl_support:x}");
 
         {
             self.msix_table.lock().set_mask(ivx as usize, false)

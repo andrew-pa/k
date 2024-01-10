@@ -5,6 +5,7 @@ use core::{
 };
 
 use alloc::{boxed::Box, sync::Arc};
+use smallvec::SmallVec;
 
 use crate::{
     exception::{self, InterruptId},
@@ -15,6 +16,7 @@ use super::queue::{Command, Completion, CompletionQueue, QueueId};
 
 pub struct CompletionFuture {
     cmd_id: u16,
+    extra_data_ptr_pages_to_drop: SmallVec<[crate::memory::PhysicalBuffer; 1]>,
     pending_completions: Arc<CHashMapG<u16, PendingCompletion>>,
 }
 
@@ -64,9 +66,10 @@ impl CompletionQueueHandle {
         self.next_cmd_id = self.next_cmd_id.wrapping_add(1);
         log::debug!("created future for NVMe command id {cmd_id}");
         log::trace!("NVMe command {cmd_id} = {cmd:?}");
-        cmd.set_command_id(cmd_id).submit();
+        let extra_data_ptr_pages_to_drop = cmd.set_command_id(cmd_id).submit();
         CompletionFuture {
             cmd_id,
+            extra_data_ptr_pages_to_drop,
             pending_completions: self.pending_completions.clone(),
         }
     }
