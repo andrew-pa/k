@@ -1,3 +1,5 @@
+use elf::segment::ProgramHeader;
+
 use super::*;
 
 /// An error that can occur trying to spawn a process.
@@ -24,6 +26,104 @@ pub enum SpawnError {
     Other {
         reason: &'static str,
     },
+}
+
+fn load_segement(
+    seg: &ProgramHeader,
+    src_data: &[u8],
+    pt: &mut PageTable,
+    address_space_allocator: &mut VirtualAddressAllocator,
+) -> Result<(), SpawnError> {
+    log::trace!("mapping segment {seg:x?}");
+    // sometimes the segment p_vaddr is unaligned. we need to map an aligned version and then
+    // offset the copy into the buffer. TODO: we might need to allocate more memory to account
+    // for the offset.
+    let aligned_vaddr = VirtualAddress((seg.p_vaddr & !(seg.p_align - 1)) as usize);
+    let alignment_offset = (seg.p_vaddr & (seg.p_align - 1)) as usize;
+    log::trace!(
+        "segment aligned p_vaddr = {aligned_vaddr}, alignment_offset = {alignment_offset:x}"
+    );
+    let mut dest_memory_segment = PhysicalBuffer::alloc(
+        (seg.p_memsz as usize).div_ceil(PAGE_SIZE),
+        &Default::default(),
+    )
+    .context(MemorySnafu {
+        reason: "allocate process memory segement",
+    })?;
+    let start = seg.p_offset as usize;
+    let end = start + (seg.p_filesz as usize);
+    log::trace!("copying {start}..{end}");
+    if end > start {
+        (&mut dest_memory_segment.as_bytes_mut()
+            [alignment_offset..(alignment_offset + seg.p_filesz as usize)])
+            .copy_from_slice(&src_data[start..end]);
+    }
+    if seg.p_memsz > seg.p_filesz {
+        log::trace!("zeroing {} bytes", seg.p_memsz - seg.p_filesz);
+        (&mut dest_memory_segment.as_bytes_mut()[seg.p_filesz as usize..]).fill(0);
+    }
+    // let go of buffer, we will free pages by walking the page table when the process dies
+    let (pa, _) = dest_memory_segment.unmap();
+    log::trace!("segment phys addr = {pa}");
+    let page_count = (seg.p_memsz as usize).div_ceil(PAGE_SIZE);
+    // TODO: set correct page flags beyond R/W, perhaps also parse p_flags more rigorously
+    pt.map_range(
+        pa,
+        aligned_vaddr,
+        page_count,
+        true,
+        &PageTableEntryOptions {
+            read_only: !seg.p_flags.bit(1),
+            el0_access: true,
+        },
+    )
+    .context(MemoryMapSnafu)?;
+    address_space_allocator
+        .reserve(aligned_vaddr, page_count)
+        .expect("user process VA allocations should not overlap, and the page table should check");
+    Ok(())
+}
+
+/// Make a channel available to the process via mapped memory.
+/// The submission and completion queues will be layed out consecutively in memory, and mapping will be created immediately.
+/// Returns the base address and the total length in bytes of the mapped region.
+pub fn attach_channel(
+    channel: &Channel,
+    page_tables: &mut PageTable,
+    address_space_allocator: &mut VirtualAddressAllocator,
+) -> Result<(VirtualAddress, usize), SpawnError> {
+    let sub_buf = channel.submission_queue_buffer();
+    let com_buf = channel.completion_queue_buffer();
+    let total_len = sub_buf.len() + com_buf.len();
+    let num_pages = total_len.div_ceil(PAGE_SIZE);
+    let base_addr = address_space_allocator
+        .alloc(num_pages)
+        .context(MemorySnafu {
+            reason: "allocate in process address space for channel",
+        })?;
+    let map_opts = PageTableEntryOptions {
+        read_only: false,
+        el0_access: true,
+    };
+    page_tables
+        .map_range(
+            sub_buf.physical_address(),
+            base_addr,
+            sub_buf.page_count(),
+            true,
+            &map_opts,
+        )
+        .context(MemoryMapSnafu)?;
+    page_tables
+        .map_range(
+            com_buf.physical_address(),
+            base_addr.offset_fwd(sub_buf.len()),
+            com_buf.page_count(),
+            true,
+            &map_opts,
+        )
+        .context(MemoryMapSnafu)?;
+    Ok((base_addr, total_len))
 }
 
 /// Creates a new process from a binary loaded from a path in the registry.
@@ -86,55 +186,12 @@ pub async fn spawn_process(
         if seg.p_type != 1 {
             continue;
         }
-        log::trace!("mapping segment {seg:x?}");
-        // sometimes the segment p_vaddr is unaligned. we need to map an aligned version and then
-        // offset the copy into the buffer. TODO: we might need to allocate more memory to account
-        // for the offset.
-        let aligned_vaddr = VirtualAddress((seg.p_vaddr & !(seg.p_align - 1)) as usize);
-        let alignment_offset = (seg.p_vaddr & (seg.p_align - 1)) as usize;
-        log::trace!(
-            "segment aligned p_vaddr = {aligned_vaddr}, alignment_offset = {alignment_offset:x}"
-        );
-        let mut dest_memory_segment = PhysicalBuffer::alloc(
-            (seg.p_memsz as usize).div_ceil(PAGE_SIZE),
-            &Default::default(),
-        )
-        .context(MemorySnafu {
-            reason: "allocate process memory segement",
-        })?;
-        let start = seg.p_offset as usize;
-        let end = start + (seg.p_filesz as usize);
-        log::trace!("copying {start}..{end}");
-        if end > start {
-            (&mut dest_memory_segment.as_bytes_mut()
-                [alignment_offset..(alignment_offset + seg.p_filesz as usize)])
-                .copy_from_slice(&src_data.as_bytes()[start..end]);
-        }
-        if seg.p_memsz > seg.p_filesz {
-            log::trace!("zeroing {} bytes", seg.p_memsz - seg.p_filesz);
-            (&mut dest_memory_segment.as_bytes_mut()[seg.p_filesz as usize..]).fill(0);
-        }
-        // let go of buffer, we will free pages by walking the page table when the process dies
-        let (pa, _) = dest_memory_segment.unmap();
-        log::trace!("segment phys addr = {pa}");
-        let page_count = (seg.p_memsz as usize).div_ceil(PAGE_SIZE);
-        // TODO: set correct page flags beyond R/W, perhaps also parse p_flags more rigorously
-        pt.map_range(
-            pa,
-            aligned_vaddr,
-            page_count,
-            true,
-            &PageTableEntryOptions {
-                read_only: !seg.p_flags.bit(1),
-                el0_access: true,
-            },
-        )
-        .context(MemoryMapSnafu)?;
-        address_space_allocator
-            .reserve(aligned_vaddr, page_count)
-            .expect(
-                "user process VA allocations should not overlap, and the page table should check",
-            );
+        load_segement(
+            &seg,
+            src_data.as_bytes(),
+            &mut pt,
+            &mut address_space_allocator,
+        )?;
     }
 
     // create process stack
@@ -164,6 +221,12 @@ pub async fn spawn_process(
         .reserve(stack_vaddr, stack_page_count)
         .expect("user process VA allocations should not overlap, and the page table should check");
 
+    // create process communication channel
+    let channel = Channel::new(2, 2).context(MemorySnafu {
+        reason: "allocate channel",
+    })?;
+    attach_channel(&channel, &mut pt, &mut address_space_allocator)?;
+
     log::debug!("process page table: {pt:?}");
 
     let tid = next_thread_id();
@@ -174,9 +237,12 @@ pub async fn spawn_process(
         page_tables: pt,
         threads: smallvec![tid],
         mapped_files: HashMap::new(),
+        channel,
         address_space_allocator,
     };
 
+    // run any custom code before the process is eligible to be scheduled but after it has been created.
+    // this allows the caller to attach resources that requires .awaiting etc.
     if let Some(b) = before_launch {
         b(&mut proc);
     }

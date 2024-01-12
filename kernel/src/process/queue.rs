@@ -18,7 +18,6 @@ pub enum QueueError {
 pub type QueueId = u32;
 
 struct Queue<T> {
-    id: QueueId,
     buffer: PhysicalBuffer,
     queue_len: usize,
     /// A pointer into the buffer to the value of the head index.
@@ -31,7 +30,7 @@ struct Queue<T> {
 }
 
 impl<T> Queue<T> {
-    fn new(id: QueueId, size_in_pages: usize) -> Result<Queue<T>, MemoryError> {
+    fn new(size_in_pages: usize) -> Result<Queue<T>, MemoryError> {
         let mut buffer = PhysicalBuffer::alloc(
             size_in_pages,
             &PageTableEntryOptions {
@@ -57,7 +56,6 @@ impl<T> Queue<T> {
             .as_ptr();
 
         Ok(Queue {
-            id,
             queue_len,
             head_ptr: NonNull::new(p).unwrap(),
             tail_ptr: NonNull::new(unsafe { p.offset(1) }).unwrap(),
@@ -113,50 +111,60 @@ impl<T> Queue<T> {
     }
 }
 
-/// A [SubmissionQueue] queues messages from a process to the kernel. The user-space process is the "submitter".
-pub struct SubmissionQueue(Queue<Command>);
+/// A bi-directional communication channel between the kernel and a user-space process using shared memory.
+pub struct Channel {
+    /// The submission queue queues messages from a process to the kernel. The user-space process is the "submitter".
+    submission: Queue<Command>,
 
-impl SubmissionQueue {
-    /// Create a new submission queue.
-    pub fn new(id: QueueId, size_in_pages: usize) -> Result<SubmissionQueue, MemoryError> {
-        Ok(SubmissionQueue(Queue::new(id, size_in_pages)?))
+    /// A completion queue queues messages from the kernel to the a user-space process. These messages represent the completion of actions requested by previous messages submitted by the process.
+    completion: Queue<Completion>,
+}
+
+impl Channel {
+    /// Allocate a new channel.
+    pub fn new(
+        submission_size_in_pages: usize,
+        completion_size_in_pages: usize,
+    ) -> Result<Channel, MemoryError> {
+        Ok(Channel {
+            submission: Queue::new(submission_size_in_pages)?,
+            completion: Queue::new(completion_size_in_pages)?,
+        })
     }
 
-    /// Returns the first outstanding message in the queue if present.
+    pub fn submission_queue_buffer(&self) -> &PhysicalBuffer {
+        &self.submission.buffer
+    }
+
+    pub fn completion_queue_buffer(&self) -> &PhysicalBuffer {
+        &self.completion.buffer
+    }
+
+    /// Returns the first outstanding command message in the channel if present.
     pub fn poll(&mut self) -> Option<Command> {
-        let tail = self.0.tail();
-        if self.0.head() != tail {
+        let tail = self.submission.tail();
+        if self.submission.head() != tail {
             unsafe {
-                let cmd = self.0.data_ptr.offset(tail as isize).read();
-                self.0.move_tail();
+                let cmd = self.submission.data_ptr.offset(tail as isize).read();
+                self.submission.move_tail();
                 Some(cmd)
             }
         } else {
             None
         }
     }
-}
 
-/// A [CompletionQueue] queues messages from the kernel to the a user-space process. These messages represent the completion of actions requested by previous messages submitted by the process.
-pub struct CompletionQueue(Queue<Completion>);
-
-impl CompletionQueue {
-    /// Create a new completion queue.
-    pub fn new(id: QueueId, size_in_pages: usize) -> Result<CompletionQueue, MemoryError> {
-        Ok(CompletionQueue(Queue::new(id, size_in_pages)?))
-    }
-
-    /// Post a completion message on the queue.
+    /// Post a completion message in the channel.
     pub fn post(&mut self, msg: &Completion) -> Result<(), QueueError> {
-        let head = self.0.head();
-        if head == self.0.tail() {
+        let head = self.completion.head();
+        if head == self.completion.tail() {
             Err(QueueError::Full)
         } else {
             unsafe {
-                let dst = self.0.data_ptr.offset(head as isize);
+                let dst = self.completion.data_ptr.offset(head as isize);
                 core::ptr::copy(msg, dst.as_ptr(), 1);
             }
-            self.0.move_head();
+            self.completion.move_head();
             Ok(())
         }
     }

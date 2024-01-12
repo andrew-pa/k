@@ -28,6 +28,8 @@ mod queue;
 mod resource;
 use resource::MappedFile;
 
+use self::queue::Channel;
+
 // TODO: make type NonZeroU32 instead
 pub type ProcessId = u32;
 pub type ThreadId = u32;
@@ -37,49 +39,8 @@ pub struct Process {
     pub page_tables: PageTable,
     pub threads: SmallVec<[ThreadId; 4]>,
     pub mapped_files: HashMap<VirtualAddress, MappedFile>,
-    pub address_space_allocator: VirtualAddressAllocator,
-}
-
-#[derive(Copy, Clone, Debug)]
-pub enum ThreadPriority {
-    High = 0,
-    Normal = 1,
-    Low = 2,
-}
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum ThreadState {
-    Running,
-    Waiting,
-}
-
-pub struct Thread {
-    pub id: ThreadId,
-    /// None => kernel thread
-    pub parent: Option<ProcessId>,
-    pub state: ThreadState,
-    pub register_state: Registers,
-    pub program_status: SavedProgramStatus,
-    pub pc: VirtualAddress,
-    pub sp: VirtualAddress,
-    pub priority: ThreadPriority,
-}
-
-/// the idle thread is dedicated to handling interrupts, i.e. it is the thread holding the EL1 stack
-pub const IDLE_THREAD: ThreadId = 0;
-/// the task thread runs the async task executor on its own stack at SP_EL0
-pub const TASK_THREAD: ThreadId = 1;
-
-// TODO: what we really want here is a concurrent SlotMap
-static mut PROCESSES: OnceCell<CHashMapG<ProcessId, Process>> = OnceCell::new();
-static mut THREADS: OnceCell<CHashMapG<ThreadId, Thread>> = OnceCell::new();
-
-static mut NEXT_PID: AtomicU32 = AtomicU32::new(1);
-static mut NEXT_TID: AtomicU32 = AtomicU32::new(TASK_THREAD + 1);
-
-// TODO: put process impls next to struct in file
-pub fn processes() -> &'static CHashMapG<ProcessId, Process> {
-    unsafe { PROCESSES.get_or_init(Default::default) }
+    pub channel: Channel,
+    address_space_allocator: VirtualAddressAllocator,
 }
 
 impl Process {
@@ -119,6 +80,7 @@ impl Process {
     }
 
     /// Make a file available to the process via mapped memory.
+    /// Physical memory will only be allocated when the process accesses the region for the first time.
     /// Returns the base address and length in bytes of the mapped region.
     pub fn attach_file(
         &mut self,
@@ -136,6 +98,47 @@ impl Process {
         );
         Ok((base_addr, length_in_bytes))
     }
+}
+
+#[derive(Copy, Clone, Debug)]
+pub enum ThreadPriority {
+    High = 0,
+    Normal = 1,
+    Low = 2,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum ThreadState {
+    Running,
+    Waiting,
+}
+
+pub struct Thread {
+    pub id: ThreadId,
+    /// None => kernel thread
+    pub parent: Option<ProcessId>,
+    pub state: ThreadState,
+    pub register_state: Registers,
+    pub program_status: SavedProgramStatus,
+    pub pc: VirtualAddress,
+    pub sp: VirtualAddress,
+    pub priority: ThreadPriority,
+}
+
+/// the idle thread is dedicated to handling interrupts, i.e. it is the thread holding the EL1 stack
+pub const IDLE_THREAD: ThreadId = 0;
+/// the task thread runs the async task executor on its own stack at SP_EL0
+pub const TASK_THREAD: ThreadId = 1;
+
+// TODO: what we really want here is a concurrent SlotMap
+static mut PROCESSES: OnceCell<CHashMapG<ProcessId, Process>> = OnceCell::new();
+static mut THREADS: OnceCell<CHashMapG<ThreadId, Thread>> = OnceCell::new();
+
+static mut NEXT_PID: AtomicU32 = AtomicU32::new(1);
+static mut NEXT_TID: AtomicU32 = AtomicU32::new(TASK_THREAD + 1);
+
+pub fn processes() -> &'static CHashMapG<ProcessId, Process> {
+    unsafe { PROCESSES.get_or_init(Default::default) }
 }
 
 pub fn threads() -> &'static CHashMapG<ThreadId, Thread> {
