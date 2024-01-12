@@ -260,7 +260,7 @@ impl PageTable {
 
     // TODO: how do we synchronize access to this table if there is more than one reference to it?
     unsafe fn kernel_table() -> PageTable {
-        let level0_table = core::mem::transmute(&mut _kernel_page_table_root);
+        let level0_table = core::mem::transmute(core::ptr::addr_of_mut!(_kernel_page_table_root));
 
         PageTable {
             high_addresses: true,

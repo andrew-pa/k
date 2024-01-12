@@ -13,8 +13,8 @@ extern "C" {
 
 /// Zero the BSS section of the kernel as is expected by the ELF
 pub unsafe fn zero_bss_section() {
-    let bss_start = &mut __bss_start as *mut u8;
-    let bss_end = &mut __bss_end as *mut u8;
+    let bss_start = core::ptr::addr_of_mut!(__bss_start);
+    let bss_end = core::ptr::addr_of_mut!(__bss_end);
     let bss_size = bss_end.offset_from(bss_start) as usize;
     core::ptr::write_bytes(bss_start, 0, bss_size);
 }

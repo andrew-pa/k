@@ -322,7 +322,7 @@ impl<'t, O, T: ?Sized> OwningRef<'t, O, T> {
         OwningRef {
             reference: &*o,
             owner: o,
-            lifetime: PhantomData::default(),
+            lifetime: PhantomData,
         }
     }
 
@@ -338,7 +338,7 @@ impl<'t, O, T: ?Sized> OwningRef<'t, O, T> {
         OwningRef {
             reference: &*o,
             owner: o,
-            lifetime: PhantomData::default(),
+            lifetime: PhantomData,
         }
     }
 
@@ -435,7 +435,7 @@ impl<'t, O, T: ?Sized> OwningRef<'t, O, T> {
         Ok(OwningRef {
             reference: f(&self)?,
             owner: self.owner,
-            lifetime: PhantomData::default(),
+            lifetime: PhantomData,
         })
     }
 
@@ -539,7 +539,7 @@ impl<'t, O, T: ?Sized> OwningRef<'t, O, T> {
         OwningRef {
             reference: self.reference,
             owner: self.owner.into_erased(),
-            lifetime: PhantomData::default(),
+            lifetime: PhantomData,
         }
     }
 
@@ -579,7 +579,7 @@ impl<'t, O, T: ?Sized> OwningRefMut<'t, O, T> {
         OwningRefMut {
             reference: &mut *o,
             owner: o,
-            lifetime: PhantomData::default(),
+            lifetime: PhantomData,
         }
     }
 
@@ -595,7 +595,7 @@ impl<'t, O, T: ?Sized> OwningRefMut<'t, O, T> {
         OwningRefMut {
             reference: &mut *o,
             owner: o,
-            lifetime: PhantomData::default(),
+            lifetime: PhantomData,
         }
     }
 
@@ -689,7 +689,7 @@ impl<'t, O, T: ?Sized> OwningRefMut<'t, O, T> {
         Ok(OwningRef {
             reference: f(&mut self)?,
             owner: self.owner,
-            lifetime: PhantomData::default(),
+            lifetime: PhantomData,
         })
     }
 
@@ -792,7 +792,7 @@ impl<'t, O, T: ?Sized> OwningRefMut<'t, O, T> {
         OwningRefMut {
             reference: self.reference,
             owner: self.owner.into_erased(),
-            lifetime: PhantomData::default(),
+            lifetime: PhantomData,
         }
     }
 
@@ -1016,13 +1016,13 @@ unsafe impl<O, T: ?Sized> StableAddress for OwningRefMut<'_, O, T> {}
 
 impl<O, T: ?Sized> AsRef<T> for OwningRef<'_, O, T> {
     fn as_ref(&self) -> &T {
-        &*self
+        self
     }
 }
 
 impl<O, T: ?Sized> AsRef<T> for OwningRefMut<'_, O, T> {
     fn as_ref(&self) -> &T {
-        &*self
+        self
     }
 }
 
@@ -1034,7 +1034,7 @@ impl<O, T: ?Sized> AsMut<T> for OwningRefMut<'_, O, T> {
 
 impl<O, T: ?Sized> Borrow<T> for OwningRef<'_, O, T> {
     fn borrow(&self) -> &T {
-        &*self
+        self
     }
 }
 
@@ -1067,7 +1067,7 @@ where
         OwningRef {
             owner: other.owner,
             reference: other.reference,
-            lifetime: PhantomData::default(),
+            lifetime: PhantomData,
         }
     }
 }
@@ -1102,7 +1102,7 @@ where
         OwningRef {
             owner: self.owner.clone(),
             reference: self.reference,
-            lifetime: PhantomData::default(),
+            lifetime: PhantomData,
         }
     }
 }
@@ -1146,7 +1146,7 @@ where
     T: PartialEq,
 {
     fn eq(&self, other: &Self) -> bool {
-        (&*self as &T).eq(&*other as &T)
+        (self as &T).eq(other as &T)
     }
 }
 
@@ -1157,7 +1157,7 @@ where
     T: PartialOrd,
 {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        (&*self as &T).partial_cmp(&*other as &T)
+        (self as &T).partial_cmp(other as &T)
     }
 }
 
@@ -1166,7 +1166,7 @@ where
     T: Ord,
 {
     fn cmp(&self, other: &Self) -> Ordering {
-        (&*self as &T).cmp(&*other as &T)
+        (self as &T).cmp(other as &T)
     }
 }
 
@@ -1175,7 +1175,7 @@ where
     T: Hash,
 {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        (&*self as &T).hash(state);
+        (self as &T).hash(state);
     }
 }
 
@@ -1184,7 +1184,7 @@ where
     T: PartialEq,
 {
     fn eq(&self, other: &Self) -> bool {
-        (&*self as &T).eq(&*other as &T)
+        (self as &T).eq(other as &T)
     }
 }
 
@@ -1195,7 +1195,7 @@ where
     T: PartialOrd,
 {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        (&*self as &T).partial_cmp(&*other as &T)
+        (self as &T).partial_cmp(other as &T)
     }
 }
 
@@ -1204,7 +1204,7 @@ where
     T: Ord,
 {
     fn cmp(&self, other: &Self) -> Ordering {
-        (&*self as &T).cmp(&*other as &T)
+        (self as &T).cmp(other as &T)
     }
 }
 
@@ -1213,7 +1213,7 @@ where
     T: Hash,
 {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        (&*self as &T).hash(state);
+        (self as &T).hash(state);
     }
 }
 

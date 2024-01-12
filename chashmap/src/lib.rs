@@ -262,12 +262,12 @@ impl<K: PartialEq + Hash, V, S: BuildHasher, R: RawRwLock> Table<K, V, S, R> {
         T: Hash,
     {
         // Build the initial hash function state.
-        let mut hasher = self.hash_builder.build_hasher();
+
         // Hash the key.
-        key.hash(&mut hasher);
+
         // Cast to `usize`. Since the hash function returns `u64`, this cast won't ever cause
         // entropy less than the output space.
-        hasher.finish() as usize
+        self.hash_builder.hash_one(key) as usize
     }
 
     /// Scan from the first priority of a key until a match is found.
@@ -350,10 +350,11 @@ impl<K: PartialEq + Hash, V, S: BuildHasher, R: RawRwLock> Table<K, V, S, R> {
             // Get the lock of the `i`'th bucket after the first priority bucket (wrap on end).
 
             // Check if it is a match.
-            if {
+            let res = {
                 let bucket = self.buckets[idx].get_mut();
-                matches(&bucket)
-            } {
+                matches(bucket)
+            };
+            if res {
                 // Yup. Return.
                 return self.buckets[idx].get_mut();
             }
@@ -553,7 +554,7 @@ impl<'a, R: RawRwLock, T> ops::Deref for StableRwLockReadGuard<'a, R, T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
-        &*self.0
+        &self.0
     }
 }
 
@@ -563,12 +564,12 @@ impl<'a, R: RawRwLock, T> ops::Deref for StableRwLockWriteGuard<'a, R, T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
-        &*self.0
+        &self.0
     }
 }
 impl<'a, R: RawRwLock, T> ops::DerefMut for StableRwLockWriteGuard<'a, R, T> {
     fn deref_mut(self: &mut StableRwLockWriteGuard<'a, R, T>) -> &mut T {
-        &mut *self.0
+        &mut self.0
     }
 }
 
@@ -1069,7 +1070,7 @@ where
         let lock = self.table.read();
 
         // Lookup the table, mutably.
-        let mut bucket = lock.lookup_mut(&key);
+        let mut bucket = lock.lookup_mut(key);
         // Remove the bucket.
         match &mut *bucket {
             // There was nothing to remove.
