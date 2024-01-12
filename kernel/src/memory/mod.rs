@@ -25,12 +25,12 @@ pub unsafe fn zero_bss_section() {
 // M1 Macs use 16kB pages though I think?? Switching is probably not that hard for a from-scratch project
 pub const PAGE_SIZE: usize = 4 * 1024;
 
-#[derive(Copy, Clone, Display, PartialEq, Eq, PartialOrd, Ord, Default, Pod, Zeroable)]
+#[derive(Copy, Clone, Display, PartialEq, Eq, PartialOrd, Ord, Default, Pod, Zeroable, Hash)]
 #[display(fmt = "p:0x{:x}", _0)]
 #[repr(transparent)]
 pub struct PhysicalAddress(pub usize);
 
-#[derive(Copy, Clone, Display, PartialEq, Eq, PartialOrd, Ord, Default, Pod, Zeroable)]
+#[derive(Copy, Clone, Display, PartialEq, Eq, PartialOrd, Ord, Default, Pod, Zeroable, Hash)]
 #[display(fmt = "v:0x{:x}", _0)]
 #[repr(transparent)]
 pub struct VirtualAddress(pub usize);
@@ -43,7 +43,7 @@ impl PhysicalAddress {
 
     pub fn is_page_aligned(&self) -> bool {
         // self.0.trailing_zeros() == PAGE_SIZE.ilog2()
-        self.0 & !(PAGE_SIZE - 1) == 0
+        self.0 & (PAGE_SIZE - 1) == 0
     }
 
     pub fn offset(self, byte_offset: isize) -> PhysicalAddress {
@@ -90,9 +90,16 @@ impl VirtualAddress {
         PhysicalAddress(self.0 - 0xffff_0000_0000_0000)
     }
 
+    // TODO: this one should be unsigned/forward only and we should have a different name for the
+    // bidirectional offset, since we do forward offsets much much more often
     pub fn offset(self, byte_offset: isize) -> VirtualAddress {
         // TODO: is wrapping right or should we panic on overflow?
         VirtualAddress(self.0.wrapping_add_signed(byte_offset))
+    }
+
+    pub fn offset_fwd(self, byte_offset: usize) -> VirtualAddress {
+        // TODO: is wrapping right or should we panic on overflow?
+        VirtualAddress(self.0.wrapping_add(byte_offset))
     }
 
     pub fn align_offset(&self, alignment: usize) -> usize {

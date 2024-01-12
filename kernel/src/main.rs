@@ -17,6 +17,8 @@ use smallvec::SmallVec;
 
 use kernel::{registry::Path, *};
 
+extern crate alloc;
+
 #[no_mangle]
 pub extern "C" fn kmain() {
     // make sure the BSS section is zeroed
@@ -95,10 +97,20 @@ pub extern "C" fn kmain() {
         // let s = core::str::from_utf8(&buf[0..len]).expect("valid utf-8");
         // log::info!("file text = {s}");
 
-        log::info!("spawning init process");
-        let init_pid = process::spawn_process("/fat/init")
+        let test_file = registry::registry()
+            .open_file(Path::new("/fat/abcdefghij/test.txt"))
             .await
-            .expect("spawn init process");
+            .expect("open file");
+
+        log::info!("spawning init process");
+        let init_pid = process::spawn_process(
+            "/fat/init",
+            Some(|proc: &mut process::Process| {
+                proc.attach_file(test_file).unwrap();
+            }),
+        )
+        .await
+        .expect("spawn init process");
         log::info!("init pid = {init_pid}");
     });
 

@@ -275,7 +275,7 @@ impl PageTable {
         Ok(PageTable {
             high_addresses,
             asid,
-            level0_table: level0_phy_addr.0 as *mut LevelTable,
+            level0_table: unsafe { level0_phy_addr.to_virtual_canonical().as_ptr() },
             level0_phy_addr,
         })
     }

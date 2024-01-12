@@ -76,6 +76,7 @@ impl File for FatFile {
         // copy clusters until full
         while cur_offset < end_offset {
             // read the cluster into memory
+            // TODO: we need to make sure we don't copy past the end of the destination buffer!!
             self.cache
                 .underlying_store()
                 .lock()
@@ -114,83 +115,6 @@ impl File for FatFile {
         todo!()
     }
 }
-
-/*{
-    fn len(&self) -> u64 {
-        self.file_size as u64
-    }
-
-    async fn seek(&mut self, pos: SeekFrom) -> Result<u64, Error> {
-        // TODO: all of these may require a large jump in the cluster chain
-        match pos {
-            SeekFrom::Start(_) => todo!(),
-            SeekFrom::End(_) => todo!(),
-            SeekFrom::Current(_) => todo!(),
-        }
-        Ok(self.offset as u64)
-    }
-
-    async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Error> {
-        if self.offset >= self.file_size || self.start_cluster_number == 0 {
-            return Ok(0);
-        }
-
-        let cluster_offset = (self.offset - self.current_cluster_start) as usize;
-
-        // determine how many bytes we will actually read
-        let num_bytes_left_in_cc = self.params.bytes_per_cluster() as usize - cluster_offset;
-        let num_bytes_to_read = if buf.len() > num_bytes_left_in_cc {
-            num_bytes_left_in_cc
-        } else {
-            buf.len()
-        }
-        .min((self.file_size - self.offset) as usize);
-
-        self.cache
-            .copy_bytes(
-                self.params.sector_for_cluster(self.current_cluster_number),
-                cluster_offset,
-                &mut buf[0..num_bytes_to_read],
-            )
-            .await
-            .context(StorageSnafu)?;
-
-        self.offset += num_bytes_to_read as u32;
-
-        // move file pointer to next spot in the file
-        // read never copies across cluster boundaries. We move to the next cluster if this read
-        // returns the rest of the current cluster.
-        if buf.len() >= num_bytes_left_in_cc {
-            self.current_cluster_start = self.offset;
-            // get the next cluster number
-            self.cache
-                .copy_bytes(
-                    self.params.fat_start,
-                    (self.current_cluster_number * 2) as usize,
-                    bytemuck::bytes_of_mut(&mut self.current_cluster_number),
-                )
-                .await
-                .context(StorageSnafu)?;
-            // TODO: only for FAT16, FAT32 needs extended value.
-            if self.current_cluster_number >= 0xfff8 {
-                if self.offset < self.file_size {
-                    log::warn!(
-                        "unexpected end of cluster chain starting at #{:x}, current cluster number = {:x}, file size = {}",
-                        self.start_cluster_number,
-                        self.current_cluster_number,
-                        self.file_size
-                    );
-                }
-            }
-        }
-
-        Ok(num_bytes_to_read)
-    }
-
-    async fn write(&mut self, buf: &[u8]) -> Result<usize, Error> {
-        todo!()
-    }
-}*/
 
 #[derive(Debug, Clone)]
 struct VolumeParams {
@@ -463,7 +387,7 @@ impl RegistryHandler for Handler {
         &self,
         subpath: &Path,
     ) -> Result<Box<dyn BlockStore>, crate::registry::RegistryError> {
-        Err(crate::registry::error::UnsupportedSnafu.build())
+        Err(crate::registry::RegistryError::Unsupported)
     }
 
     async fn open_file(

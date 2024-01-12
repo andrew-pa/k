@@ -120,21 +120,17 @@ impl<'sq> Command<'sq> {
 
         // the four dwords that make up the "Data Pointer" field in the command form the first
         // PRP "page", although there is only space for two entries.
-        let mut prp_page: &mut [PhysicalAddress] = bytemuck::cast_slice_mut(&mut self.cmd[6..8]);
+        let mut prp_page: &mut [PhysicalAddress] = bytemuck::cast_slice_mut(&mut self.cmd[6..10]);
         let mut current_offset = 0;
 
         for region in regions {
             let mut num_blocks = 0;
             let mut next_page_addr = region.0;
             while num_blocks < region.1 {
-                prp_page[current_offset] = next_page_addr;
-                next_page_addr = next_page_addr.offset(PAGE_SIZE as isize);
-                current_offset += 1;
-                num_blocks += blocks_per_page;
-
                 if current_offset == prp_page.len() - 1 {
                     let mut buf = PhysicalBuffer::alloc(1, &Default::default())
                         .context(crate::storage::MemorySnafu)?;
+                    buf.as_bytes_mut().fill(0);
                     prp_page[current_offset] = buf.physical_address();
                     current_offset = 0;
                     self.extra_data_ptr_buffers.push(buf);
@@ -145,6 +141,12 @@ impl<'sq> Command<'sq> {
                             .as_bytes_mut(),
                     );
                 }
+
+                log::trace!("region = {region:?}, current_offset = {current_offset}, num_blocks={num_blocks}, prp_page.len() = {}", prp_page.len());
+                prp_page[current_offset] = next_page_addr;
+                next_page_addr = next_page_addr.offset(PAGE_SIZE as isize);
+                current_offset += 1;
+                num_blocks += blocks_per_page;
             }
         }
 

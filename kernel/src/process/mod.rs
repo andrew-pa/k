@@ -2,7 +2,8 @@ use crate::{
     exception::Registers,
     memory::{
         paging::{PageTable, PageTableEntryOptions},
-        physical_memory_allocator, PhysicalAddress, PhysicalBuffer, VirtualAddress, PAGE_SIZE,
+        physical_memory_allocator, MemoryError, PhysicalAddress, PhysicalBuffer, VirtualAddress,
+        VirtualAddressAllocator, PAGE_SIZE,
     },
     CHashMapG,
 };
@@ -11,6 +12,7 @@ use async_trait::async_trait;
 use bitfield::{bitfield, Bit};
 use core::{cell::OnceCell, error::Error, sync::atomic::AtomicU32};
 use futures::Future;
+use hashbrown::HashMap;
 use smallvec::{smallvec, SmallVec};
 use snafu::{ensure, OptionExt, ResultExt, Snafu};
 
@@ -23,64 +25,19 @@ mod reg;
 pub use reg::*;
 
 mod queue;
+mod resource;
+use resource::MappedFile;
 
+// TODO: make type NonZeroU32 instead
 pub type ProcessId = u32;
 pub type ThreadId = u32;
-
-#[async_trait]
-pub trait Resource {
-    /// Size of the resource in bytes
-    fn len(&self) -> usize;
-
-    /// Process an access to an address in the mapped range of the resource that is not yet backed by memory
-    async fn on_page_fault(
-        &mut self,
-        base_address: VirtualAddress,
-        accessed_address: VirtualAddress,
-        page_tables: &mut PageTable,
-    ) -> Result<(), ()>;
-}
-
-#[async_trait]
-impl<F: crate::fs::File + Send> Resource for F {
-    fn len(&self) -> usize {
-        self.len() as usize
-    }
-
-    async fn on_page_fault(
-        &mut self,
-        base_address: VirtualAddress,
-        accessed_address: VirtualAddress,
-        page_tables: &mut PageTable,
-    ) -> Result<(), ()> {
-        // compute address of affected page
-        // allocate new memory
-        // map memory in page tables
-        // load data from file
-        Ok(())
-    }
-}
-
-pub struct MappedResource {
-    base_address: VirtualAddress,
-    length: usize,
-    resource: Box<dyn Resource>,
-}
-
-impl MappedResource {
-    fn maps(&self, addr: VirtualAddress) -> bool {
-        addr.0
-            .checked_sub(self.base_address.0)
-            .map(|i| i < self.length)
-            .unwrap_or_default()
-    }
-}
 
 pub struct Process {
     pub id: ProcessId,
     pub page_tables: PageTable,
     pub threads: SmallVec<[ThreadId; 4]>,
-    pub mapped_resources: Vec<MappedResource>,
+    pub mapped_files: HashMap<VirtualAddress, MappedFile>,
+    pub address_space_allocator: VirtualAddressAllocator,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -120,6 +77,7 @@ static mut THREADS: OnceCell<CHashMapG<ThreadId, Thread>> = OnceCell::new();
 static mut NEXT_PID: AtomicU32 = AtomicU32::new(1);
 static mut NEXT_TID: AtomicU32 = AtomicU32::new(TASK_THREAD + 1);
 
+// TODO: put process impls next to struct in file
 pub fn processes() -> &'static CHashMapG<ProcessId, Process> {
     unsafe { PROCESSES.get_or_init(Default::default) }
 }
@@ -127,18 +85,22 @@ pub fn processes() -> &'static CHashMapG<ProcessId, Process> {
 impl Process {
     pub async fn on_page_fault(&mut self, tid: ThreadId, address: VirtualAddress) {
         log::trace!("on_page_fault {address}");
-        if let Some(res) = self.mapped_resources.iter_mut().find(|r| r.maps(address)) {
+        if let Some((base_address, res)) = self
+            .mapped_files
+            .iter_mut()
+            .find(|(ba, r)| resource::resource_maps(ba, r, address))
+        {
             match res
-                .resource
-                .on_page_fault(res.base_address, address, &mut self.page_tables)
+                .on_page_fault(*base_address, address, &mut self.page_tables)
                 .await
             {
                 Ok(()) => {
                     // resume thread
+                    threads().get_mut(&tid).expect("thread ID valid").state = ThreadState::Running;
                 }
                 Err(e) => {
                     log::error!(
-                        "page fault handler failed for process {} at address {address}",
+                        "page fault handler failed for process {} at address {address}: {e}",
                         self.id
                     );
                     // TODO: how do we inform the process it has an error?
@@ -149,8 +111,30 @@ impl Process {
                 "process {}, thread {}: unhandled page fault at {address}",
                 self.id,
                 tid
-            )
+            );
+            // TODO: the thread needs to go into some kind of dead/error state and/or the process
+            // needs to be notified that one of its threads just died. If this is the last thread
+            // in the process than the process itself is now dead
         }
+    }
+
+    /// Make a file available to the process via mapped memory.
+    /// Returns the base address and length in bytes of the mapped region.
+    pub fn attach_file(
+        &mut self,
+        resource: Box<dyn crate::fs::File>,
+    ) -> Result<(VirtualAddress, usize), MemoryError> {
+        let length_in_bytes = resource.len() as usize;
+        let num_pages = length_in_bytes.div_ceil(PAGE_SIZE);
+        let base_addr = self.address_space_allocator.alloc(num_pages)?;
+        self.mapped_files.insert(
+            base_addr,
+            MappedFile {
+                length_in_bytes,
+                resource,
+            },
+        );
+        Ok((base_addr, length_in_bytes))
     }
 }
 

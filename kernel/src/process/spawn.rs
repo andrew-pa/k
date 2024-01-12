@@ -30,6 +30,7 @@ pub enum SpawnError {
 /// Supports ELF binaries.
 pub async fn spawn_process(
     binary_path: impl AsRef<crate::registry::Path>,
+    before_launch: Option<impl FnOnce(&mut Process)>,
 ) -> Result<ProcessId, SpawnError> {
     use crate::registry::registry;
     use alloc::vec::Vec;
@@ -72,6 +73,10 @@ pub async fn spawn_process(
         reason: "create process page tables",
     })?;
 
+    // create an address space allocator for the entire address space of the process
+    let mut address_space_allocator =
+        VirtualAddressAllocator::new(VirtualAddress(PAGE_SIZE), 0x0000_ffff_ffff_ffff / PAGE_SIZE);
+
     let segments = bin.segments().context(OtherSnafu {
         reason: "expected binary to have at least one segment",
     })?;
@@ -112,11 +117,12 @@ pub async fn spawn_process(
         // let go of buffer, we will free pages by walking the page table when the process dies
         let (pa, _) = dest_memory_segment.unmap();
         log::trace!("segment phys addr = {pa}");
+        let page_count = (seg.p_memsz as usize).div_ceil(PAGE_SIZE);
         // TODO: set correct page flags beyond R/W, perhaps also parse p_flags more rigorously
         pt.map_range(
             pa,
             aligned_vaddr,
-            (seg.p_memsz as usize).div_ceil(PAGE_SIZE),
+            page_count,
             true,
             &PageTableEntryOptions {
                 read_only: !seg.p_flags.bit(1),
@@ -124,6 +130,11 @@ pub async fn spawn_process(
             },
         )
         .context(MemoryMapSnafu)?;
+        address_space_allocator
+            .reserve(aligned_vaddr, page_count)
+            .expect(
+                "user process VA allocations should not overlap, and the page table should check",
+            );
     }
 
     // create process stack
@@ -149,18 +160,27 @@ pub async fn spawn_process(
         },
     )
     .context(MemoryMapSnafu);
+    address_space_allocator
+        .reserve(stack_vaddr, stack_page_count)
+        .expect("user process VA allocations should not overlap, and the page table should check");
 
     log::debug!("process page table: {pt:?}");
 
     let tid = next_thread_id();
 
     // create process structure
-    let proc = Process {
+    let mut proc = Process {
         id: pid,
         page_tables: pt,
         threads: smallvec![tid],
-        mapped_resources: Vec::new(),
+        mapped_files: HashMap::new(),
+        address_space_allocator,
     };
+
+    if let Some(b) = before_launch {
+        b(&mut proc);
+    }
+
     let p = processes().insert(pid, proc);
     assert!(p.is_none());
 
