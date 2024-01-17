@@ -60,21 +60,18 @@ pub extern "C" fn kmain() {
     // initialize system timer and interrupt
     init::configure_time_slicing(&dt);
 
-    /*tasks::spawn(async {
-        let mut bs = registry::registry()
-            .open_block_store(registry::Path::new("/dev/nvme/pci@0:2:0/1"))
-            .await
-            .unwrap();
-        let s = bs.supported_block_size();
-        log::info!("supported block size = {}", s);
-        let mut buf = memory::PhysicalBuffer::alloc(1, &Default::default()).unwrap();
-        buf.as_bytes_mut().fill(0);
-        let res = bs
-            .read_blocks(storage::LogicalAddress(0x3f), buf.physical_address(), 1)
-            .await;
-        log::info!("read result = {res:?}");
-        log::debug!("data = {:x?}", &buf.as_bytes()[0..s]);
-    });*/
+    exception::system_call_handlers().insert(3, |id, pid, regs| unsafe {
+        let regs = regs.as_ref().expect("valid register ptr");
+        log::info!("process {pid}: 0x{:x}", regs.x[0]);
+    });
+
+    // TODO: ideally this is a whole system with a ring buffer, listening, etc and also records
+    // which process made the log, but for now this will do.
+    exception::system_call_handlers().insert(4, |id, pid, regs| unsafe {
+        let regs = regs.as_ref().expect("valid register ptr");
+        let record = &*(regs.x[0] as *const log::Record);
+        log::logger().log(record);
+    });
 
     tasks::spawn(async {
         log::info!("open /dev/nvme/pci@0:2:0/1");
@@ -86,16 +83,6 @@ pub extern "C" fn kmain() {
         };
         log::info!("mount FAT filesystem");
         fs::fat::mount(Path::new("/fat"), bs).await.unwrap();
-
-        // let mut f = registry::registry()
-        //     .open_byte_store(Path::new("/fat/abcdefghij/test.txt"))
-        //     .await
-        //     .unwrap();
-        // let mut buf = [0u8; 32];
-        // let len = f.read(&mut buf).await.expect("read file");
-        // log::info!("got {} raw bytes: {buf:?}", len);
-        // let s = core::str::from_utf8(&buf[0..len]).expect("valid utf-8");
-        // log::info!("file text = {s}");
 
         let test_file = registry::registry()
             .open_file(Path::new("/fat/abcdefghij/test.txt"))
@@ -111,6 +98,7 @@ pub extern "C" fn kmain() {
         )
         .await
         .expect("spawn init process");
+
         log::info!("init pid = {init_pid}");
     });
 

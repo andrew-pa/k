@@ -24,11 +24,11 @@ pub use spawn::{spawn_process, SpawnError};
 mod reg;
 pub use reg::*;
 
-mod queue;
 mod resource;
 use resource::MappedFile;
 
-use self::queue::Channel;
+mod channel;
+use self::channel::Channel;
 
 // TODO: make type NonZeroU32 instead
 pub type ProcessId = u32;
@@ -219,12 +219,13 @@ impl Thread {
         pc: VirtualAddress,
         sp: VirtualAddress,
         priority: ThreadPriority,
+        start_registers: Registers,
     ) -> Self {
         Thread {
             id: tid,
             parent: Some(pid),
             state: ThreadState::Running,
-            register_state: Registers::default(),
+            register_state: start_registers,
             program_status: SavedProgramStatus::initial_for_el0(),
             pc,
             sp,

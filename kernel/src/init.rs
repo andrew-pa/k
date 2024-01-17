@@ -38,7 +38,7 @@ pub fn configure_time_slicing(dt: &DeviceTree) {
     exception::interrupt_handlers().insert(
         timer_irq,
         Box::new(|id, regs| {
-            log::trace!("{id} timer interrupt! {}", timer::counter());
+            //log::trace!("{id} timer interrupt! {}", timer::counter());
             process::scheduler::scheduler().schedule_next_thread();
             timer::write_timer_value(timer::frequency() >> 5);
         }),

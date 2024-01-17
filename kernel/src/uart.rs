@@ -20,9 +20,21 @@ impl Write for DebugUart {
 
 pub struct DebugUartLogger;
 
+/// Modules that have Trace/Debug level logging disabled because they are very noisy
+const DISABLED_MODULES: &[&str] = &[
+    "kernel::memory::paging",
+    "kernel::memory::heap",
+    "kernel::process::scheduler",
+    "kernel::exception",
+];
+
 impl log::Log for DebugUartLogger {
     fn enabled(&self, metadata: &log::Metadata) -> bool {
-        metadata.target() != "kernel::memory::heap"
+        if metadata.level() > log::Level::Info {
+            DISABLED_MODULES.iter().all(|m| *m != metadata.target())
+        } else {
+            true
+        }
     }
 
     fn log(&self, record: &log::Record) {

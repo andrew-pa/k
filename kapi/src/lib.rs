@@ -10,10 +10,10 @@ pub enum CommandKind {
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct Command {
-    kind: CommandKind,
-    id: u16,
-    completion_semaphore: u32,
-    args: [u64; 4],
+    pub kind: CommandKind,
+    pub id: u16,
+    pub completion_semaphore: u32,
+    pub args: [u64; 4],
 }
 
 #[repr(u16)]
@@ -26,8 +26,8 @@ pub enum CompletionKind {
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct Completion {
-    kind: CompletionKind,
-    respose_to_id: u16,
-    result0: u32,
-    result1: u64,
+    pub kind: CompletionKind,
+    pub respose_to_id: u16,
+    pub result0: u32,
+    pub result1: u64,
 }

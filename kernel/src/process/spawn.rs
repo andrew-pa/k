@@ -28,35 +28,34 @@ pub enum SpawnError {
     },
 }
 
-fn load_segement(
+fn load_segment(
     seg: &ProgramHeader,
     src_data: &[u8],
     pt: &mut PageTable,
     address_space_allocator: &mut VirtualAddressAllocator,
 ) -> Result<(), SpawnError> {
+    // TODO: we are doing this wrong. the init ELF file seems to make the alignment_offset end up
+    // being the running total size of all segments so far, causing each new segment to have to
+    // allocate padding space the size of all previous segments. This is obviously unnecessary.
+
     log::trace!("mapping segment {seg:x?}");
-    // sometimes the segment p_vaddr is unaligned. we need to map an aligned version and then
-    // offset the copy into the buffer. TODO: we might need to allocate more memory to account
-    // for the offset.
-    let aligned_vaddr = VirtualAddress((seg.p_vaddr & !(seg.p_align - 1)) as usize);
-    let alignment_offset = (seg.p_vaddr & (seg.p_align - 1)) as usize;
+    let page_aligned_vaddr = VirtualAddress((seg.p_vaddr as usize) & !(PAGE_SIZE - 1));
+    let page_alignment_offset = (seg.p_vaddr as usize) & (PAGE_SIZE - 1);
     log::trace!(
-        "segment aligned p_vaddr = {aligned_vaddr}, alignment_offset = {alignment_offset:x}"
+        "page aligned p_vaddr = {page_aligned_vaddr}, alignment_offset = {page_alignment_offset:x}"
     );
-    let mut dest_memory_segment = PhysicalBuffer::alloc(
-        (seg.p_memsz as usize).div_ceil(PAGE_SIZE),
-        &Default::default(),
-    )
-    .context(MemorySnafu {
-        reason: "allocate process memory segement",
-    })?;
-    let start = seg.p_offset as usize;
-    let end = start + (seg.p_filesz as usize);
-    log::trace!("copying {start}..{end}");
-    if end > start {
-        (&mut dest_memory_segment.as_bytes_mut()
-            [alignment_offset..(alignment_offset + seg.p_filesz as usize)])
-            .copy_from_slice(&src_data[start..end]);
+    let page_count = (seg.p_memsz as usize + page_alignment_offset).div_ceil(PAGE_SIZE);
+    let mut dest_memory_segment =
+        PhysicalBuffer::alloc(page_count, &Default::default()).context(MemorySnafu {
+            reason: "allocate process memory segement",
+        })?;
+    let src_start = seg.p_offset as usize;
+    let src_end = src_start + (seg.p_filesz as usize);
+    let dest_end = page_alignment_offset + seg.p_filesz as usize;
+    log::trace!("copying {src_start}..{src_end} to {page_alignment_offset}..{dest_end}");
+    if src_end > src_start {
+        (&mut dest_memory_segment.as_bytes_mut()[page_alignment_offset..dest_end])
+            .copy_from_slice(&src_data[src_start..src_end]);
     }
     if seg.p_memsz > seg.p_filesz {
         log::trace!("zeroing {} bytes", seg.p_memsz - seg.p_filesz);
@@ -65,11 +64,10 @@ fn load_segement(
     // let go of buffer, we will free pages by walking the page table when the process dies
     let (pa, _) = dest_memory_segment.unmap();
     log::trace!("segment phys addr = {pa}");
-    let page_count = (seg.p_memsz as usize).div_ceil(PAGE_SIZE);
     // TODO: set correct page flags beyond R/W, perhaps also parse p_flags more rigorously
     pt.map_range(
         pa,
-        aligned_vaddr,
+        page_aligned_vaddr,
         page_count,
         true,
         &PageTableEntryOptions {
@@ -79,19 +77,19 @@ fn load_segement(
     )
     .context(MemoryMapSnafu)?;
     address_space_allocator
-        .reserve(aligned_vaddr, page_count)
+        .reserve(page_aligned_vaddr, page_count)
         .expect("user process VA allocations should not overlap, and the page table should check");
     Ok(())
 }
 
 /// Make a channel available to the process via mapped memory.
 /// The submission and completion queues will be layed out consecutively in memory, and mapping will be created immediately.
-/// Returns the base address and the total length in bytes of the mapped region.
+/// Returns the base address and the total length in bytes of the mapped region for the submission and completion queues, respectively.
 pub fn attach_channel(
     channel: &Channel,
     page_tables: &mut PageTable,
     address_space_allocator: &mut VirtualAddressAllocator,
-) -> Result<(VirtualAddress, usize), SpawnError> {
+) -> Result<(VirtualAddress, usize, usize), SpawnError> {
     let sub_buf = channel.submission_queue_buffer();
     let com_buf = channel.completion_queue_buffer();
     let total_len = sub_buf.len() + com_buf.len();
@@ -123,7 +121,7 @@ pub fn attach_channel(
             &map_opts,
         )
         .context(MemoryMapSnafu)?;
-    Ok((base_addr, total_len))
+    Ok((base_addr, sub_buf.len(), com_buf.len()))
 }
 
 /// Creates a new process from a binary loaded from a path in the registry.
@@ -186,7 +184,7 @@ pub async fn spawn_process(
         if seg.p_type != 1 {
             continue;
         }
-        load_segement(
+        load_segment(
             &seg,
             src_data.as_bytes(),
             &mut pt,
@@ -225,7 +223,8 @@ pub async fn spawn_process(
     let channel = Channel::new(2, 2).context(MemorySnafu {
         reason: "allocate channel",
     })?;
-    attach_channel(&channel, &mut pt, &mut address_space_allocator)?;
+    let (channel_base_addr, channel_sub_size, channel_com_size) =
+        attach_channel(&channel, &mut pt, &mut address_space_allocator)?;
 
     log::debug!("process page table: {pt:?}");
 
@@ -250,6 +249,9 @@ pub async fn spawn_process(
     let p = processes().insert(pid, proc);
     assert!(p.is_none());
 
+    let start_regs =
+        Registers::from_args(&[channel_base_addr.0, channel_sub_size, channel_com_size]);
+
     // create thread 0 for process
     spawn_thread(Thread::user_thread(
         pid,
@@ -257,6 +259,7 @@ pub async fn spawn_process(
         VirtualAddress(bin.ehdr.e_entry as usize),
         stack_vaddr.offset((stack_page_count * PAGE_SIZE) as isize - 64),
         ThreadPriority::Normal,
+        start_regs,
     ));
 
     Ok(pid)

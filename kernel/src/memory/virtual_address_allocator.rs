@@ -73,6 +73,7 @@ impl VirtualAddressAllocator {
                         size: (block_end.0 - end_address.0).div_ceil(PAGE_SIZE),
                     })
                 }
+                log::trace!("reserved {page_count} pages at {start_address}");
                 return Ok(());
             }
 

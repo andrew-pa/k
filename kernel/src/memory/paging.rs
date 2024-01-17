@@ -299,7 +299,7 @@ impl PageTable {
     }
 
     pub unsafe fn activate(&self) {
-        log::debug!(
+        log::trace!(
             "activating table @ {}, ASID {:x}",
             self.level0_phy_addr,
             self.asid
@@ -444,7 +444,6 @@ impl PageTable {
         let mut page_index = 0;
         'top: while page_index < page_count {
             let page_addr = VirtualAddress(virt_start.0 + page_index * PAGE_SIZE);
-            log::trace!("{page_addr}");
             let (tag, i0, i1, i2, i3, po) = page_addr.to_parts();
             let mut table = self.level0_table;
             // TODO: surely there is a clean way to generate this slice with iterators?

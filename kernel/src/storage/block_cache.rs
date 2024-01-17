@@ -121,10 +121,10 @@ impl BlockCache {
             self.block_offset_bits,
         );
         let block_offset = address.0.bit_range(self.block_offset_bits - 1, 0);
-        log::trace!(
+        /*log::trace!(
             "decomposing {:b} => {tag:b}:{chunk_id:b}:{block_offset:b}",
             address.0
-        );
+        );*/
         assert!(
             (chunk_id as usize) < self.num_chunks,
             "chunk id {chunk_id} >= # chunks {}",

@@ -67,7 +67,7 @@ pub trait InterruptController {
 }
 
 pub type InterruptHandler = Box<dyn FnMut(InterruptId, *mut Registers)>;
-pub type SyscallHandler = fn(u16, *mut Registers);
+pub type SyscallHandler = fn(u16, process::ProcessId, *mut Registers);
 
 static mut IC: OnceCell<Mutex<Box<dyn InterruptController>>> = OnceCell::new();
 static mut INTERRUPT_HANDLERS: OnceCell<CHashMapG<InterruptId, InterruptHandler>> = OnceCell::new();
@@ -150,6 +150,17 @@ global_asm!(include_str!("table.S"));
 #[derive(Default, Copy, Clone)]
 pub struct Registers {
     pub x: [usize; 31],
+}
+
+impl Registers {
+    /// Create a Registers struct that has the contents of args in the first registers. There can
+    /// be up to 8, mirroring the typical ARM64 calling convention.
+    pub fn from_args(args: &[usize]) -> Registers {
+        assert!(args.len() <= 8);
+        let mut regs = Registers::default();
+        regs.x[0..args.len()].copy_from_slice(args);
+        regs
+    }
 }
 
 impl core::fmt::Debug for Registers {
@@ -251,7 +262,7 @@ unsafe extern "C" fn handle_synchronous_exception(regs: *mut Registers, esr: usi
 
         let id = esr.iss() as u16;
         match system_call_handlers().get(&id) {
-            Some(h) => (*h)(id, regs),
+            Some(h) => (*h)(id, pid.unwrap_or(0), regs),
             None => {
                 log::warn!(
                     "unknown system call: pid={:?}, id = 0x{:x}, registers = {:?}",

@@ -5,38 +5,95 @@
 #![feature(allocator_api)]
 #![feature(custom_test_frameworks)]
 #![feature(iter_array_chunks)]
+#![feature(non_null_convenience)]
 
 use core::arch::asm;
 
-static TEST: Option<u64> = None;
+use kapi::Command;
 
-fn fact(n: usize) -> usize {
-    if n < 1 {
-        1
-    } else {
-        n * fact(n - 1)
+mod channel;
+
+#[inline]
+fn log_oof(code: usize) {
+    unsafe {
+        asm!(
+            "mov x0, {i}",
+            "svc #3",
+            i = in(reg) code
+        )
     }
 }
 
-#[no_mangle]
-pub extern "C" fn _start() {
-    // fact(5);
-    let sus_addr = 0x1002 as *mut u8;
-    let x = unsafe { sus_addr.read_volatile() };
+#[inline]
+fn log_record(r: &log::Record) {
     unsafe {
-        let mut i: usize = x as usize;
-        loop {
-            i = i.wrapping_add(1);
-            asm!(
-                "mov x0, {i}",
-                "svc #3",
-                i = in(reg) i
-            )
+        asm!(
+            "mov x0, {p}",
+            "svc #4",
+            p = in(reg) r as *const log::Record
+        )
+    }
+}
+
+pub struct KernelLogger;
+
+impl log::Log for KernelLogger {
+    fn enabled(&self, _metadata: &log::Metadata) -> bool {
+        true
+    }
+
+    fn log(&self, record: &log::Record) {
+        log_record(record);
+    }
+
+    fn flush(&self) {}
+}
+
+#[no_mangle]
+pub extern "C" fn _start(
+    channel_base_addr: usize,
+    channel_sub_size: usize,
+    channel_com_size: usize,
+) {
+    log::set_logger(&KernelLogger).expect("set logger");
+    log::set_max_level(log::LevelFilter::Trace);
+    log::info!("starting init process. kernel channel @ 0x{channel_base_addr:x}:{channel_sub_size:x}/{channel_com_size:x}");
+    let mut ch = unsafe {
+        channel::Channel::from_kernel(channel_base_addr, channel_sub_size, channel_com_size)
+    };
+
+    ch.post(&Command {
+        kind: kapi::CommandKind::Test,
+        id: 0,
+        completion_semaphore: 0,
+        args: [1, 2, 3, 4],
+    })
+    .expect("post message to channel");
+
+    log_oof(0xfeed0001);
+
+    loop {
+        if let Some(c) = ch.poll() {
+            log_oof(0xfeed0002);
+            log_oof(c.result0 as usize);
+            break;
         }
+    }
+
+    let sus_addr = 0x5000 as *mut u8;
+    let x = unsafe { sus_addr.read_volatile() };
+    let mut i: usize = x as usize;
+    loop {
+        if i % 10000 == 0 {
+            log_oof(i);
+        }
+        i = i.wrapping_add(1);
     }
 }
 
 #[panic_handler]
-pub fn panic_handler(_info: &core::panic::PanicInfo) -> ! {
+pub fn panic_handler(info: &core::panic::PanicInfo) -> ! {
+    log::error!("panic! {info}");
+    // TODO: exit process via system call
     loop {}
 }
