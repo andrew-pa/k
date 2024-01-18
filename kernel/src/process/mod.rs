@@ -30,6 +30,8 @@ use resource::MappedFile;
 mod channel;
 use self::channel::Channel;
 
+mod dispatch_cmd;
+
 // TODO: make type NonZeroU32 instead
 pub type ProcessId = u32;
 pub type ThreadId = u32;
@@ -44,6 +46,23 @@ pub struct Process {
 }
 
 impl Process {
+    pub fn dispatch_new_commands(&mut self, tid: ThreadId) {
+        while let Some(cmd) = self.channel.poll() {
+            log::trace!("recieved command: {cmd:?}");
+            let pid = self.id;
+            crate::tasks::spawn(async move {
+                let cmpl = dispatch_cmd::dispatch(pid, tid, cmd).await;
+                let mut proc = processes().get_mut(&pid).unwrap();
+                match proc.channel.post(&cmpl) {
+                    Ok(()) => {}
+                    Err(e) => {
+                        todo!("kill process on queue overflow")
+                    }
+                }
+            });
+        }
+    }
+
     pub async fn on_page_fault(&mut self, tid: ThreadId, address: VirtualAddress) {
         log::trace!("on_page_fault {address}");
         if let Some((base_address, res)) = self

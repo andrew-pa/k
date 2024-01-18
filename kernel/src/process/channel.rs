@@ -17,6 +17,7 @@ pub enum QueueError {
 
 pub type QueueId = u32;
 
+/// A single synchronized queue. Works the same as an NVMe queue.
 struct Queue<T> {
     buffer: PhysicalBuffer,
     queue_len: usize,
@@ -109,6 +110,31 @@ impl<T> Queue<T> {
             }
         }
     }
+
+    /// Returns the first outstanding message in the queue if present.
+    pub fn poll(&mut self) -> Option<T> {
+        let head = self.head();
+        (head != self.tail()).then(|| unsafe {
+            log::trace!("head = {head}, tail = {}", self.tail());
+            let cmd = self.data_ptr.offset(head as isize).read();
+            self.move_head();
+            cmd
+        })
+    }
+
+    /// Post a message in the queue.
+    pub fn post(&mut self, msg: &T) -> Result<(), QueueError> {
+        let tail = self.tail();
+        (self.head() != (tail + 1) % self.queue_len)
+            .then(|| {
+                unsafe {
+                    let dst = self.data_ptr.offset(tail as isize);
+                    core::ptr::copy(msg, dst.as_ptr(), 1);
+                }
+                self.move_tail();
+            })
+            .ok_or(QueueError::Full)
+    }
 }
 
 /// A bi-directional communication channel between the kernel and a user-space process using shared memory.
@@ -142,30 +168,11 @@ impl Channel {
 
     /// Returns the first outstanding command message in the channel if present.
     pub fn poll(&mut self) -> Option<Command> {
-        let tail = self.submission.tail();
-        if self.submission.head() != tail {
-            unsafe {
-                let cmd = self.submission.data_ptr.offset(tail as isize).read();
-                self.submission.move_tail();
-                Some(cmd)
-            }
-        } else {
-            None
-        }
+        self.submission.poll()
     }
 
     /// Post a completion message in the channel.
     pub fn post(&mut self, msg: &Completion) -> Result<(), QueueError> {
-        let head = self.completion.head();
-        if head == self.completion.tail() {
-            Err(QueueError::Full)
-        } else {
-            unsafe {
-                let dst = self.completion.data_ptr.offset(head as isize);
-                core::ptr::copy(msg, dst.as_ptr(), 1);
-            }
-            self.completion.move_head();
-            Ok(())
-        }
+        self.completion.post(msg)
     }
 }

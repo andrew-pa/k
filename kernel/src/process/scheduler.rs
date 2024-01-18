@@ -66,15 +66,15 @@ impl ThreadScheduler {
     pub unsafe fn pause_current_thread(
         &mut self,
         current_regs: *mut Registers,
-    ) -> Option<ProcessId> {
+    ) -> (Option<ProcessId>, ThreadId) {
         let current = self.currently_running();
         if let Some(mut t) = threads().get_mut(&current) {
             t.save(current_regs.as_ref().unwrap());
             log::trace!("paused thread {current} @ {}, sp={}", t.pc, t.sp);
-            t.parent
+            (t.parent, current)
         } else {
             log::warn!("pausing thread {current} that has no thread info");
-            None
+            (None, current)
         }
     }
 

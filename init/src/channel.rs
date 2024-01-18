@@ -5,6 +5,11 @@ use core::{ptr::NonNull, sync::atomic::AtomicUsize};
 
 use kapi::{Command, Completion};
 
+#[derive(Debug)]
+pub enum QueueError {
+    Full,
+}
+
 struct Queue<T> {
     queue_len: usize,
     /// A pointer into the buffer to the value of the head index.
@@ -81,6 +86,30 @@ impl<T> Queue<T> {
             }
         }
     }
+
+    /// Returns the first outstanding message in the queue if present.
+    pub fn poll(&mut self) -> Option<T> {
+        let head = self.head();
+        (head != self.tail()).then(|| unsafe {
+            let cmd = self.data_ptr.offset(head as isize).read();
+            self.move_head();
+            cmd
+        })
+    }
+
+    /// Post a message in the queue.
+    pub fn post(&mut self, msg: &T) -> Result<(), QueueError> {
+        let tail = self.tail();
+        (self.head() != (tail + 1) % self.queue_len)
+            .then(|| {
+                unsafe {
+                    let dst = self.data_ptr.offset(tail as isize);
+                    core::ptr::copy(msg, dst.as_ptr(), 1);
+                }
+                self.move_tail();
+            })
+            .ok_or(QueueError::Full)
+    }
 }
 
 pub struct Channel {
@@ -102,30 +131,11 @@ impl Channel {
 
     /// Returns the first outstanding completion message in the channel if present.
     pub fn poll(&mut self) -> Option<Completion> {
-        let tail = self.completion.tail();
-        if self.completion.head() != tail {
-            unsafe {
-                let cmd = self.completion.data_ptr.offset(tail as isize).read();
-                self.completion.move_tail();
-                Some(cmd)
-            }
-        } else {
-            None
-        }
+        self.completion.poll()
     }
 
     /// Post a command message in the channel.
-    pub fn post(&mut self, msg: &Command) -> Result<(), ()> {
-        let head = self.submission.head();
-        if head == self.submission.tail() {
-            Err(())
-        } else {
-            unsafe {
-                let dst = self.submission.data_ptr.offset(head as isize);
-                core::ptr::copy(msg, dst.as_ptr(), 1);
-            }
-            self.submission.move_head();
-            Ok(())
-        }
+    pub fn post(&mut self, msg: &Command) -> Result<(), QueueError> {
+        self.submission.post(msg)
     }
 }

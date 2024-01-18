@@ -90,7 +90,7 @@ impl Executor {
 
             // log::trace!("dequeuing task");
             while let Some(task_id) = self.ready_queue.pop() {
-                log::trace!("polling {task_id}");
+                // log::trace!("polling {task_id}");
                 let task = match tasks.get_mut(&task_id) {
                     Some(t) => t,
                     None => continue,

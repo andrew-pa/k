@@ -7,7 +7,7 @@ use spin::{Mutex, MutexGuard};
 use crate::{
     current_el,
     memory::{PhysicalAddress, VirtualAddress},
-    process::{self, read_exception_link_reg, read_stack_pointer},
+    process::{self, read_exception_link_reg, read_stack_pointer, ProcessId},
     sp_sel, timer, CHashMapG,
 };
 
@@ -66,8 +66,8 @@ pub trait InterruptController {
     // TODO: free MSIs
 }
 
-pub type InterruptHandler = Box<dyn FnMut(InterruptId, *mut Registers)>;
-pub type SyscallHandler = fn(u16, process::ProcessId, *mut Registers);
+pub type InterruptHandler = Box<dyn FnMut(InterruptId, &mut Registers)>;
+pub type SyscallHandler = fn(u16, process::ProcessId, &mut Registers);
 
 static mut IC: OnceCell<Mutex<Box<dyn InterruptController>>> = OnceCell::new();
 static mut INTERRUPT_HANDLERS: OnceCell<CHashMapG<InterruptId, InterruptHandler>> = OnceCell::new();
@@ -212,6 +212,18 @@ bitfield! {
 
 struct ExceptionClass(u8);
 
+impl ExceptionClass {
+    #[inline]
+    fn is_system_call(&self) -> bool {
+        self.0 == 0b010101
+    }
+
+    #[inline]
+    fn is_user_space_page_fault(&self) -> bool {
+        self.0 == 0b100100
+    }
+}
+
 impl core::fmt::Debug for ExceptionClass {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "0b{:b}=", self.0)?;
@@ -249,45 +261,56 @@ impl Display for ExceptionSyndromeRegister {
     }
 }
 
+fn handle_system_call(pid: Option<ProcessId>, regs: &mut Registers, id: u16) {
+    match system_call_handlers().get(&id) {
+        Some(h) => (*h)(id, pid.unwrap_or(0), regs),
+        None => {
+            log::warn!(
+                "unknown system call: pid={:?}, id = 0x{:x}, registers = {:?}",
+                pid,
+                id,
+                regs
+            )
+        }
+    }
+}
+
 #[no_mangle]
 unsafe extern "C" fn handle_synchronous_exception(regs: *mut Registers, esr: usize, far: usize) {
     let esr = ExceptionSyndromeRegister(esr as u64);
+    let ec = ExceptionClass(esr.ec());
 
-    if esr.ec() == 0b010101 {
+    if !ec.is_system_call() && !ec.is_user_space_page_fault() {
+        panic!(
+            "synchronous exception! {}, FAR={far:x}, registers = {:?}, ELR={:x?}",
+            esr,
+            regs.as_ref(),
+            read_exception_link_reg(),
+        );
+    }
+
+    let (pid, tid) = process::scheduler::scheduler().pause_current_thread(regs);
+
+    let previous_asid = pid
+        .and_then(|pid| process::processes().get_mut(&pid))
+        .map(|mut proc| {
+            proc.dispatch_new_commands(tid);
+            proc.page_tables.asid
+        });
+
+    if ec.is_system_call() {
         // system call
-        let pid = process::scheduler::scheduler().pause_current_thread(regs);
-        let previous_asid = pid
-            .and_then(|pid| process::processes().get(&pid))
-            .map(|proc| proc.page_tables.asid);
-
-        let id = esr.iss() as u16;
-        match system_call_handlers().get(&id) {
-            Some(h) => (*h)(id, pid.unwrap_or(0), regs),
-            None => {
-                log::warn!(
-                    "unknown system call: pid={:?}, id = 0x{:x}, registers = {:?}",
-                    pid,
-                    id,
-                    regs.as_ref()
-                )
-            }
-        }
-
-        process::scheduler::scheduler().resume_current_thread(regs, previous_asid);
-    } else if esr.ec() == 0b100100 {
+        handle_system_call(
+            pid,
+            regs.as_mut()
+                .expect("registers ptr should always be non-null"),
+            esr.iss() as u16,
+        );
+    } else if ec.is_user_space_page_fault() {
         // page fault in user space
-        let (pid, tid) = {
-            let mut schd = process::scheduler::scheduler();
-            (schd.pause_current_thread(regs)
-                .expect("this exception is only for page faults in a lower exception level and since the kernel runs at EL1, that means that we can only get here from a fault in EL0, therefore there must be a current process running (or something is very wrong)"),
-                schd.currently_running())
-        };
+        let pid = pid.expect("this exception is only for page faults in a lower exception level and since the kernel runs at EL1, that means that we can only get here from a fault in EL0, therefore there must be a current process running (or something is very wrong)");
 
-        let proc_asid = process::processes()
-            .get(&pid)
-            .map(|p| p.page_tables.asid)
-            .expect("valid process ID from scheduler");
-
+        // pause the thread so it won't get scheduled before we fix up its address space
         process::threads()
             .get_mut(&tid)
             .expect("valid thread id from scheduler")
@@ -302,37 +325,33 @@ unsafe extern "C" fn handle_synchronous_exception(regs: *mut Registers, esr: usi
             proc.on_page_fault(tid, VirtualAddress(far)).await;
         });
 
-        {
-            let mut schd = process::scheduler::scheduler();
-            schd.make_task_executor_current();
-            schd.resume_current_thread(regs, Some(proc_asid));
-        }
+        // schedule the task executor next to reduce latency between processing the page fault and
+        // resuming the offending process by hopefully immediately running the above task.
+        process::scheduler::scheduler().make_task_executor_current();
     } else {
-        // TODO: stack is sus??
-        // let mut v: usize;
-        // core::arch::asm!("mrs {v}, SP_EL1", v = out(reg) v);
-        panic!(
-            "synchronous exception! {}, FAR={far:x}, registers = {:?}, ELR={:x?}",
-            esr,
-            regs.as_ref(),
-            read_exception_link_reg(),
-        );
+        unreachable!()
     }
+
+    process::scheduler::scheduler().resume_current_thread(regs, previous_asid);
 }
 
 #[no_mangle]
 unsafe extern "C" fn handle_interrupt(regs: *mut Registers, _esr: usize, _far: usize) {
     let ic = interrupt_controller();
 
-    let pid = process::scheduler::scheduler().pause_current_thread(regs);
+    let (pid, tid) = process::scheduler::scheduler().pause_current_thread(regs);
+
     let previous_asid = pid
-        .and_then(|pid| process::processes().get(&pid))
-        .map(|proc| proc.page_tables.asid);
+        .and_then(|pid| process::processes().get_mut(&pid))
+        .map(|mut proc| {
+            proc.dispatch_new_commands(tid);
+            proc.page_tables.asid
+        });
 
     while let Some(id) = ic.ack_interrupt() {
         log::trace!("handling interrupt {id} ELR={}", read_exception_link_reg());
         match interrupt_handlers().get_mut(&id) {
-            Some(mut h) => (*h)(id, regs),
+            Some(mut h) => (*h)(id, regs.as_mut().expect("registers ptr should be non-null")),
             None => log::warn!("unhandled interrupt {id}"),
         }
         log::trace!("finished interrupt {id}");

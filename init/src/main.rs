@@ -65,17 +65,16 @@ pub extern "C" fn _start(
     ch.post(&Command {
         kind: kapi::CommandKind::Test,
         id: 0,
-        completion_semaphore: 0,
+        completion_semaphore: None,
         args: [1, 2, 3, 4],
     })
     .expect("post message to channel");
 
-    log_oof(0xfeed0001);
+    log::info!("waiting for kernel response");
 
     loop {
         if let Some(c) = ch.poll() {
-            log_oof(0xfeed0002);
-            log_oof(c.result0 as usize);
+            log::info!("got kernel response: {c:?}");
             break;
         }
     }

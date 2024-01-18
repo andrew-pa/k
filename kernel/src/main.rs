@@ -61,14 +61,12 @@ pub extern "C" fn kmain() {
     init::configure_time_slicing(&dt);
 
     exception::system_call_handlers().insert(3, |id, pid, regs| unsafe {
-        let regs = regs.as_ref().expect("valid register ptr");
         log::info!("process {pid}: 0x{:x}", regs.x[0]);
     });
 
     // TODO: ideally this is a whole system with a ring buffer, listening, etc and also records
     // which process made the log, but for now this will do.
     exception::system_call_handlers().insert(4, |id, pid, regs| unsafe {
-        let regs = regs.as_ref().expect("valid register ptr");
         let record = &*(regs.x[0] as *const log::Record);
         log::logger().log(record);
     });
