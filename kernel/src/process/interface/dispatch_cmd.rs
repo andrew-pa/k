@@ -1,4 +1,4 @@
-use super::*;
+use crate::process::*;
 use kapi::*;
 
 pub async fn dispatch(pid: ProcessId, tid: ThreadId, cmd: Command) -> Completion {

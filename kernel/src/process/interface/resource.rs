@@ -1,10 +1,18 @@
-use super::*;
-use crate::fs::File;
+use alloc::boxed::Box;
+use snafu::{ResultExt, Snafu};
+
+use crate::{
+    fs::File,
+    memory::{
+        paging::{PageTable, PageTableEntryOptions},
+        physical_memory_allocator, VirtualAddress, PAGE_SIZE,
+    },
+};
 
 #[derive(Debug, Snafu)]
 pub enum HandlePageFaultError {
     Memory {
-        source: MemoryError,
+        source: crate::memory::MemoryError,
     },
     Map {
         source: crate::memory::paging::MapError,

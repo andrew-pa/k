@@ -43,7 +43,7 @@ pub extern "C" fn kmain() {
 
     memory::init_virtual_address_allocator();
     exception::init_interrupts(&dt);
-    process::scheduler::init_scheduler(process::IDLE_THREAD);
+    process::thread::scheduler::init_scheduler(process::thread::IDLE_THREAD);
     tasks::init_executor();
     registry::init_registry();
 
@@ -110,8 +110,8 @@ pub extern "C" fn kmain() {
         .expect("allocate task exec thread stack");
     log::debug!("task stack = {task_stack:x?}");
 
-    process::spawn_thread(process::Thread::kernel_thread(
-        process::TASK_THREAD,
+    process::thread::spawn_thread(process::Thread::kernel_thread(
+        process::thread::TASK_THREAD,
         tasks::run_executor,
         &task_stack,
     ));

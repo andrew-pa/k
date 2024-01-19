@@ -24,7 +24,7 @@ pub struct DebugUartLogger;
 const DISABLED_MODULES: &[&str] = &[
     "kernel::memory::paging",
     "kernel::memory::heap",
-    "kernel::process::scheduler",
+    "kernel::process::thread::scheduler",
     "kernel::exception",
 ];
 
@@ -47,7 +47,7 @@ impl log::Log for DebugUartLogger {
             base: 0xffff_0000_0900_0000 as *mut u8,
         };
         write!(uart, "[{:<5} {} T", record.level(), crate::timer::counter()).unwrap();
-        if let Some(tid) = crate::process::scheduler::current_thread_id() {
+        if let Some(tid) = crate::process::thread::scheduler::current_thread_id() {
             write!(uart, "{tid}").unwrap();
         } else {
             write!(uart, "?").unwrap();

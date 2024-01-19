@@ -7,7 +7,11 @@ use spin::{Mutex, MutexGuard};
 use crate::{
     current_el,
     memory::{PhysicalAddress, VirtualAddress},
-    process::{self, read_exception_link_reg, read_stack_pointer, ProcessId},
+    process::{
+        self,
+        thread::reg::{read_exception_link_reg, read_stack_pointer},
+        ProcessId,
+    },
     sp_sel, timer, CHashMapG,
 };
 
@@ -289,7 +293,7 @@ unsafe extern "C" fn handle_synchronous_exception(regs: *mut Registers, esr: usi
         );
     }
 
-    let (pid, tid) = process::scheduler::scheduler().pause_current_thread(regs);
+    let (pid, tid) = process::scheduler().pause_current_thread(regs);
 
     let previous_asid = pid
         .and_then(|pid| process::processes().get_mut(&pid))
@@ -314,7 +318,7 @@ unsafe extern "C" fn handle_synchronous_exception(regs: *mut Registers, esr: usi
         process::threads()
             .get_mut(&tid)
             .expect("valid thread id from scheduler")
-            .state = process::ThreadState::Waiting;
+            .state = process::thread::ThreadState::Waiting;
 
         log::trace!("user space page fault at {far:x}, pid={pid}, tid={tid}");
 
@@ -327,19 +331,19 @@ unsafe extern "C" fn handle_synchronous_exception(regs: *mut Registers, esr: usi
 
         // schedule the task executor next to reduce latency between processing the page fault and
         // resuming the offending process by hopefully immediately running the above task.
-        process::scheduler::scheduler().make_task_executor_current();
+        process::scheduler().make_task_executor_current();
     } else {
         unreachable!()
     }
 
-    process::scheduler::scheduler().resume_current_thread(regs, previous_asid);
+    process::scheduler().resume_current_thread(regs, previous_asid);
 }
 
 #[no_mangle]
 unsafe extern "C" fn handle_interrupt(regs: *mut Registers, _esr: usize, _far: usize) {
     let ic = interrupt_controller();
 
-    let (pid, tid) = process::scheduler::scheduler().pause_current_thread(regs);
+    let (pid, tid) = process::scheduler().pause_current_thread(regs);
 
     let previous_asid = pid
         .and_then(|pid| process::processes().get_mut(&pid))
@@ -360,7 +364,7 @@ unsafe extern "C" fn handle_interrupt(regs: *mut Registers, _esr: usize, _far: u
 
     // TODO: if we get another interrupt here, it might cause problems
 
-    process::scheduler::scheduler().resume_current_thread(regs, previous_asid);
+    process::scheduler().resume_current_thread(regs, previous_asid);
 }
 
 #[no_mangle]
