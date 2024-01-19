@@ -138,7 +138,7 @@ where
         };
         write!(&mut uart, "{}...\t", core::any::type_name::<T>());
         self();
-        write!(&mut uart, "ok\n");
+        writeln!(&mut uart, "ok");
     }
 }
 

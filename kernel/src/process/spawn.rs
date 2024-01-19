@@ -54,12 +54,12 @@ fn load_segment(
     let dest_end = page_alignment_offset + seg.p_filesz as usize;
     log::trace!("copying {src_start}..{src_end} to {page_alignment_offset}..{dest_end}");
     if src_end > src_start {
-        (&mut dest_memory_segment.as_bytes_mut()[page_alignment_offset..dest_end])
+        dest_memory_segment.as_bytes_mut()[page_alignment_offset..dest_end]
             .copy_from_slice(&src_data[src_start..src_end]);
     }
     if seg.p_memsz > seg.p_filesz {
         log::trace!("zeroing {} bytes", seg.p_memsz - seg.p_filesz);
-        (&mut dest_memory_segment.as_bytes_mut()[seg.p_filesz as usize..]).fill(0);
+        dest_memory_segment.as_bytes_mut()[seg.p_filesz as usize..].fill(0);
     }
     // let go of buffer, we will free pages by walking the page table when the process dies
     let (pa, _) = dest_memory_segment.unmap();

@@ -198,9 +198,9 @@ pub enum MapError {
 
 impl core::fmt::Debug for PageTable {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(
+        writeln!(
             f,
-            "PageTable[{:x}]@{} ({}) [\n",
+            "PageTable[{:x}]@{} ({}) [",
             self.asid,
             self.level0_phy_addr,
             if self.high_addresses { "H" } else { "L" }
@@ -221,7 +221,7 @@ impl core::fmt::Debug for PageTable {
                 }
                 write!(f, "0x{index:x} {entry:?}")?;
                 if let Some(table) = entry.table_ref(lvl) {
-                    write!(f, " [\n")?;
+                    writeln!(f, " [")?;
                     // we know that entry.table_phy_addr() will actually point to a table because we've already called table_ref()
                     print_table(f, lvl + 1, table, entry.table_phy_addr().unwrap())?;
                     for _ in 0..lvl {
@@ -238,7 +238,7 @@ impl core::fmt::Debug for PageTable {
                     write!(f, "x{n}...")?;
                     index += n;
                 }
-                write!(f, ",\n")?;
+                writeln!(f, ",")?;
                 index += 1;
             }
             Ok(())
@@ -293,7 +293,7 @@ impl PageTable {
             VirtualAddress(start_addr.0),
             page_count,
             true,
-            &options,
+            options,
         )?;
         Ok(p)
     }
@@ -497,7 +497,7 @@ impl PageTable {
                 //include bits from i1/i2/i3 in the page/block offset
                 return tr[i]
                     .base_address(lvl)
-                    .map(|PhysicalAddress(addr)| PhysicalAddress(addr << 12 + po));
+                    .map(|PhysicalAddress(addr)| PhysicalAddress((addr << 12) + po));
             }
         }
 

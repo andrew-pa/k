@@ -47,7 +47,7 @@ impl BlockStore for NamespaceBlockStore {
                 .expect("NVMe submission queue full. TODO: we should be able to await for a new spot in the queue rather than panic")
                 .set_namespace_id(self.namespace_id)
                 .set_data_ptrs(destination_addrs, PAGE_SIZE / self.supported_block_size)?
-                .read(source_addr, total_num_blocks as u16)
+                .read(source_addr, total_num_blocks)
         ).await;
         match (cmp.status.status_code_type(), cmp.status.status_code()) {
             (0, 0) => Ok(total_num_blocks as usize),
@@ -82,7 +82,7 @@ impl BlockStore for NamespaceBlockStore {
                 .expect("NVMe submission queue full. TODO: we should be able to await for a new spot in the queue rather than panic")
                 .set_namespace_id(self.namespace_id)
                 .set_data_ptrs(source_addrs, PAGE_SIZE / self.supported_block_size)?
-                .write(destination_addr, total_num_blocks as u16)
+                .write(destination_addr, total_num_blocks)
         ).await;
         match (cmp.status.status_code_type(), cmp.status.status_code()) {
             (0, 0) => Ok(total_num_blocks as usize),

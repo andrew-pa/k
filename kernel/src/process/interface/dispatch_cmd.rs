@@ -7,7 +7,7 @@ pub async fn dispatch(pid: ProcessId, tid: ThreadId, cmd: Command) -> Completion
         CommandKind::Test => Completion {
             kind: CompletionKind::Success,
             response_to_id: cmd.id,
-            result0: pid as u32,
+            result0: pid,
             result1: tid as u64,
         },
         CommandKind::Reserved(kind) => Completion {

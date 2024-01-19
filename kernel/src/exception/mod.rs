@@ -91,7 +91,6 @@ pub fn init_interrupts(device_tree: &crate::dtb::DeviceTree) {
             .expect("init interrupts once");
         SYSTEM_CALL_HANDLERS
             .set(Default::default())
-            .ok()
             .expect("init syscall table once");
     }
 }

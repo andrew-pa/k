@@ -21,16 +21,17 @@ impl PhysicalMemoryAllocator {
         // for now, find the first memory node and use it to determine how big RAM is
         let memory_props = device_tree
             .iter_structure()
-            .skip_while(|i| match i {
-                StructureItem::StartNode(name) if name.starts_with("memory") => false,
-                _ => true,
-            })
+            .skip_while(
+                |i| !matches!(i, StructureItem::StartNode(name) if name.starts_with("memory")),
+            )
             .find_map(|i| match i {
-                StructureItem::Property { name, data, .. } if name == "reg" => Some(data),
+                StructureItem::Property {
+                    name: "reg", data, ..
+                } => Some(data),
                 _ => None,
             })
             .expect("RAM properties in device tree");
-        let memory_start = BigEndian::read_u64(&memory_props) as usize;
+        let memory_start = BigEndian::read_u64(memory_props) as usize;
         let memory_length = BigEndian::read_u64(&memory_props[8..]) as usize;
         log::info!("RAM starts at 0x{memory_start:x} and is 0x{memory_length:x} bytes long");
 

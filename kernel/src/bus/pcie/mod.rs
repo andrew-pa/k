@@ -228,7 +228,7 @@ struct CapabilityIter {
     next_block: u8,
 }
 
-impl<'d> Iterator for CapabilityIter {
+impl Iterator for CapabilityIter {
     type Item = CapabilityBlock;
 
     fn next(&mut self) -> Option<Self::Item> {

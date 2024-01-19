@@ -61,7 +61,7 @@ pub struct CompletionQueueHandle {
 impl CompletionQueueHandle {
     /// sets the command ID to a unique value, submits the command, and returns a future that
     /// will resolve when the command is completed by the device
-    pub fn wait_for_completion<'sq>(&mut self, cmd: Command<'sq>) -> CompletionFuture {
+    pub fn wait_for_completion(&mut self, cmd: Command<'_>) -> CompletionFuture {
         let cmd_id = self.next_cmd_id;
         self.next_cmd_id = self.next_cmd_id.wrapping_add(1);
         log::debug!("created future for NVMe command id {cmd_id}");

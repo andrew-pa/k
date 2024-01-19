@@ -74,10 +74,14 @@ impl MsiXTable {
         self.size
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.size == 0
+    }
+
     pub fn set_mask(&self, index: usize, masked: bool) {
         assert!(index < self.size);
         unsafe {
-            let vctrl = self.base.offset((4 * index) as isize + 3);
+            let vctrl = self.base.add(4 * index + 3);
             let mut v = vctrl.read_volatile();
             v.set_bit(0, masked);
             vctrl.write_volatile(v);
@@ -90,7 +94,7 @@ impl MsiXTable {
         assert!(index < self.size);
         self.set_mask(index, true);
         unsafe {
-            let entry = self.base.offset((4 * index) as isize);
+            let entry = self.base.add(4 * index);
             (entry as *mut u64).write_volatile(msi.register_addr.0 as u64);
             entry.offset(2).write_volatile(msi.data_value);
         }

@@ -1,4 +1,4 @@
-use alloc::{boxed::Box, sync::Arc, task::Wake};
+use alloc::{boxed::Box, rc::Rc, sync::Arc, task::Wake};
 use core::{
     cell::OnceCell,
     future::Future,
@@ -18,7 +18,7 @@ pub mod locks;
 type TaskId = u32;
 type Task = Pin<Box<dyn Future<Output = ()>>>;
 type ReadyTaskQueue = Arc<ArrayQueue<TaskId>>;
-type NewTaskQueue = Arc<ArrayQueue<(TaskId, Task)>>;
+type NewTaskQueue = Rc<ArrayQueue<(TaskId, Task)>>;
 
 struct TaskWaker {
     id: TaskId,
@@ -26,7 +26,7 @@ struct TaskWaker {
 }
 
 impl TaskWaker {
-    fn new(id: TaskId, ready_queue: ReadyTaskQueue) -> Waker {
+    fn new_waker(id: TaskId, ready_queue: ReadyTaskQueue) -> Waker {
         Waker::from(Arc::new(TaskWaker { id, ready_queue }))
     }
 
@@ -52,15 +52,17 @@ pub struct Executor {
     next_task_id: Arc<AtomicU32>,
 }
 
-impl Executor {
-    pub fn new() -> Self {
+impl Default for Executor {
+    fn default() -> Self {
         Self {
             ready_queue: Arc::new(ArrayQueue::new(128)),
-            new_task_queue: Arc::new(ArrayQueue::new(32)),
+            new_task_queue: Rc::new(ArrayQueue::new(32)),
             next_task_id: Arc::new(AtomicU32::new(1)),
         }
     }
+}
 
+impl Executor {
     pub fn spawn(&self, task: impl Future<Output = ()> + 'static) {
         let task_id = self
             .next_task_id
@@ -97,7 +99,7 @@ impl Executor {
                 };
                 let waker = waker_cache
                     .entry(task_id)
-                    .or_insert_with(|| TaskWaker::new(task_id, self.ready_queue.clone()));
+                    .or_insert_with(|| TaskWaker::new_waker(task_id, self.ready_queue.clone()));
                 let mut context = Context::from_waker(waker);
                 log::debug!("polling task {task_id}");
                 match task.as_mut().poll(&mut context) {
@@ -120,7 +122,7 @@ static mut EXEC: OnceCell<Executor> = OnceCell::new();
 
 pub fn init_executor() {
     unsafe {
-        EXEC.set(Executor::new()).ok().expect("init executor");
+        EXEC.set(Executor::default()).ok().expect("init executor");
     }
 }
 

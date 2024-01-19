@@ -60,6 +60,10 @@ impl PhysicalBuffer {
         self.page_count * PAGE_SIZE
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.page_count == 0
+    }
+
     fn unmap_virtual(&self) {
         paging::kernel_table().unmap_range(self.vir_addr, self.page_count);
         virtual_address_allocator().free(self.vir_addr, self.page_count);

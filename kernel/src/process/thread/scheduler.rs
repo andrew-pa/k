@@ -23,7 +23,7 @@ impl ThreadScheduler {
 
     pub fn schedule_next_thread(&mut self) {
         for (queue, next) in self.queues.iter_mut() {
-            if queue.len() == 0 {
+            if queue.is_empty() {
                 continue;
             }
             // skip any threads that are waiting in this queue

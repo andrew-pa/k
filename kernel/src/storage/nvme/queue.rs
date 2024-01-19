@@ -111,7 +111,7 @@ impl<'sq> Command<'sq> {
         blocks_per_page: usize,
     ) -> Result<Command<'sq>, crate::storage::Error> {
         ensure!(
-            regions.len() > 0,
+            !regions.is_empty(),
             crate::storage::BadVectorSnafu {
                 reason: "must have at least one entry",
                 entry: None
@@ -233,6 +233,7 @@ impl SubmissionQueue {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn new_io(
         id: QueueId,
         entry_count: u16,
@@ -351,7 +352,7 @@ bitfield! {
 
 impl Clone for CompletionStatus {
     fn clone(&self) -> Self {
-        Self(self.0.clone())
+        Self(self.0)
     }
 }
 

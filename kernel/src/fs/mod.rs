@@ -37,6 +37,10 @@ pub trait File {
     /// Returns the length of the store in bytes.
     fn len(&self) -> u64;
 
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     /// Read `num_pages` pages starting at `src_offset` (in bytes) from the file into `dest_address` in memory
     async fn load_pages(
         &mut self,

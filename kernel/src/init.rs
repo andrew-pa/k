@@ -19,7 +19,7 @@ pub fn init_logging(log_level: log::LevelFilter) {
 }
 
 pub fn configure_time_slicing(dt: &DeviceTree) {
-    let props = timer::find_timer_properties(&dt);
+    let props = timer::find_timer_properties(dt);
     log::debug!("timer properties = {props:?}");
     let timer_irq = props.interrupt;
 

@@ -110,7 +110,7 @@ impl FreeList {
         self.heap_size_in_bytes = initial_size_in_bytes;
     }
 
-    fn cursor<'a>(&'a mut self) -> FreeListCursor<'a> {
+    fn cursor(&mut self) -> FreeListCursor<'_> {
         let c = FreeListCursor {
             current: self.head,
             parent: self,
@@ -147,10 +147,10 @@ impl<'a> FreeListCursor<'a> {
                     // removed block is in the middle of the list
                     Some(before_removed_block) => {
                         self.check_ptr(removed_block.next);
-                        removed_block.next.as_mut().map(|after_removed_block| {
+                        if let Some(after_removed_block) = removed_block.next.as_mut() {
                             assert_eq!(after_removed_block.prev, removed_block_p);
                             after_removed_block.prev = removed_block.prev;
-                        });
+                        }
                         before_removed_block.next = removed_block.next;
                         self.current = before_removed_block.next;
                         if self.parent.tail == removed_block_p {
@@ -162,10 +162,10 @@ impl<'a> FreeListCursor<'a> {
                         assert_eq!(removed_block_p, self.parent.head);
                         self.parent.head = removed_block.next;
                         self.check_ptr(self.parent.head);
-                        self.parent.head.as_mut().map(|new_head_block| {
+                        if let Some(new_head_block) = self.parent.head.as_mut() {
                             assert_eq!(new_head_block.prev, removed_block_p);
                             new_head_block.prev = null_mut()
-                        });
+                        }
                         self.current = self.parent.head;
                         if self.parent.tail == removed_block_p {
                             self.parent.tail = self.parent.head;
@@ -200,7 +200,9 @@ impl<'a> FreeListCursor<'a> {
     fn move_next(&mut self) {
         // SAFETY: cursor current pointer should always be null or valid
         unsafe {
-            self.current.as_ref().map(|b| self.current = b.next);
+            if let Some(b) = self.current.as_ref() {
+                self.current = b.next
+            }
         }
         self.check_ptr(self.current);
     }
@@ -221,11 +223,11 @@ impl<'a> FreeListCursor<'a> {
             if self.current == self.parent.head {
                 header.next = self.parent.head;
                 header.prev = null_mut();
-                self.parent.head.as_mut().map(|head| {
+                if let Some(head) = self.parent.head.as_mut() {
                     head.prev = new_block_ptr;
-                });
+                }
                 // if the list was previously empty, make sure the tail pointer is correctly updated
-                if self.parent.tail == null_mut() {
+                if self.parent.tail.is_null() {
                     self.parent.tail = new_block_ptr;
                 }
                 self.parent.head = new_block_ptr;
@@ -234,10 +236,9 @@ impl<'a> FreeListCursor<'a> {
                     Some(current_node) => {
                         header.next = self.current;
                         header.prev = current_node.prev;
-                        current_node
-                            .prev
-                            .as_mut()
-                            .map(|prev| prev.next = new_block_ptr);
+                        if let Some(prev) = current_node.prev.as_mut() {
+                            prev.next = new_block_ptr;
+                        }
                         current_node.prev = new_block_ptr;
                     }
                     // we're at the end of the list
@@ -273,7 +274,9 @@ impl<'a> FreeListCursor<'a> {
     fn extend_current(&self, change_in_size: usize) {
         // SAFETY: cursor current pointer should always be null or valid
         unsafe {
-            self.current.as_mut().map(|b| b.size += change_in_size);
+            if let Some(b) = self.current.as_mut() {
+                b.size += change_in_size
+            }
         }
     }
 }
@@ -473,7 +476,7 @@ unsafe impl GlobalAlloc for KernelGlobalAlloc {
             // return ptr to new allocated block
             let data = padded_address
                 .as_ptr::<u8>()
-                .offset(size_of::<AllocatedBlockHeader>() as isize);
+                .add(size_of::<AllocatedBlockHeader>());
             log::trace!(
                 "new allocated block @ {} (data @ {}), size = {}",
                 block.address,

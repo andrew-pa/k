@@ -111,6 +111,10 @@ impl Path {
         self.s.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.s.is_empty()
+    }
+
     pub fn is_absolute(&self) -> bool {
         self.components()
             .next()

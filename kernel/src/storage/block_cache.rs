@@ -182,20 +182,17 @@ impl BlockCache {
         num_chunks_inclusive: u64,
         mark_dirty: bool,
     ) -> Result<(), Error> {
-        let res = future::join_all((0..num_chunks_inclusive).map(|i| {
+        future::try_join_all((0..num_chunks_inclusive).map(|i| {
             let mut tag = starting_tag;
             let mut chunk_id = starting_chunk_id + i;
             if chunk_id > self.num_chunks as u64 {
                 tag += chunk_id / self.num_chunks as u64;
-                chunk_id = chunk_id % self.num_chunks as u64;
+                chunk_id %= self.num_chunks as u64;
             }
             self.load_chunk(tag, chunk_id, mark_dirty)
         }))
-        .await;
-        for e in res.into_iter().flat_map(Result::err) {
-            return Err(e);
-        }
-        Ok(())
+        .await
+        .map(|_| ()) //throw away the silly vector of units TODO: can we not collect the units?
     }
 
     /// Copy bytes from the cache into a slice. Any unloaded blocks will be loaded, and copies can span multiple blocks.
@@ -207,7 +204,7 @@ impl BlockCache {
     ) -> Result<(), Error> {
         if byte_offset >= self.block_size() {
             address.0 += (byte_offset / self.block_size()) as u64;
-            byte_offset = byte_offset % self.block_size();
+            byte_offset %= self.block_size();
         }
 
         let (starting_tag, starting_chunk_id, initial_block_offset) =
@@ -228,8 +225,8 @@ impl BlockCache {
             false,
         )
         .await?;
-        let offset = (starting_chunk_id as usize * self.chunk_size
-            + initial_block_offset as usize * self.block_size) as usize
+        let offset = starting_chunk_id as usize * self.chunk_size
+            + initial_block_offset as usize * self.block_size
             + byte_offset;
         dest.copy_from_slice(&self.buffer.read().await.as_bytes()[offset..offset + dest.len()]);
         Ok(())
@@ -244,7 +241,7 @@ impl BlockCache {
     ) -> Result<(), Error> {
         if byte_offset >= self.block_size() {
             address.0 += (byte_offset / self.block_size()) as u64;
-            byte_offset = byte_offset % self.block_size();
+            byte_offset %= self.block_size();
         }
 
         let (starting_tag, starting_chunk_id, initial_block_offset) =
@@ -264,8 +261,8 @@ impl BlockCache {
             true,
         )
         .await?;
-        let offset = (starting_chunk_id as usize * self.chunk_size
-            + initial_block_offset as usize * self.block_size) as usize
+        let offset = starting_chunk_id as usize * self.chunk_size
+            + initial_block_offset as usize * self.block_size
             + byte_offset;
         self.buffer.write().await.as_bytes_mut()[offset..offset + src.len()].copy_from_slice(src);
         Ok(())

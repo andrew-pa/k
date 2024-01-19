@@ -42,14 +42,14 @@ fn find_regs_for_node<'i, 'a: 'i>(
     dt: &'i mut impl Iterator<Item = StructureItem<'a>>,
 ) -> Option<MemRegionIter> {
     let mut regs = None;
-    while let Some(j) = dt.next() {
+    for j in dt.by_ref() {
         match j {
-            StructureItem::Property { name, data, .. } => match name {
-                "reg" => {
-                    regs = Some(MemRegionIter::for_data(data));
-                }
-                _ => {}
-            },
+            StructureItem::Property {
+                name: "reg", data, ..
+            } => {
+                regs = Some(MemRegionIter::for_data(data));
+            }
+            StructureItem::Property { .. } => {}
             StructureItem::EndNode => break,
             _ => unimplemented!("unexpected item in node {:?}", j),
         }
@@ -87,7 +87,7 @@ impl GenericInterruptController {
                     )) as Box<dyn MsiController>);
                 }
                 StructureItem::StartNode(_) if found_node => {
-                    while let Some(j) = dt.next() {
+                    for j in dt.by_ref() {
                         if let StructureItem::EndNode = j {
                             break;
                         }
@@ -384,9 +384,10 @@ impl InterruptController for GenericInterruptController {
     }
 }
 
-//// Offsets for GIC registers in units of words (u32)
+// Offsets for GIC registers in units of words (u32) //
+// TODO: these should probably reside in modules or be made into a proper enum
 
-//// Distributor offsets
+// Distributor offsets //
 const GICD_CTLR: isize = 0x0000 >> 2;
 const GICD_TYPER: isize = 0x0004 >> 2;
 const GICD_STATUSR: isize = 0x0010 >> 2;
@@ -410,7 +411,7 @@ const GICD_CPENDSGIR_N: isize = 0x0f10 >> 2;
 const GICD_SPENDSGIR_N: isize = 0x0f20 >> 2;
 const GICD_INMIR: isize = 0x0f80 >> 2;
 
-//// CPU Interface offsets
+// CPU Interface offsets //
 const GICC_CTLR: isize = 0x000 >> 2;
 const GICC_PMR: isize = 0x0004 >> 2;
 const GICC_BPR: isize = 0x008 >> 2;
@@ -428,5 +429,5 @@ const GICC_NSAPR_N: isize = 0x00e0 >> 2;
 const GICC_IIDR: isize = 0x00fc >> 2;
 const GICC_DIR: isize = 0x1000 >> 2;
 
-//// Special InterruptIds
+// Special InterruptIds //
 const INTID_NONE_PENDING: InterruptId = 1023;

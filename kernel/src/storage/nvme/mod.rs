@@ -60,6 +60,8 @@ bitfield! {
 bitfield! {
     struct AdminQueueAttributes(u32);
     impl Debug;
+    impl Clone;
+    impl Copy;
     u16;
     completion_queue_size, set_completion_queue_size: 27, 16;
     submission_queue_size, set_submission_queue_size: 11, 0;
@@ -76,7 +78,7 @@ bitfield! {
 impl Copy for AdminQueueAttributes {}
 impl Clone for AdminQueueAttributes {
     fn clone(&self) -> Self {
-        Self(self.0.clone())
+        *self
     }
 }
 
@@ -209,9 +211,7 @@ impl RegistryHandler for NvmeDeviceRegistryHandler {
         };
         log::debug!("NVMe namespace {namespace_id} has size={size}, capacity={cap} and utilitization={util}, format={lbaf:?}, SGL support={sgl_support:x}");
 
-        {
-            self.msix_table.lock().set_mask(ivx as usize, false)
-        };
+        self.msix_table.lock().set_mask(ivx as usize, false);
 
         Ok(Box::new(block_store::NamespaceBlockStore {
             total_size: size,
@@ -456,15 +456,13 @@ pub fn init_nvme_over_pcie(
     let mut msix_table = None;
 
     for cap in hdr.capabilities() {
-        match cap {
-            pcie::CapabilityBlock::MsiX(msix) => {
-                log::debug!("NVMe device uses MSI-X: {msix:?}");
-                msix_table = Some(pcie::msix::MsiXTable::from_config(hdr, &msix));
-                msix.enable();
-                break;
-            }
-            _ => {}
+        if let pcie::CapabilityBlock::MsiX(msix) = cap {
+            log::debug!("NVMe device uses MSI-X: {msix:?}");
+            msix_table = Some(pcie::msix::MsiXTable::from_config(hdr, &msix));
+            msix.enable();
+            break;
         }
+        // we only support MSI-X with NVMe for now
     }
 
     let h = NvmeDeviceRegistryHandler::configure(

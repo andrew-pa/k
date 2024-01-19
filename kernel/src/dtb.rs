@@ -163,7 +163,7 @@ impl DeviceTree {
                     found_node = true;
                 }
                 StructureItem::StartNode(_) if found_node => {
-                    while let Some(j) = dt.next() {
+                    for j in dt.by_ref() {
                         if let StructureItem::EndNode = j {
                             break;
                         }

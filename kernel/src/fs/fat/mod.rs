@@ -112,7 +112,8 @@ impl File for FatFile {
         src_address: PhysicalAddress,
         num_pages: usize,
     ) -> Result<(), Error> {
-        todo!()
+        todo!();
+        Ok(())
     }
 }
 
@@ -172,7 +173,10 @@ impl Handler {
 
         // check MBR magic bytes
         if mbr_data[64] != 0x55 && mbr_data[65] != 0xaa {
-            return Err(todo!("bad mbr"));
+            return Err(Error::BadMetadata {
+                message: "bad MBR magic bytes",
+                value: ((mbr_data[64] as usize) << 8) | mbr_data[65] as usize,
+            });
         }
 
         log::debug!("MBR: {mbr_data:x?}");
