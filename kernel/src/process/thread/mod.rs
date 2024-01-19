@@ -78,7 +78,7 @@ pub fn spawn_thread(thread: Thread) {
 
 impl Thread {
     /// Save the current thread state into this thread, assuming an exception is being handled.
-    pub unsafe fn save(&mut self, regs: &Registers) {
+    pub fn save(&mut self, regs: &Registers) {
         self.register_state = *regs;
         self.program_status = read_saved_program_status();
         self.pc = read_exception_link_reg();
@@ -86,6 +86,12 @@ impl Thread {
     }
 
     /// Restore this thread so that it will resume when the kernel finishes processesing an exception.
+    ///
+    /// # Safety
+    /// This function writes to the program counter/program status register.
+    /// The caller is responsible for making sure that this `Thread` contains valid state before
+    /// attempting to restore that state, otherwise the processor could start to execute in an
+    /// unexpected/invalid state.
     pub unsafe fn restore(&self, regs: &mut Registers) {
         write_exception_link_reg(self.pc);
         write_stack_pointer(0, self.sp);

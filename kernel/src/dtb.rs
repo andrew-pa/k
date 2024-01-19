@@ -108,6 +108,11 @@ pub struct StringList<'dt> {
 }
 
 impl DeviceTree {
+    /// Create a [`DeviceTree`] struct that represents a device tree blob at some virtual address.
+    ///
+    /// # Safety
+    /// It is up to the caller to make sure that `addr` actually points to a valid, mapped device
+    /// tree blob.
     pub unsafe fn at_address(addr: VirtualAddress) -> DeviceTree {
         let addr = addr.as_ptr();
         let header = BlobHeader {

@@ -292,6 +292,10 @@ unsafe extern "C" fn handle_synchronous_exception(regs: *mut Registers, esr: usi
         );
     }
 
+    let regs = regs
+        .as_mut()
+        .expect("registers ptr should always be non-null");
+
     let (pid, tid) = process::scheduler().pause_current_thread(regs);
 
     let previous_asid = pid
@@ -303,12 +307,7 @@ unsafe extern "C" fn handle_synchronous_exception(regs: *mut Registers, esr: usi
 
     if ec.is_system_call() {
         // system call
-        handle_system_call(
-            pid,
-            regs.as_mut()
-                .expect("registers ptr should always be non-null"),
-            esr.iss() as u16,
-        );
+        handle_system_call(pid, regs, esr.iss() as u16);
     } else if ec.is_user_space_page_fault() {
         // page fault in user space
         let pid = pid.expect("this exception is only for page faults in a lower exception level and since the kernel runs at EL1, that means that we can only get here from a fault in EL0, therefore there must be a current process running (or something is very wrong)");
@@ -342,6 +341,10 @@ unsafe extern "C" fn handle_synchronous_exception(regs: *mut Registers, esr: usi
 unsafe extern "C" fn handle_interrupt(regs: *mut Registers, _esr: usize, _far: usize) {
     let ic = interrupt_controller();
 
+    let regs = regs
+        .as_mut()
+        .expect("registers ptr should always be non-null");
+
     let (pid, tid) = process::scheduler().pause_current_thread(regs);
 
     let previous_asid = pid
@@ -354,7 +357,7 @@ unsafe extern "C" fn handle_interrupt(regs: *mut Registers, _esr: usize, _far: u
     while let Some(id) = ic.ack_interrupt() {
         log::trace!("handling interrupt {id} ELR={}", read_exception_link_reg());
         match interrupt_handlers().get_mut(&id) {
-            Some(mut h) => (*h)(id, regs.as_mut().expect("registers ptr should be non-null")),
+            Some(mut h) => (*h)(id, regs),
             None => log::warn!("unhandled interrupt {id}"),
         }
         log::trace!("finished interrupt {id}");

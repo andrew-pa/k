@@ -63,13 +63,19 @@ impl ThreadScheduler {
             .retain(|id| *id != thread);
     }
 
+    /// Pause the currently running thread by saving the current thread execution state into the
+    /// thread known to be currently running.
+    ///
+    /// # Safety
+    /// It is assumed that the currently running thread is the thread the scheduler believes is
+    /// currently running.
     pub unsafe fn pause_current_thread(
         &mut self,
-        current_regs: *mut Registers,
+        current_regs: &mut Registers,
     ) -> (Option<ProcessId>, ThreadId) {
         let current = self.currently_running();
         if let Some(mut t) = threads().get_mut(&current) {
-            t.save(current_regs.as_ref().unwrap());
+            t.save(current_regs);
             log::trace!("paused thread {current} @ {}, sp={}", t.pc, t.sp);
             (t.parent, current)
         } else {
@@ -78,10 +84,10 @@ impl ThreadScheduler {
         }
     }
 
-    pub unsafe fn resume_thread(
+    unsafe fn resume_thread(
         &mut self,
         id: ThreadId,
-        current_regs: *mut Registers,
+        current_regs: &mut Registers,
         previous_asid: Option<u16>,
     ) {
         let thread = threads()
@@ -95,12 +101,17 @@ impl ThreadScheduler {
 
         crate::memory::paging::flush_tlb_for_asid(previous_asid.unwrap_or(0));
 
-        thread.restore(current_regs.as_mut().unwrap());
+        thread.restore(current_regs);
     }
 
+    /// Resume the execution state of the thread that the scheduler considers current.
+    ///
+    /// # Safety
+    /// It is assumed that the context of this call is such that resuming the thread will be
+    /// correct. In other words, when returning from an exception.
     pub unsafe fn resume_current_thread(
         &mut self,
-        current_regs: *mut Registers,
+        current_regs: &mut Registers,
         previous_asid: Option<u16>,
     ) {
         self.resume_thread(self.currently_running(), current_regs, previous_asid)

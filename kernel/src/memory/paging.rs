@@ -249,15 +249,12 @@ impl core::fmt::Debug for PageTable {
 }
 
 impl PageTable {
-    pub unsafe fn at_address(high_addresses: bool, addr: PhysicalAddress, asid: u16) -> PageTable {
-        PageTable {
-            high_addresses,
-            asid,
-            level0_table: unsafe { addr.to_virtual_canonical().as_ptr() },
-            level0_phy_addr: addr,
-        }
-    }
-
+    /// Create the [`PageTable`] instance that represents the kernel's page table that is
+    /// originally constructed in `start.S` at `_kernel_page_table_root`.
+    ///
+    /// # Safety
+    /// This function should only be called once to prevent aliased references to the same table.
+    /// This function also assumes that `start.S` did its job correctly.
     // TODO: how do we synchronize access to this table if there is more than one reference to it?
     unsafe fn kernel_table() -> PageTable {
         let level0_table = core::mem::transmute(core::ptr::addr_of_mut!(_kernel_page_table_root));
@@ -298,6 +295,11 @@ impl PageTable {
         Ok(p)
     }
 
+    /// Activate this page table as the current one being used to map virtual addresses.
+    ///
+    /// # Safety
+    /// It is up to the caller to make sure that we can continue to execute after this function is
+    /// called. This function writes system registers.
     pub unsafe fn activate(&self) {
         log::trace!(
             "activating table @ {}, ASID {:x}",
@@ -525,6 +527,10 @@ impl Drop for PageTable {
     }
 }
 
+/// Disable the MMU
+///
+/// # Safety
+/// Turns off virtual memory. Must ensure this is OK in context.
 pub unsafe fn disable_mmu() {
     log::debug!("disabling MMU!");
     core::arch::asm!(
@@ -537,6 +543,10 @@ pub unsafe fn disable_mmu() {
     )
 }
 
+/// Enables the MMU
+///
+/// # Safety
+/// Turns on virtual memory. Must ensure this is OK in context.
 pub unsafe fn enable_mmu() {
     log::debug!("enabling MMU!");
     core::arch::asm!(
@@ -590,16 +600,20 @@ bitfield! {
     pub size_offset0, set_size_offset0: 5, 0;
 }
 
-pub unsafe fn get_tcr() -> TranslationControlReg {
+pub fn read_tcr() -> TranslationControlReg {
     let mut tcr = TranslationControlReg(0);
-    core::arch::asm!(
-        "mrs {val}, TCR_EL1",
-        val = out(reg) tcr.0
-    );
+    unsafe {
+        core::arch::asm!(
+            "mrs {val}, TCR_EL1",
+            val = out(reg) tcr.0
+        );
+    }
     tcr
 }
 
-pub unsafe fn set_tcr(new_tcr: TranslationControlReg) {
+/// # Safety
+/// It is up to the caller to make sure that the new TCR value is correct.
+pub unsafe fn write_tcr(new_tcr: TranslationControlReg) {
     log::trace!("setting TCR to {:x}", new_tcr.0);
     core::arch::asm!(
         "msr TCR_EL1, {val}",
@@ -608,7 +622,10 @@ pub unsafe fn set_tcr(new_tcr: TranslationControlReg) {
     )
 }
 
-/// Flush the TLB for everything in EL1
+/// Flush the TLB for everything in EL1.
+///
+/// # Safety
+/// It is up to the caller to make sure that the flush makes sense in context.
 pub unsafe fn flush_tlb_total_el1() {
     core::arch::asm!(
         "DSB ISHST",    // ensure writes to tables have completed
@@ -621,6 +638,10 @@ pub unsafe fn flush_tlb_total_el1() {
     )
 }
 
+/// Flush the TLB for a specific ASID.
+///
+/// # Safety
+/// It is up to the caller to make sure that the flush makes sense in context.
 pub unsafe fn flush_tlb_for_asid(asid: u16) {
     core::arch::asm!(
         "DSB ISHST", // ensure writes to tables have completed

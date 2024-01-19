@@ -12,6 +12,9 @@ extern "C" {
 }
 
 /// Zero the BSS section of the kernel as is expected by the ELF
+///
+/// # Safety
+/// This function should only be called *once* at the beginning of boot.
 pub unsafe fn zero_bss_section() {
     let bss_start = core::ptr::addr_of_mut!(__bss_start);
     let bss_end = core::ptr::addr_of_mut!(__bss_end);
@@ -36,7 +39,12 @@ pub struct PhysicalAddress(pub usize);
 pub struct VirtualAddress(pub usize);
 
 impl PhysicalAddress {
-    ///TODO: WARN: assumes that we have identity mapped memory starting at 0xffff_0000_0000_0000 and that this physical address is part of the range of memory that has been identity mapped
+    /// Convert a physical address to a virtual address that is "canonically" mapped into the
+    /// kernel's address space.
+    ///
+    /// # Safety
+    /// This function *assumes* that we have identity mapped memory starting at 0xffff_0000_0000_0000 and that this physical address is part of the range of memory that has been identity mapped at boot.
+    /// This is currently a 4GiB region starting at p:0x4000_0000 (see `start.S`).
     pub unsafe fn to_virtual_canonical(self) -> VirtualAddress {
         VirtualAddress(self.0 + 0xffff_0000_0000_0000)
     }
@@ -85,8 +93,11 @@ impl VirtualAddress {
         self.0 as *mut T
     }
 
-    ///TODO: WARN: assumes that we have identity mapped memory starting at 0xffff_0000_0000_0000, this will only work if the address is in the identity mapped region
-    pub unsafe fn to_physical_canonical(self) -> PhysicalAddress {
+    /// Convert this virtual address into a physical address, assuming the "canonical" mapping.
+    ///
+    /// This function *assumes* that we have identity mapped memory starting at 0xffff_0000_0000_0000 and that this physical address is part of the range of memory that has been identity mapped at boot.
+    /// This is currently a 4GiB region starting at p:0x4000_0000 (see `start.S`).
+    pub fn to_physical_canonical(self) -> PhysicalAddress {
         PhysicalAddress(self.0 - 0xffff_0000_0000_0000)
     }
 

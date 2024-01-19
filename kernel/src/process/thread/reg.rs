@@ -54,10 +54,11 @@ pub fn read_saved_program_status() -> SavedProgramStatus {
 }
 
 /// Write to the SPSR_EL1 register.
-pub fn write_saved_program_status(spsr: &SavedProgramStatus) {
-    unsafe {
-        core::arch::asm!("msr SPSR_EL1, {v}", v = in(reg) spsr.0);
-    }
+///
+/// # Safety
+/// It is up to the caller to ensure that the SavedProgramStatus value is correct.
+pub unsafe fn write_saved_program_status(spsr: &SavedProgramStatus) {
+    core::arch::asm!("msr SPSR_EL1, {v}", v = in(reg) spsr.0);
 }
 
 /// Read the value of the program counter when the exception occured.
@@ -70,10 +71,11 @@ pub fn read_exception_link_reg() -> VirtualAddress {
 }
 
 /// Write the value that the program counter will assume when the exception handler is finished.
-pub fn write_exception_link_reg(addr: VirtualAddress) {
-    unsafe {
-        core::arch::asm!("msr ELR_EL1, {v}", v = in(reg) addr.0);
-    }
+///
+/// # Safety
+/// It is up to the caller to ensure that the address is valid to store as the program counter.
+pub unsafe fn write_exception_link_reg(addr: VirtualAddress) {
+    core::arch::asm!("msr ELR_EL1, {v}", v = in(reg) addr.0);
 }
 
 /// Reads the stack pointer for exception level `el`.
@@ -92,6 +94,11 @@ pub fn read_stack_pointer(el: u8) -> VirtualAddress {
 }
 
 /// Writes the stack pointer for exception level `el`.
+///
+/// # Safety
+/// It is up to the caller to ensure that the pointer is valid to be stack pointer (i.e. the memory
+/// is allocated and mapped correctly). It is also up to the caller to pass a value for `el` that
+/// is valid considering the current value of `el`.
 pub unsafe fn write_stack_pointer(el: u8, sp: VirtualAddress) {
     match el {
         0 => core::arch::asm!("msr SP_EL0, {v}", v = in(reg) sp.0),
