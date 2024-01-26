@@ -2,6 +2,8 @@
 
 use core::num::NonZeroU32;
 
+pub mod system_calls;
+
 #[repr(u16)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum CommandKind {

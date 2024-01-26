@@ -71,7 +71,7 @@ pub trait InterruptController {
 }
 
 pub type InterruptHandler = Box<dyn FnMut(InterruptId, &mut Registers)>;
-pub type SyscallHandler = fn(u16, process::ProcessId, &mut Registers);
+pub type SyscallHandler = fn(u16, process::ProcessId, process::ThreadId, &mut Registers);
 
 static mut IC: OnceCell<Mutex<Box<dyn InterruptController>>> = OnceCell::new();
 static mut INTERRUPT_HANDLERS: OnceCell<CHashMapG<InterruptId, InterruptHandler>> = OnceCell::new();
@@ -264,9 +264,14 @@ impl Display for ExceptionSyndromeRegister {
     }
 }
 
-fn handle_system_call(pid: Option<ProcessId>, regs: &mut Registers, id: u16) {
+fn handle_system_call(
+    pid: Option<ProcessId>,
+    tid: process::ThreadId,
+    regs: &mut Registers,
+    id: u16,
+) {
     match system_call_handlers().get(&id) {
-        Some(h) => (*h)(id, pid.unwrap_or(0), regs),
+        Some(h) => (*h)(id, pid.unwrap_or(0), tid, regs),
         None => {
             log::warn!(
                 "unknown system call: pid={:?}, id = 0x{:x}, registers = {:?}",
@@ -307,7 +312,7 @@ unsafe extern "C" fn handle_synchronous_exception(regs: *mut Registers, esr: usi
 
     if ec.is_system_call() {
         // system call
-        handle_system_call(pid, regs, esr.iss() as u16);
+        handle_system_call(pid, tid, regs, esr.iss() as u16);
     } else if ec.is_user_space_page_fault() {
         // page fault in user space
         let pid = pid.expect("this exception is only for page faults in a lower exception level and since the kernel runs at EL1, that means that we can only get here from a fault in EL0, therefore there must be a current process running (or something is very wrong)");

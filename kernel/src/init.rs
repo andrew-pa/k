@@ -47,3 +47,37 @@ pub fn configure_time_slicing(dt: &DeviceTree) {
     // set timer to go off as soon as we enable interrupts
     timer::write_timer_value(0);
 }
+
+pub fn register_system_call_handlers() {
+    use kapi::system_calls::SystemCallNumber;
+
+    // TODO: ideally this is a whole system with a ring buffer, listening, etc and also records
+    // which process made the log, but for now this will do.
+    exception::system_call_handlers().insert(
+        SystemCallNumber::WriteLog as u16,
+        |id, pid, tid, regs| unsafe {
+            let record = &*(regs.x[0] as *const log::Record);
+            log::logger().log(record);
+        },
+    );
+
+    process::register_system_call_handlers();
+}
+
+pub fn spawn_task_executor_thread() {
+    log::info!("creating task executor thread");
+    let task_stack = memory::PhysicalBuffer::alloc(4 * 1024, &Default::default())
+        .expect("allocate task exec thread stack");
+    log::debug!("task stack = {task_stack:x?}");
+
+    process::thread::spawn_thread(process::Thread::kernel_thread(
+        process::thread::TASK_THREAD,
+        tasks::run_executor,
+        &task_stack,
+    ));
+
+    // the task executor thread should continue to run while the kernel is running so we prevent
+    // the stack's memory from being freed by forgetting it
+    // TODO: if we need to resize the stack we need to keep track of this?
+    core::mem::forget(task_stack);
+}

@@ -1,7 +1,8 @@
 #![allow(unused)]
-use core::{cell::OnceCell, ops::Range};
+use core::{cell::OnceCell, ops::Range, ptr::NonNull};
 
 use bitfield::bitfield;
+use smallvec::SmallVec;
 use snafu::{ResultExt, Snafu};
 use spin::Mutex;
 
@@ -45,23 +46,28 @@ impl PageTableEntry {
         e
     }
 
-    /// Create a PageTableEntry describing a block output address
-    pub fn block_entry(base_address: PhysicalAddress, level: u8) -> PageTableEntry {
+    /// Create a PageTableEntry describing a block output address.
+    /// Returns None if the address is not properly aligned to be allocated as a block at this level.
+    pub fn block_entry(base_address: PhysicalAddress, level: u8) -> Option<PageTableEntry> {
+        match level {
+            1 => {
+                if (base_address.0 & 0xff_ffff) != 0 {
+                    return None;
+                }
+            }
+            2 => {
+                if (base_address.0 & 0xf_ffff) != 0 {
+                    return None;
+                }
+            }
+            _ => return None,
+        }
         let mut e = PageTableEntry(0);
         e.set_valid(true);
         e.set_type(false);
         e.set_af(true);
-        e.set_address(
-            ((base_address.0 as u64)
-                & (match level {
-                    // zero out the RES0 bits
-                    1 => 0xffff_ffff_f000_0000,
-                    2 => 0xffff_ffff_fff0_0000,
-                    _ => panic!("invalid page level {}", level),
-                }))
-                >> 12,
-        );
-        e
+        e.set_address((base_address.0 as u64) >> 12);
+        Some(e)
     }
 
     /// Create a PageTableEntry describing a page output address
@@ -82,7 +88,7 @@ impl PageTableEntry {
     /// Return a reference to the next level table that this entry refers to, or None if the entry
     /// is un-allocated or otherwise does not refer to a level table
     /// TODO: may still return a Some(...) if the entry is actually a page descriptor!
-    fn table_ref(&self, lvl: u8) -> Option<*mut LevelTable> {
+    fn table_ref(&self, lvl: u8) -> Option<NonNull<LevelTable>> {
         // TODO: this function is quite complex, because we need to figure out the address of the
         // table in the current VIRTUAL memory space but we only have the PHYSICAL base address.
         // One potential solution is to identity map (by necessity in the kernel's low address range)
@@ -97,6 +103,7 @@ impl PageTableEntry {
         // this is safe, because at any level < 3 where table_phy_addr() is Some will have a pointer to a valid LevelTable -- so long at the identity mapping is set up correctly!
         self.table_phy_addr()
             .map(|a| unsafe { a.to_virtual_canonical().as_ptr() })
+            .and_then(NonNull::new)
     }
 
     /// WARN: may still return a Some(...) if the entry is actually a page descriptor! Call table_ref() first!
@@ -111,7 +118,7 @@ impl PageTableEntry {
         if !self.valid() || (lvl < 3 && self.get_type()) || (lvl >= 3 && !self.get_type()) {
             return None; // invalid or table entry
         }
-        Some(PhysicalAddress(self.address() as usize))
+        Some(PhysicalAddress((self.address() as usize) << 12))
     }
 }
 
@@ -149,30 +156,28 @@ impl PageTableEntryOptions {
     }
 }
 
-struct LevelTable {
-    entries: [PageTableEntry; 512],
-}
+type LevelTable = [PageTableEntry; 512];
 
-impl core::ops::Index<usize> for LevelTable {
-    type Output = PageTableEntry;
-
-    fn index(&self, index: usize) -> &Self::Output {
-        &self.entries[index]
-    }
-}
-
-impl core::ops::IndexMut<usize> for LevelTable {
-    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
-        &mut self.entries[index]
-    }
-}
+// impl core::ops::Index<usize> for LevelTable {
+//     type Output = PageTableEntry;
+//
+//     fn index(&self, index: usize) -> &Self::Output {
+//         &self.entries[index]
+//     }
+// }
+//
+// impl core::ops::IndexMut<usize> for LevelTable {
+//     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+//         &mut self.entries[index]
+//     }
+// }
 
 // WARN: Currently assumes that physical memory is identity mapped in the 0x0000 prefix!
 pub struct PageTable {
     /// true => this page table is for virtual addresses of prefix 0xffff, false => prefix must be 0x0000
     high_addresses: bool,
     pub asid: u16,
-    level0_table: *mut LevelTable,
+    level0_table: NonNull<LevelTable>,
     level0_phy_addr: PhysicalAddress,
 }
 
@@ -208,12 +213,10 @@ impl core::fmt::Debug for PageTable {
         fn print_table(
             f: &mut core::fmt::Formatter<'_>,
             lvl: u8,
-            table: *mut LevelTable,
+            table: NonNull<LevelTable>,
             table_phy_addr: PhysicalAddress,
         ) -> core::fmt::Result {
-            let mut entries = unsafe { &table.as_ref().expect("table ptr is valid").entries }
-                .iter()
-                .peekable();
+            let mut entries = unsafe { table.as_ref() }.iter().peekable();
             let mut index = 0;
             while let Some(entry) = entries.next() {
                 for _ in 0..lvl {
@@ -257,12 +260,14 @@ impl PageTable {
     /// This function also assumes that `start.S` did its job correctly.
     // TODO: how do we synchronize access to this table if there is more than one reference to it?
     unsafe fn kernel_table() -> PageTable {
-        let level0_table = core::mem::transmute(core::ptr::addr_of_mut!(_kernel_page_table_root));
+        let level0_table: *mut LevelTable =
+            core::mem::transmute(core::ptr::addr_of_mut!(_kernel_page_table_root));
 
         PageTable {
             high_addresses: true,
             asid: 0,
-            level0_table,
+            level0_table: NonNull::new(level0_table)
+                .expect("kernel page table pointer is non-null"),
             level0_phy_addr: VirtualAddress::from(level0_table).to_physical_canonical(),
         }
     }
@@ -272,7 +277,10 @@ impl PageTable {
         Ok(PageTable {
             high_addresses,
             asid,
-            level0_table: unsafe { level0_phy_addr.to_virtual_canonical().as_ptr() },
+            level0_table: unsafe {
+                NonNull::new(level0_phy_addr.to_virtual_canonical().as_ptr())
+                    .expect("allocator returns non-null pointer")
+            },
             level0_phy_addr,
         })
     }
@@ -371,7 +379,7 @@ impl PageTable {
         }
 
         if !overwrite {
-            // TODO: this appears to simply not work at all, but it is of dubious importance
+            todo!("this appears to simply not work at all, but it is of dubious importance");
             // TODO: this always takes linear time in the number of pages although the actual allocation
             // doesn't. They could probably both have the same runtime though with some cleverness.
             let mut page_index = 0;
@@ -380,7 +388,7 @@ impl PageTable {
                 let (tag, i0, i1, i2, i3, po) = page_start.to_parts();
                 let mut table = self.level0_table;
                 for (lvl, i) in [i0, i1, i2, i3].into_iter().enumerate() {
-                    let tr = unsafe { table.as_ref().expect("table ptr is valid") };
+                    let tr = unsafe { table.as_ref() };
                     if let Some(existing_table) = tr[i].table_ref(lvl as u8) {
                         table = existing_table;
                     } else if tr[i].valid() {
@@ -409,32 +417,32 @@ impl PageTable {
                 (1, i1, i2 == 0 && i3 == 0, 512 * 512), // 1GiB in pages
                 (2, i2, i3 == 0, 512),                  // 2MiB in pages
             ] {
-                let tr = unsafe { table.as_mut().expect("table ptr is valid") };
+                let tr = unsafe { table.as_mut() };
                 if let Some(existing_table) = tr[i].table_ref(lvl) {
                     table = existing_table;
                 } else {
                     assert!(!tr[i].valid());
                     if can_allocate_large_block && (page_count - page_index) >= large_block_size {
-                        tr[i] = options.apply(PageTableEntry::block_entry(
+                        if let Some(e) = PageTableEntry::block_entry(
                             PhysicalAddress(phy_start.0 + page_index * PAGE_SIZE),
                             lvl,
-                        ));
-                        page_index += large_block_size;
-                        continue 'top;
-                    } else {
-                        tr[i] = PageTableEntry::table_desc(
-                            Self::allocate_table().context(MemorySnafu)?,
-                        );
-                        table = tr[i].table_ref(lvl).unwrap();
+                        ) {
+                            tr[i] = options.apply(e);
+                            page_index += large_block_size;
+                            continue 'top;
+                        }
                     }
+
+                    tr[i] =
+                        PageTableEntry::table_desc(Self::allocate_table().context(MemorySnafu)?);
+                    table = tr[i].table_ref(lvl).unwrap();
                 }
             }
 
             unsafe {
-                table.as_mut().expect("final table ptr is valid")[i3] =
-                    options.apply(PageTableEntry::page_entry(PhysicalAddress(
-                        phy_start.0 + page_index * PAGE_SIZE,
-                    )));
+                table.as_mut()[i3] = options.apply(PageTableEntry::page_entry(PhysicalAddress(
+                    phy_start.0 + page_index * PAGE_SIZE,
+                )));
             }
             page_index += 1;
         }
@@ -455,7 +463,7 @@ impl PageTable {
                 (2, i2, 512),       // 2MiB in pages
                 (3, i3, 1),
             ] {
-                let tr = unsafe { table.as_mut().expect("table ptr is valid") };
+                let tr = unsafe { table.as_mut() };
                 if let Some(existing_table) = tr[i].table_ref(lvl) {
                     table = existing_table;
                 } else {
@@ -489,7 +497,7 @@ impl PageTable {
             (3, i3, 1),
         ] {
             log::debug!("lvl={lvl:x}, i={i}, block_size={block_size}");
-            let tr = unsafe { table.as_ref().expect("table ptr is valid") };
+            let tr = unsafe { table.as_ref() };
             log::debug!("{table:?}");
             if let Some(existing_table) = tr[i].table_ref(lvl) {
                 table = existing_table;
@@ -499,23 +507,23 @@ impl PageTable {
                 //include bits from i1/i2/i3 in the page/block offset
                 return tr[i]
                     .base_address(lvl)
-                    .map(|PhysicalAddress(addr)| PhysicalAddress((addr << 12) + po));
+                    .map(|PhysicalAddress(addr)| PhysicalAddress(addr + po));
             }
         }
 
         unreachable!("table ref in level 3 table")
     }
 
-    pub fn virtual_address_of(&self, phy: PhysicalAddress) -> Option<VirtualAddress> {
-        todo!()
+    pub fn iter(&self) -> PageTableIter {
+        PageTableIter::new(self)
     }
 }
 
 impl Drop for PageTable {
     fn drop(&mut self) {
         // WARN: Does not drop actual pages!
-        fn drop_table(lvl: u8, table: *mut LevelTable, table_phy_addr: PhysicalAddress) {
-            for entry in unsafe { &table.as_ref().expect("table ptr is valid").entries } {
+        fn drop_table(lvl: u8, table: NonNull<LevelTable>, table_phy_addr: PhysicalAddress) {
+            for entry in unsafe { table.as_ref() } {
                 if let Some(table) = entry.table_ref(lvl) {
                     // we know that entry.table_phy_addr() will actually point to a table because we've already called table_ref()
                     drop_table(lvl + 1, table, entry.table_phy_addr().unwrap());
@@ -524,6 +532,124 @@ impl Drop for PageTable {
             physical_memory_allocator().free(table_phy_addr)
         }
         drop_table(0, self.level0_table, self.level0_phy_addr);
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MappedRegion {
+    pub base_phys_addr: PhysicalAddress,
+    pub base_virt_addr: VirtualAddress,
+    pub page_count: usize,
+}
+
+pub struct PageTableIter<'a> {
+    stack: SmallVec<[(&'a LevelTable, usize); 4]>,
+    tag: usize,
+}
+
+impl PageTableIter<'_> {
+    fn new(pt: &PageTable) -> Self {
+        let mut s = PageTableIter {
+            stack: smallvec::smallvec![(unsafe { pt.level0_table.as_ref() }, 0)],
+            tag: if pt.high_addresses { 0xffff } else { 0x0000 },
+        };
+        s.follow_tree();
+        s
+    }
+
+    fn current_entry(&self) -> Option<&PageTableEntry> {
+        self.stack.last().and_then(|(t, i)| t.get(*i))
+    }
+
+    #[inline]
+    fn lvl(&self) -> u8 {
+        (self.stack.len().saturating_sub(1)) as u8
+    }
+
+    /// size of range spanned by an entry (i.e. the number of bytes mapped under this entry)
+    fn current_entry_span(&self) -> usize {
+        match self.lvl() {
+            0 => 512 * 512 * 512 * PAGE_SIZE,
+            1 => 512 * 512 * PAGE_SIZE,
+            2 => 512 * PAGE_SIZE,
+            3 => PAGE_SIZE,
+            _ => unreachable!(),
+        }
+    }
+
+    fn follow_tree(&mut self) {
+        while let Some(p) = self
+            .current_entry()
+            .filter(|e| e.valid())
+            .and_then(|e| e.table_ref(self.lvl()))
+        {
+            unsafe {
+                self.stack.push((p.as_ref(), 0));
+            }
+        }
+    }
+
+    fn current_va_from_stack(&self) -> VirtualAddress {
+        VirtualAddress::from_parts(
+            self.tag,
+            self.stack.get(0).map(|(_, i)| *i).unwrap_or(0),
+            self.stack.get(1).map(|(_, i)| *i).unwrap_or(0),
+            self.stack.get(2).map(|(_, i)| *i).unwrap_or(0),
+            self.stack.get(3).map(|(_, i)| *i).unwrap_or(0),
+            0,
+        )
+    }
+
+    fn log_stack(&self) {
+        // log::trace!("l0@{:?}, l1@{:?}, l2@{:?}, l3@{:?}; cva={}",
+        //     self.stack.get(0).map(|(_, i)| i),
+        //     self.stack.get(1).map(|(_, i)| i),
+        //     self.stack.get(2).map(|(_, i)| i),
+        //     self.stack.get(3).map(|(_, i)| i),
+        //     self.current_va_from_stack());
+    }
+
+    fn next_entry(&mut self) {
+        self.log_stack();
+        let ces = self.current_entry_span();
+        if let Some((ct, ci)) = self.stack.last_mut() {
+            *ci += 1;
+            if *ci >= ct.len() {
+                self.stack.pop().unwrap();
+                self.next_entry();
+            }
+            self.follow_tree();
+        }
+    }
+
+    /// move to the next valid entry that represents a mapped region
+    fn move_to_next_valid_map_entry(&mut self) {
+        while let Some(e) = self.current_entry() {
+            if e.valid() {
+                return;
+            } else {
+                self.next_entry();
+            }
+        }
+    }
+}
+
+impl<'a> Iterator for PageTableIter<'a> {
+    type Item = MappedRegion;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.move_to_next_valid_map_entry();
+        // inspect current entry
+        let ce = self.current_entry()?;
+        let res = Some(MappedRegion {
+            base_phys_addr: ce.base_address(self.lvl()).expect(
+                "move_to_next_valid_map_entry moved to a valid entry representing a mapped region",
+            ),
+            base_virt_addr: self.current_va_from_stack(),
+            page_count: self.current_entry_span() / PAGE_SIZE,
+        });
+        self.next_entry();
+        res
     }
 }
 

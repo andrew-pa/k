@@ -121,3 +121,71 @@ static mut NEXT_PID: AtomicU32 = AtomicU32::new(1);
 pub fn processes() -> &'static CHashMapG<ProcessId, Process> {
     unsafe { PROCESSES.get_or_init(Default::default) }
 }
+
+fn exit_process(pid: ProcessId) {
+    log::trace!("process {pid} exited");
+    let mut proc = processes()
+        .remove(&pid)
+        .expect("processes only exit once and can only exit if they have already started running");
+
+    // delete and unschedule all threads
+    for tid in proc.threads.into_iter() {
+        scheduler().remove_thread(tid);
+        threads().remove(&tid).expect("process only has valid tids");
+        // drop thread
+    }
+
+    // deal with async resources, and then drop the process (by moving it into the task)
+    crate::tasks::spawn(async move {
+        // free physical memory mapped in process page table, flushing resources as we go
+        for mapped_region in proc.page_tables.iter() {
+            if let Some((map_base_addr, res)) = proc.mapped_files.iter_mut().find(|(ba, r)| {
+                interface::resource::resource_maps(ba, r, mapped_region.base_virt_addr)
+            }) {
+                // TODO: we need to check if the page is dirty
+                match res
+                    .resource
+                    .flush_pages(
+                        (mapped_region.base_virt_addr.0 - map_base_addr.0) as u64,
+                        mapped_region.base_phys_addr,
+                        mapped_region.page_count,
+                    )
+                    .await
+                {
+                    Ok(()) => {}
+                    Err(e) => {
+                        log::error!("failed to flush mapped resource @ {map_base_addr}/{} in exiting process {pid}: {e}", mapped_region.base_virt_addr);
+                    }
+                }
+            }
+
+            physical_memory_allocator()
+                .free_pages(mapped_region.base_phys_addr, mapped_region.page_count);
+        }
+
+        // drop process, releasing its resources
+        // TODO: make sure we don't double free the channel
+    });
+
+    // removing this processes' threads will schedule a new thread from a different process to run next
+}
+
+pub fn register_system_call_handlers() {
+    use kapi::system_calls::SystemCallNumber;
+    let h = crate::exception::system_call_handlers();
+    h.insert(SystemCallNumber::Exit as u16, |_id, pid, _tid, _regs| {
+        exit_process(pid);
+    });
+    h.insert(SystemCallNumber::Yield as u16, |_id, _pid, _tid, _regs| {
+        scheduler().schedule_next_thread();
+    });
+    h.insert(SystemCallNumber::WaitForMessage as u16, |_id, _pid, tid, _regs| {
+        threads().get_mut(&tid)
+            .expect("valid thread ID is currently running")
+            .state = ThreadState::Waiting;
+        // TODO: where do we check for messages to resume execution?
+        todo!("which thread will resume when the process recieves a message which could equally be for any thread?");
+        // TODO: perhaps each thread should have its own channel, or we should otherwise do something about that?
+        scheduler().schedule_next_thread();
+    });
+}

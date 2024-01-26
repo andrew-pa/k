@@ -1,6 +1,8 @@
 use alloc::{collections::VecDeque, vec::Vec};
 use spin::{Mutex, MutexGuard};
 
+use crate::exception;
+
 use super::*;
 
 pub struct ThreadScheduler {
@@ -61,6 +63,10 @@ impl ThreadScheduler {
         self.queues[t.priority as usize]
             .0
             .retain(|id| *id != thread);
+
+        if thread == self.current_thread {
+            self.schedule_next_thread();
+        }
     }
 
     /// Pause the currently running thread by saving the current thread execution state into the

@@ -21,21 +21,22 @@ extern crate alloc;
 
 #[no_mangle]
 pub extern "C" fn kmain() {
-    // make sure the BSS section is zeroed
     unsafe {
         memory::zero_bss_section();
     }
+
     init::init_logging(log::LevelFilter::Trace);
 
+    // load the device tree blob that u-boot places at 0x4000_0000 when it loads the kernel
     let dt = unsafe {
         dtb::DeviceTree::at_address(memory::PhysicalAddress(0x4000_0000).to_virtual_canonical())
     };
 
-    // initialize virtual memory and interrupts
     unsafe {
         exception::install_exception_vector_table();
     }
 
+    // setup memory management
     memory::init_physical_memory_allocator(&dt);
     memory::paging::init_kernel_page_table();
 
@@ -43,9 +44,9 @@ pub extern "C" fn kmain() {
 
     memory::init_virtual_address_allocator();
     exception::init_interrupts(&dt);
-    process::thread::scheduler::init_scheduler(process::thread::IDLE_THREAD);
     tasks::init_executor();
     registry::init_registry();
+    process::thread::scheduler::init_scheduler(process::thread::IDLE_THREAD);
 
     log::info!("kernel systems initialized");
 
@@ -57,20 +58,11 @@ pub extern "C" fn kmain() {
     );
     bus::pcie::init(&dt, &pcie_drivers);
 
-    // initialize system timer and interrupt
     init::configure_time_slicing(&dt);
 
-    exception::system_call_handlers().insert(3, |id, pid, regs| unsafe {
-        log::info!("process {pid}: 0x{:x}", regs.x[0]);
-    });
+    init::register_system_call_handlers();
 
-    // TODO: ideally this is a whole system with a ring buffer, listening, etc and also records
-    // which process made the log, but for now this will do.
-    exception::system_call_handlers().insert(4, |id, pid, regs| unsafe {
-        let record = &*(regs.x[0] as *const log::Record);
-        log::logger().log(record);
-    });
-
+    // mount root filesystem and start init process
     tasks::spawn(async {
         log::info!("open /dev/nvme/pci@0:2:0/1");
         let mut bs = {
@@ -105,16 +97,7 @@ pub extern "C" fn kmain() {
         test_main();
     });
 
-    log::info!("creating task executor thread");
-    let task_stack = memory::PhysicalBuffer::alloc(4 * 1024, &Default::default())
-        .expect("allocate task exec thread stack");
-    log::debug!("task stack = {task_stack:x?}");
-
-    process::thread::spawn_thread(process::Thread::kernel_thread(
-        process::thread::TASK_THREAD,
-        tasks::run_executor,
-        &task_stack,
-    ));
+    init::spawn_task_executor_thread();
 
     // enable all interrupts in DAIF process state mask
     log::trace!("enabling interrupts");

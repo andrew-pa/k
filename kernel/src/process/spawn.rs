@@ -41,14 +41,17 @@ fn load_segment(
     log::trace!("mapping segment {seg:x?}");
     let page_aligned_vaddr = VirtualAddress((seg.p_vaddr as usize) & !(PAGE_SIZE - 1));
     let page_alignment_offset = (seg.p_vaddr as usize) & (PAGE_SIZE - 1);
-    log::trace!(
-        "page aligned p_vaddr = {page_aligned_vaddr}, alignment_offset = {page_alignment_offset:x}"
-    );
     let page_count = (seg.p_memsz as usize + page_alignment_offset).div_ceil(PAGE_SIZE);
     let mut dest_memory_segment =
         PhysicalBuffer::alloc(page_count, &Default::default()).context(MemorySnafu {
             reason: "allocate process memory segement",
         })?;
+
+    log::trace!(
+        "\tpage aligned p_vaddr = {page_aligned_vaddr}, alignment_offset = {page_alignment_offset:x}, physical address = {}, page count = {page_count}",
+        dest_memory_segment.physical_address()
+    );
+
     let src_start = seg.p_offset as usize;
     let src_end = src_start + (seg.p_filesz as usize);
     let dest_end = page_alignment_offset + seg.p_filesz as usize;
@@ -63,7 +66,6 @@ fn load_segment(
     }
     // let go of buffer, we will free pages by walking the page table when the process dies
     let (pa, _) = dest_memory_segment.unmap();
-    log::trace!("segment phys addr = {pa}");
     // TODO: set correct page flags beyond R/W, perhaps also parse p_flags more rigorously
     pt.map_range(
         pa,

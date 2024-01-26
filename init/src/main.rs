@@ -35,6 +35,11 @@ fn log_record(r: &log::Record) {
     }
 }
 
+#[inline]
+fn exit() {
+    unsafe { asm!("svc #1") }
+}
+
 pub struct KernelLogger;
 
 impl log::Log for KernelLogger {
@@ -81,18 +86,14 @@ pub extern "C" fn _start(
 
     let sus_addr = 0x5000 as *mut u8;
     let x = unsafe { sus_addr.read_volatile() };
-    let mut i: usize = x as usize;
-    loop {
-        if i % 10000 == 0 {
-            log_oof(i);
-        }
-        i = i.wrapping_add(1);
-    }
+    log::info!("got {x}");
+    exit();
+    loop {}
 }
 
 #[panic_handler]
 pub fn panic_handler(info: &core::panic::PanicInfo) -> ! {
     log::error!("panic! {info}");
-    // TODO: exit process via system call
+    exit();
     loop {}
 }
