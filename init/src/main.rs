@@ -87,7 +87,25 @@ pub extern "C" fn _start(
     let sus_addr = 0x5000 as *mut u8;
     let x = unsafe { sus_addr.read_volatile() };
     log::info!("got {x}");
-    exit();
+
+    // let path = "/fat/abcdefghij/test.txt";
+    let path = "/fat/init";
+    log::info!("spawning process {path}");
+    ch.post(&Command {
+        kind: kapi::CommandKind::SpawnProcess,
+        id: 1,
+        completion_semaphore: None,
+        args: [path.as_ptr() as u64, path.len() as u64, 0, 0],
+    })
+    .expect("post message to channel");
+
+    loop {
+        if let Some(c) = ch.poll() {
+            log::info!("got kernel response: {c:?}");
+            break;
+        }
+    }
+
     loop {}
 }
 

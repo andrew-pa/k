@@ -74,6 +74,7 @@ impl<'sq> Command<'sq> {
 
     #[inline]
     pub fn set_command_id(mut self, id: u16) -> Command<'sq> {
+        log::trace!("setting command id to {id}");
         self.cmd[0].set_bit_range(31, 16, id);
         self
     }
@@ -128,9 +129,8 @@ impl<'sq> Command<'sq> {
             let mut next_page_addr = region.0;
             while num_blocks < region.1 {
                 if current_offset == prp_page.len() - 1 {
-                    let mut buf = PhysicalBuffer::alloc(1, &Default::default())
+                    let mut buf = PhysicalBuffer::alloc_zeroed(1, &Default::default())
                         .context(crate::storage::MemorySnafu)?;
-                    buf.as_bytes_mut().fill(0);
                     prp_page[current_offset] = buf.physical_address();
                     current_offset = 0;
                     self.extra_data_ptr_buffers.push(buf);
@@ -208,7 +208,10 @@ impl SubmissionQueue {
         let page_count = (entry_count as usize * SUBMISSION_ENTRY_SIZE).div_ceil(PAGE_SIZE);
         Ok(SubmissionQueue {
             id,
-            queue_memory: PhysicalBuffer::alloc(page_count, &PageTableEntryOptions::default())?,
+            queue_memory: PhysicalBuffer::alloc_zeroed(
+                page_count,
+                &PageTableEntryOptions::default(),
+            )?,
             entry_count,
             tail: 0,
             tail_doorbell: tail_doorbell.as_ptr(),
@@ -396,7 +399,10 @@ impl CompletionQueue {
         let page_count = (entry_count as usize * COMPLETION_ENTRY_SIZE).div_ceil(PAGE_SIZE);
         Ok(CompletionQueue {
             id,
-            queue_memory: PhysicalBuffer::alloc(page_count, &PageTableEntryOptions::default())?,
+            queue_memory: PhysicalBuffer::alloc_zeroed(
+                page_count,
+                &PageTableEntryOptions::default(),
+            )?,
             entry_count,
             head: 0,
             head_doorbell: head_doorbell.as_ptr(),
@@ -494,7 +500,7 @@ impl CompletionQueue {
 
             ptr.as_ref().unwrap()
         };
-        log::trace!("read cmp: {cmp:?}");
+        log::trace!("read cmp: {cmp:?}, head = {}", self.head);
         if cmp.status.phase_tag() == self.current_phase {
             self.head += 1;
             if self.head > self.entry_count {

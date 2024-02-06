@@ -109,18 +109,3 @@ pub extern "C" fn kmain() {
         wait_for_interrupt()
     }
 }
-
-/* TODO:
- *  + initialize MMU & provide API for page allocation and changing page tables. also make sure reserved regions on memory are correctly mapped
- *      - you can identity map the page the instruction ptr is in and then jump elsewhere safely
- *      - need to do initial mapping so that we can compile/link the kernel to run at high addresses
- *  + kernel heap/GlobalAlloc impl
- *  + set up interrupt handlers
- *  + start timer interrupt
- *  + switching between user/kernel space
- *  + process scheduling
- *  - system calls
- *  - message passing
- *  - shared memory
- *  - file system
- */

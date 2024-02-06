@@ -32,16 +32,13 @@ struct Queue<T> {
 
 impl<T> Queue<T> {
     fn new(size_in_pages: usize) -> Result<Queue<T>, MemoryError> {
-        let mut buffer = PhysicalBuffer::alloc(
+        let mut buffer = PhysicalBuffer::alloc_zeroed(
             size_in_pages,
             &PageTableEntryOptions {
                 read_only: false,
                 el0_access: true,
             },
         )?;
-
-        // zero the queue contents
-        buffer.as_bytes_mut().fill(0);
 
         // compute the number of slots in the queue
         let queue_len =

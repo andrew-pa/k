@@ -9,6 +9,7 @@ pub mod system_calls;
 pub enum CommandKind {
     Invalid = 0,
     Test,
+    SpawnProcess,
     Reserved(u16),
 }
 
@@ -27,6 +28,7 @@ pub enum CompletionKind {
     Invalid = 0,
     Success,
     UnknownCommand,
+    Error,
 }
 
 #[repr(C)]

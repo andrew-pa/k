@@ -43,6 +43,16 @@ impl PhysicalBuffer {
         })
     }
 
+    pub fn alloc_zeroed(
+        page_count: usize,
+        page_table_options: &paging::PageTableEntryOptions,
+    ) -> Result<Self, MemoryError> {
+        Self::alloc(page_count, page_table_options).map(|mut s| {
+            s.as_bytes_mut().fill(0);
+            s
+        })
+    }
+
     pub fn physical_address(&self) -> PhysicalAddress {
         self.phy_addr
     }

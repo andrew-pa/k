@@ -96,7 +96,7 @@ fn handle_interrupt(
             "pc addr: 0x{:x}",
             Arc::as_ptr(pending_completions) as *const _ as usize
         );
-        log::debug!("got completion {cmp:?}");
+        log::debug!("got completion {cmp:x?}");
         if let Some(mut pc) = pending_completions.get_mut(&cmp.id) {
             log::debug!("pending completion?");
             *pc = match &*pc {

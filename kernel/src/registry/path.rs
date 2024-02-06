@@ -163,6 +163,12 @@ impl AsRef<Path> for &str {
     }
 }
 
+impl AsRef<Path> for Path {
+    fn as_ref(&self) -> &Path {
+        self
+    }
+}
+
 #[derive(Debug)]
 pub struct PathBuf {
     s: String,

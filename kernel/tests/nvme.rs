@@ -16,8 +16,7 @@ fn write_then_read_scratch() {
             .await
             .unwrap();
         log::info!("supported block size = {}", bs.supported_block_size());
-        let mut buf = memory::PhysicalBuffer::alloc(1, &Default::default()).unwrap();
-        buf.as_bytes_mut().fill(0);
+        let mut buf = memory::PhysicalBuffer::alloc_zeroed(1, &Default::default()).unwrap();
         let data = "Hello, block storage!".as_bytes();
         buf.as_bytes_mut()[0..data.len()].copy_from_slice(data);
         bs.write_blocks(buf.physical_address(), BlockAddress(0), 1)
