@@ -1,3 +1,5 @@
+//! User-space, with scheduled [threads][Thread] grouped into [processes][Process].
+//! Contains the thread scheduler and system message dispatch infrastructure.
 use crate::{
     exception::Registers,
     memory::{
@@ -27,19 +29,31 @@ pub use spawn::{spawn_process, SpawnError};
 use interface::{channel::Channel, resource::MappedFile};
 use thread::*;
 
+/// The unique ID of a process.
 // TODO: make type NonZeroU32 instead
 pub type ProcessId = u32;
 
+/// A user-space process.
+///
+/// A process is a collection of threads that share the same address space and system resources.
 pub struct Process {
+    /// The ID of this process.
     pub id: ProcessId,
-    pub page_tables: PageTable,
+    /// The IDs of the threads running in this process.
     pub threads: SmallVec<[ThreadId; 4]>,
-    pub mapped_files: HashMap<VirtualAddress, MappedFile>,
-    pub channel: Channel,
+    page_tables: PageTable,
+    mapped_files: HashMap<VirtualAddress, MappedFile>,
+    channel: Channel,
     address_space_allocator: VirtualAddressAllocator,
 }
 
 impl Process {
+    /// Get the address space ID (ASID) for this process's page tables.
+    pub fn asid(&self) -> u16 {
+        self.page_tables.asid
+    }
+
+    /// Process any new commands that have been recieved on this process's message channel.
     pub fn dispatch_new_commands(&mut self, tid: ThreadId) {
         while let Some(cmd) = self.channel.poll() {
             log::trace!("recieved command: {cmd:?}");
@@ -57,6 +71,7 @@ impl Process {
         }
     }
 
+    /// Handle a page fault caused by a thread in this process.
     pub async fn on_page_fault(&mut self, tid: ThreadId, address: VirtualAddress) {
         log::trace!("on_page_fault {address}");
         if let Some((base_address, res)) = self
@@ -118,10 +133,13 @@ static mut PROCESSES: OnceCell<CHashMapG<ProcessId, Process>> = OnceCell::new();
 
 static mut NEXT_PID: AtomicU32 = AtomicU32::new(1);
 
+/// The global table of processes by ID.
 pub fn processes() -> &'static CHashMapG<ProcessId, Process> {
     unsafe { PROCESSES.get_or_init(Default::default) }
 }
 
+/// Cause a process to exit by ID.
+// TODO: this should be somewhere else, perhaps with `spawn`.
 fn exit_process(pid: ProcessId) {
     log::trace!("process {pid} exited");
     let mut proc = processes()
@@ -170,6 +188,7 @@ fn exit_process(pid: ProcessId) {
     // removing this processes' threads will schedule a new thread from a different process to run next
 }
 
+/// Register system calls related to processes and thread scheduling.
 pub fn register_system_call_handlers() {
     use kapi::system_calls::SystemCallNumber;
     let h = crate::exception::system_call_handlers();

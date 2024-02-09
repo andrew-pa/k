@@ -1,3 +1,4 @@
+//! Storage device drivers i.e. block devices.
 use crate::memory::PhysicalAddress;
 use alloc::{boxed::Box, vec::Vec};
 use async_trait::async_trait;

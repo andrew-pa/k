@@ -1,3 +1,4 @@
+//! Global namespace for resources like devices and files.
 use core::cell::OnceCell;
 
 use crate::{fs::File, storage::BlockStore};

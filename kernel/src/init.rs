@@ -1,23 +1,21 @@
+//! Initialization routines that are called during the boot process by `kmain` to setup the system.
 use alloc::boxed::Box;
+use hashbrown::HashMap;
 
-use crate::dtb::DeviceTree;
+use crate::{dtb::DeviceTree, registry::Path};
 
 use super::*;
 
-pub fn init_logging(log_level: log::LevelFilter) {
+/// Configure logging using [log] and the [uart::DebugUartLogger].
+pub fn logging(log_level: log::LevelFilter) {
     log::set_logger(&uart::DebugUartLogger).expect("set logger");
     log::set_max_level(log_level);
     log::info!("starting kernel!");
-
-    let current_el = current_el();
-    log::debug!("current EL = {current_el}");
-    log::debug!("MAIR = 0x{:x}", mair());
-
-    if current_el != 1 {
-        todo!("switch from {current_el} to EL1 at boot");
-    }
 }
 
+/// Configure time slicing interrupts and initialize the system timer.
+///
+/// The timer will trigger as soon as interrupts are enabled.
 pub fn configure_time_slicing(dt: &DeviceTree) {
     let props = timer::find_timer_properties(dt);
     log::debug!("timer properties = {props:?}");
@@ -28,7 +26,7 @@ pub fn configure_time_slicing(dt: &DeviceTree) {
         ic.set_target_cpu(timer_irq, 0x1);
         ic.set_priority(timer_irq, 0);
         ic.set_config(timer_irq, exception::InterruptConfig::Level);
-        ic.set_pending(timer_irq, false);
+        ic.clear_pending(timer_irq);
         ic.set_enable(timer_irq, true);
     }
 
@@ -48,6 +46,7 @@ pub fn configure_time_slicing(dt: &DeviceTree) {
     timer::write_timer_value(0);
 }
 
+/// Register system call handlers throughout the kernel in the global table.
 pub fn register_system_call_handlers() {
     use kapi::system_calls::SystemCallNumber;
 
@@ -64,20 +63,63 @@ pub fn register_system_call_handlers() {
     process::register_system_call_handlers();
 }
 
+/// Initialize the PCIe bus and any devices found there.
+pub fn pcie(dt: &DeviceTree) {
+    let mut pcie_drivers = HashMap::new();
+    pcie_drivers.insert(
+        0x01080200, // MassStorage:NVM:NVMe I/O controller
+        storage::nvme::init_nvme_over_pcie as bus::pcie::DriverInitFn,
+    );
+    bus::pcie::init(dt, &pcie_drivers);
+}
+
+/// Spawn the task executor thread as a kernel thread.
 pub fn spawn_task_executor_thread() {
     log::info!("creating task executor thread");
     let task_stack = memory::PhysicalBuffer::alloc(4 * 1024, &Default::default())
         .expect("allocate task exec thread stack");
     log::debug!("task stack = {task_stack:x?}");
 
-    process::thread::spawn_thread(process::Thread::kernel_thread(
-        process::thread::TASK_THREAD,
-        tasks::run_executor,
-        &task_stack,
-    ));
+    unsafe {
+        process::thread::spawn_thread(process::Thread::kernel_thread(
+            process::thread::TASK_THREAD,
+            tasks::run_executor,
+            &task_stack,
+        ));
+    }
 
     // the task executor thread should continue to run while the kernel is running so we prevent
     // the stack's memory from being freed by forgetting it
     // TODO: if we need to resize the stack we need to keep track of this?
     core::mem::forget(task_stack);
+}
+
+/// Mount the root filesystem and spawn the `init` process.
+pub async fn mount_root_fs_and_spawn_init() {
+    log::info!("open /dev/nvme/pci@0:2:0/1");
+    let mut bs = {
+        registry::registry()
+            .open_block_store(Path::new("/dev/nvme/pci@0:2:0/1"))
+            .await
+            .unwrap()
+    };
+    log::info!("mount FAT filesystem");
+    fs::fat::mount(Path::new("/fat"), bs).await.unwrap();
+
+    let test_file = registry::registry()
+        .open_file(Path::new("/fat/abcdefghij/test.txt"))
+        .await
+        .expect("open file");
+
+    log::info!("spawning init process");
+    let init_pid = process::spawn_process(
+        "/fat/init",
+        Some(|proc: &mut process::Process| {
+            proc.attach_file(test_file).unwrap();
+        }),
+    )
+    .await
+    .expect("spawn init process");
+
+    log::info!("init pid = {init_pid}");
 }

@@ -1,3 +1,4 @@
+//! Page table structure and MMU interface.
 #![allow(unused)]
 use core::{cell::OnceCell, ops::Range, ptr::NonNull};
 
@@ -17,7 +18,8 @@ extern "C" {
 }
 
 bitfield! {
-    pub struct PageTableEntry(u64);
+    /// An entry of a page table.
+    struct PageTableEntry(u64);
     u64;
     high_attrb, set_high_attrb: 63, 50;
     res0, set_res0: 49, 48;
@@ -142,45 +144,24 @@ impl core::fmt::Debug for PageTableEntry {
     }
 }
 
+/// Options for creating a page table entry.
 #[derive(Default)]
 pub struct PageTableEntryOptions {
+    /// True if the page should be read-only, false if read-write.
     pub read_only: bool,
+    /// The page should be accessable to user-space (EL0).
     pub el0_access: bool,
 }
 
 impl PageTableEntryOptions {
-    pub fn apply(&self, mut entry: PageTableEntry) -> PageTableEntry {
+    fn apply(&self, mut entry: PageTableEntry) -> PageTableEntry {
         entry.set_ap_read_only(self.read_only);
         entry.set_ap_el0_access(self.el0_access);
         entry
     }
 }
 
-type LevelTable = [PageTableEntry; 512];
-
-// impl core::ops::Index<usize> for LevelTable {
-//     type Output = PageTableEntry;
-//
-//     fn index(&self, index: usize) -> &Self::Output {
-//         &self.entries[index]
-//     }
-// }
-//
-// impl core::ops::IndexMut<usize> for LevelTable {
-//     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
-//         &mut self.entries[index]
-//     }
-// }
-
-// WARN: Currently assumes that physical memory is identity mapped in the 0x0000 prefix!
-pub struct PageTable {
-    /// true => this page table is for virtual addresses of prefix 0xffff, false => prefix must be 0x0000
-    high_addresses: bool,
-    pub asid: u16,
-    level0_table: NonNull<LevelTable>,
-    level0_phy_addr: PhysicalAddress,
-}
-
+/// Errors arising from page table mapping operations.
 #[derive(Debug, Snafu)]
 pub enum MapError {
     RangeAlreadyMapped {
@@ -199,6 +180,22 @@ pub enum MapError {
     Memory {
         source: MemoryError,
     },
+}
+
+type LevelTable = [PageTableEntry; 512];
+
+/// A page table tree in memory.
+///
+/// This structure does not require heap allocation, but does expect that it can allocate the
+/// memory for the tables in the identity mapped region of main memory.
+// WARN: TODO: Currently assumes that physical memory is identity mapped in the 0x0000 prefix!
+pub struct PageTable {
+    /// true => this page table is for virtual addresses of prefix 0xffff, false => prefix must be 0x0000
+    high_addresses: bool,
+    /// The address space ID (ASID) for this page table, for use in caching.
+    pub asid: u16,
+    level0_table: NonNull<LevelTable>,
+    level0_phy_addr: PhysicalAddress,
 }
 
 impl core::fmt::Debug for PageTable {
@@ -272,6 +269,10 @@ impl PageTable {
         }
     }
 
+    /// Create a new, empty page table.
+    ///
+    /// If `high_addresses` is true, then the table will map addresses starting with `0xffff_...`,
+    /// otherwise the addresses will start with all zeros.
     pub fn empty(high_addresses: bool, asid: u16) -> Result<PageTable, MemoryError> {
         let level0_phy_addr = Self::allocate_table()?;
         Ok(PageTable {
@@ -285,6 +286,11 @@ impl PageTable {
         })
     }
 
+    /// Create a page table tree that produces an identity mapping starting at `start_addr` of
+    /// length `page_count`.
+    ///
+    /// If `high_addresses` is true, then the table will map addresses starting with `0xffff_...`,
+    /// otherwise the addresses will start with all zeros.
     pub fn identity(
         high_addresses: bool,
         start_addr: PhysicalAddress,
@@ -307,7 +313,8 @@ impl PageTable {
     ///
     /// # Safety
     /// It is up to the caller to make sure that we can continue to execute after this function is
-    /// called. This function writes system registers.
+    /// called, i.e. that the instruction pointer will still be mapped to the expected place in the program.
+    /// This function writes system registers.
     pub unsafe fn activate(&self) {
         log::trace!(
             "activating table @ {}, ASID {:x}",
@@ -346,6 +353,8 @@ impl PageTable {
         Ok(new_page_phy_addr)
     }
 
+    /// Map a range of virtual addresses starting at `virt_start` to the physical memory starting
+    /// at `phy_start`. The `options` will be applied to all the pages in the region.
     pub fn map_range(
         &mut self,
         phy_start: PhysicalAddress,
@@ -450,6 +459,9 @@ impl PageTable {
         Ok(())
     }
 
+    /// Clear the page table of a mapping starting at `virt_start`.
+    ///
+    /// TODO: This does not yet free the memory used up by now empty page tables.
     pub fn unmap_range(&mut self, virt_start: VirtualAddress, page_count: usize) {
         let mut page_index = 0;
         'top: while page_index < page_count {
@@ -514,6 +526,7 @@ impl PageTable {
         unreachable!("table ref in level 3 table")
     }
 
+    /// Iterate over the mapped regions in this page table.
     pub fn iter(&self) -> PageTableIter {
         PageTableIter::new(self)
     }
@@ -535,13 +548,18 @@ impl Drop for PageTable {
     }
 }
 
+/// A mapped region in memory.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MappedRegion {
+    /// The base physical address that is mapped to.
     pub base_phys_addr: PhysicalAddress,
+    /// The base virtual address that is mapped from.
     pub base_virt_addr: VirtualAddress,
+    /// The number of pages in this mapping.
     pub page_count: usize,
 }
 
+/// An iterator over [MappedRegion]s of a [PageTable].
 pub struct PageTableIter<'a> {
     stack: SmallVec<[(&'a LevelTable, usize); 4]>,
     tag: usize,
@@ -686,6 +704,7 @@ pub unsafe fn enable_mmu() {
 }
 
 bitfield! {
+    /// A value of the Translation Control Register (TCR).
     pub struct TranslationControlReg(u64);
     impl Debug;
     u8;
@@ -726,6 +745,7 @@ bitfield! {
     pub size_offset0, set_size_offset0: 5, 0;
 }
 
+/// Read the TCR register value.
 pub fn read_tcr() -> TranslationControlReg {
     let mut tcr = TranslationControlReg(0);
     unsafe {
@@ -737,6 +757,8 @@ pub fn read_tcr() -> TranslationControlReg {
     tcr
 }
 
+/// Write a new value to the TCR register.
+///
 /// # Safety
 /// It is up to the caller to make sure that the new TCR value is correct.
 pub unsafe fn write_tcr(new_tcr: TranslationControlReg) {
@@ -780,6 +802,7 @@ pub unsafe fn flush_tlb_for_asid(asid: u16) {
 
 static mut KERNEL_TABLE: OnceCell<Mutex<PageTable>> = OnceCell::new();
 
+/// Initialize the kernel page table.
 pub fn init_kernel_page_table() {
     unsafe {
         KERNEL_TABLE
@@ -830,12 +853,7 @@ impl Drop for KernelTableGuard {
     }
 }
 
-/// Kernel memory map:
-/// | Virtual Address               | What's there               |
-/// |-------------------------------|----------------------------|
-/// | `0xffff_0000_0000_0000`, 2GiB | Identity mapped to first 2GiB of PA including kernel code/data |
-/// | `0xffff_0010_0000_0000`, 1TiB | Memory mapped with addresses from VirtualAddressAllocator |
-/// | `0xffff_ff00_0000_0000`, Flex | Kernel heap, allocated on demand |
+/// Lock and gain access to the kernel page table.
 pub fn kernel_table() -> KernelTableGuard {
     unsafe {
         KERNEL_TABLE

@@ -1,3 +1,12 @@
+//! Hardware exception (interrupt) handling and routing.
+//!
+//! This module contains the exception handlers themselves, as well as the interrupt controller
+//! device drivers. There is a global interrupt controller implementation that is made available to
+//! the rest of the system.
+//!
+//! Each interrupt controller device driver provides an implementation of [InterruptController]
+//! that allows the system to interact with the device abstractly, but only one instance exists at a
+//! time, accessable by calling [interrupt_controller].
 use core::{arch::global_asm, cell::OnceCell, fmt::Display};
 
 use alloc::boxed::Box;
@@ -5,64 +14,105 @@ use bitfield::bitfield;
 use spin::{Mutex, MutexGuard};
 
 use crate::{
-    current_el,
     memory::{PhysicalAddress, VirtualAddress},
     process::{
         self,
         thread::reg::{read_exception_link_reg, read_stack_pointer},
         ProcessId,
     },
-    sp_sel, timer, CHashMapG,
+    read_current_el, read_sp_sel, timer, CHashMapG,
 };
 
+/// An interrupt identifier.
 pub type InterruptId = u32;
 
 pub mod gic;
 
+mod handlers;
+pub use handlers::install_exception_vector_table;
+
+/// Configuration for an interrupt.
 #[derive(Debug)]
 pub enum InterruptConfig {
+    /// Use edge triggering.
     Edge,
+    /// Use level triggering.
     Level,
 }
 
+/// Description of a message signaled interrupt setup.
 #[derive(Debug)]
 pub struct MsiDescriptor {
+    /// The address the device should write to.
     pub register_addr: PhysicalAddress,
+    /// The value that should be written at the address.
     pub data_value: u32,
+    /// The ID of the interrupt that will be generated.
     pub intid: InterruptId,
 }
 
+/// An abstract interrupt controller interface.
 pub trait InterruptController {
+    /// The size in bytes of an interrupt specification in the device tree for this controller.
     fn device_tree_interrupt_spec_byte_size(&self) -> usize;
+
+    /// Tries to read an interrupt specification from a device tree property data slice.
+    /// The slice must be of size `device_tree_interrupt_spec_byte_size()`.
     fn parse_interrupt_spec_from_device_tree(
         &self,
         data: &[u8],
     ) -> Option<(InterruptId, InterruptConfig)>;
 
+    /// Check if an interrupt is enabled.
     fn is_enabled(&self, id: InterruptId) -> bool;
+    /// Enable or disable an interrupt.
     fn set_enable(&self, id: InterruptId, enabled: bool);
 
+    /// Check if an interrupt is pending.
     fn is_pending(&self, id: InterruptId) -> bool;
-    fn set_pending(&self, id: InterruptId, enabled: bool);
+    /// Clear a pending interrupt.
+    fn clear_pending(&self, id: InterruptId);
 
+    /// Check if an interrupt is active.
     fn is_active(&self, id: InterruptId) -> bool;
+    /// Set the active state of an interrupt.
     fn set_active(&self, id: InterruptId, enabled: bool);
 
+    /// Get the priority of an interrupt.
     fn priority(&self, id: InterruptId) -> u8;
+    /// Set the priority of an interrupt.
     fn set_priority(&self, id: InterruptId, priority: u8);
 
+    /// Get the target CPU ID for an interrupt.
     fn target_cpu(&self, id: InterruptId) -> u8;
+    /// Set the target CPU ID for an interrupt.
     fn set_target_cpu(&self, id: InterruptId, target_cpu: u8);
 
+    /// Get the current configuration of an interrupt.
     fn config(&self, id: InterruptId) -> InterruptConfig;
+    /// Set the configuration of an interrupt.
     fn set_config(&self, id: InterruptId, config: InterruptConfig);
 
+    /// Acknowledge that an interrupt exception has been handled. Returns the ID of the interrupt
+    /// that was triggered.
+    ///
+    /// This function is called by the interrupt exception handler before calling the registered
+    /// kernel interrupt handler function.
     fn ack_interrupt(&self) -> Option<InterruptId>;
+    /// Inform the interrupt controller that the system has finished processing an interrupt.
+    ///
+    /// This function is called after the registered interrupt function has finished, before the
+    /// exception handler returns.
     fn finish_interrupt(&self, id: InterruptId);
 
+    /// Detect if MSIs (message signaled interrupts) are supported by this interrupt controller.
     fn msi_supported(&self) -> bool {
         false
     }
+
+    /// Allocate an MSI on the controller that can be registered with a device.
+    ///
+    /// Panics if MSIs are not supported.
     // TODO: what happens if we run out of MSIs?
     fn alloc_msi(&mut self) -> Option<MsiDescriptor> {
         unimplemented!("MSIs not supported by interrupt controller");
@@ -70,13 +120,24 @@ pub trait InterruptController {
     // TODO: free MSIs
 }
 
+/// A callback that can be registered to handle an interrupt.
+///
+/// The function is given the ID of the interrupt it is handling and a mutable reference to the
+/// current [Registers] of the running thread.
 pub type InterruptHandler = Box<dyn FnMut(InterruptId, &mut Registers)>;
+/// A callback that can be registered to handle a system call.
+///
+/// The function is given the number of the system call it is handling,
+/// the process and thread ID that invoked the system call,
+/// and a mutable reference to the current [Registers] of the running thread.
 pub type SyscallHandler = fn(u16, process::ProcessId, process::ThreadId, &mut Registers);
 
 static mut IC: OnceCell<Mutex<Box<dyn InterruptController>>> = OnceCell::new();
 static mut INTERRUPT_HANDLERS: OnceCell<CHashMapG<InterruptId, InterruptHandler>> = OnceCell::new();
 static mut SYSTEM_CALL_HANDLERS: OnceCell<CHashMapG<u16, SyscallHandler>> = OnceCell::new();
 
+/// Initialize the interrupt controller using information in the device tree.
+/// The type of the interrupt controller is automatically detected.
 pub fn init_interrupts(device_tree: &crate::dtb::DeviceTree) {
     // for now this is our only implementation
     let gic = gic::GenericInterruptController::in_device_tree(device_tree).expect("find/init GIC");
@@ -95,33 +156,39 @@ pub fn init_interrupts(device_tree: &crate::dtb::DeviceTree) {
     }
 }
 
+/// Lock and gain access to the current system interrupt controller.
 pub fn interrupt_controller() -> MutexGuard<'static, Box<dyn InterruptController>> {
     unsafe { IC.get().expect("interrupt controller initialized").lock() }
 }
 
+/// Get the interrupt handler table.
 pub fn interrupt_handlers() -> &'static CHashMapG<InterruptId, InterruptHandler> {
     unsafe { INTERRUPT_HANDLERS.get().expect("init interrupts") }
 }
 
+/// Get the system call handler table.
 pub fn system_call_handlers() -> &'static CHashMapG<u16, SyscallHandler> {
     unsafe { SYSTEM_CALL_HANDLERS.get().expect("init syscall table") }
 }
 
-/// disabled => true, enabled => false
+// In this register, 0 is enabled and 1 is disabled.
 bitfield! {
+    /// A system CPU exception mask (DAIF register) value.
     pub struct InterruptMask(u64);
     u8;
-    pub debug, set_debug: 9;
-    pub sys_error, set_sys_error: 8;
-    pub irq, set_irq: 7;
-    pub frq, set_frq: 6;
+    debug, set_debug: 9;
+    sys_error, set_sys_error: 8;
+    irq, set_irq: 7;
+    frq, set_frq: 6;
 }
 
 impl InterruptMask {
+    /// A mask to enable all exceptions.
     pub fn all_enabled() -> InterruptMask {
         InterruptMask(0)
     }
 
+    /// A mask to disable all exceptions.
     pub fn all_disabled() -> InterruptMask {
         let mut s = InterruptMask(0);
         s.set_debug(true);
@@ -132,6 +199,7 @@ impl InterruptMask {
     }
 }
 
+/// Read the CPU exception mask register (DAIF).
 #[inline]
 pub fn read_interrupt_mask() -> InterruptMask {
     let mut v: u64;
@@ -141,17 +209,21 @@ pub fn read_interrupt_mask() -> InterruptMask {
     InterruptMask(v)
 }
 
+/// Write the CPU exception mask register (DAIF).
+///
+/// # Safety
+/// The system must be ready to accept interrupts as soon as the next instruction if they are
+/// enabled.
 #[inline]
-pub fn write_interrupt_mask(m: InterruptMask) {
-    unsafe {
-        core::arch::asm!("msr DAIF, {v}", v = in(reg) m.0);
-    }
+pub unsafe fn write_interrupt_mask(m: InterruptMask) {
+    core::arch::asm!("msr DAIF, {v}", v = in(reg) m.0);
 }
 
-global_asm!(include_str!("table.S"));
-
+/// A stored version of the system registers x0..x31.
+// TODO: this doesn't really belong in this module.
 #[derive(Default, Copy, Clone)]
 pub struct Registers {
+    /// The values of the xN registers in order.
     pub x: [usize; 31],
 }
 
@@ -205,7 +277,9 @@ impl core::fmt::Debug for Registers {
 }
 
 bitfield! {
-    pub struct ExceptionSyndromeRegister(u64);
+    /// A value in the ESR (Exception Syndrome Register), which indicates the cause of an
+    /// exception.
+    struct ExceptionSyndromeRegister(u64);
     u8;
     iss2, _: 36, 32;
     ec, _: 31, 26;
@@ -262,143 +336,4 @@ impl Display for ExceptionSyndromeRegister {
             )
             .finish()
     }
-}
-
-fn handle_system_call(
-    pid: Option<ProcessId>,
-    tid: process::ThreadId,
-    regs: &mut Registers,
-    id: u16,
-) {
-    match system_call_handlers().get(&id) {
-        Some(h) => (*h)(id, pid.unwrap_or(0), tid, regs),
-        None => {
-            log::warn!(
-                "unknown system call: pid={:?}, id = 0x{:x}, registers = {:?}",
-                pid,
-                id,
-                regs
-            )
-        }
-    }
-}
-
-#[no_mangle]
-unsafe extern "C" fn handle_synchronous_exception(regs: *mut Registers, esr: usize, far: usize) {
-    let esr = ExceptionSyndromeRegister(esr as u64);
-    let ec = ExceptionClass(esr.ec());
-
-    if !ec.is_system_call() && !ec.is_user_space_page_fault() {
-        panic!(
-            "synchronous exception! {}, FAR={far:x}, registers = {:?}, ELR={:x?}",
-            esr,
-            regs.as_ref(),
-            read_exception_link_reg(),
-        );
-    }
-
-    let regs = regs
-        .as_mut()
-        .expect("registers ptr should always be non-null");
-
-    let (pid, tid) = process::scheduler().pause_current_thread(regs);
-
-    let previous_asid = pid
-        .and_then(|pid| process::processes().get_mut(&pid))
-        .map(|mut proc| {
-            proc.dispatch_new_commands(tid);
-            proc.page_tables.asid
-        });
-
-    if ec.is_system_call() {
-        // system call
-        handle_system_call(pid, tid, regs, esr.iss() as u16);
-    } else if ec.is_user_space_page_fault() {
-        // page fault in user space
-        let pid = pid.expect("this exception is only for page faults in a lower exception level and since the kernel runs at EL1, that means that we can only get here from a fault in EL0, therefore there must be a current process running (or something is very wrong)");
-
-        // pause the thread so it won't get scheduled before we fix up its address space
-        process::threads()
-            .get_mut(&tid)
-            .expect("valid thread id from scheduler")
-            .state = process::thread::ThreadState::Waiting;
-
-        log::trace!("user space page fault at {far:x}, pid={pid}, tid={tid}");
-
-        crate::tasks::spawn(async move {
-            let mut proc = process::processes()
-                .get_mut(&pid)
-                .expect("valid process ID from scheduler");
-            proc.on_page_fault(tid, VirtualAddress(far)).await;
-        });
-
-        // schedule the task executor next to reduce latency between processing the page fault and
-        // resuming the offending process by hopefully immediately running the above task.
-        process::scheduler().make_task_executor_current();
-    } else {
-        unreachable!()
-    }
-
-    process::scheduler().resume_current_thread(regs, previous_asid);
-}
-
-#[no_mangle]
-unsafe extern "C" fn handle_interrupt(regs: *mut Registers, _esr: usize, _far: usize) {
-    let ic = interrupt_controller();
-
-    let regs = regs
-        .as_mut()
-        .expect("registers ptr should always be non-null");
-
-    let (pid, tid) = process::scheduler().pause_current_thread(regs);
-
-    let previous_asid = pid
-        .and_then(|pid| process::processes().get_mut(&pid))
-        .map(|mut proc| {
-            proc.dispatch_new_commands(tid);
-            proc.page_tables.asid
-        });
-
-    while let Some(id) = ic.ack_interrupt() {
-        log::trace!("handling interrupt {id} ELR={}", read_exception_link_reg());
-        match interrupt_handlers().get_mut(&id) {
-            Some(mut h) => (*h)(id, regs),
-            None => log::warn!("unhandled interrupt {id}"),
-        }
-        log::trace!("finished interrupt {id}");
-        ic.finish_interrupt(id);
-    }
-
-    // TODO: if we get another interrupt here, it might cause problems
-
-    process::scheduler().resume_current_thread(regs, previous_asid);
-}
-
-#[no_mangle]
-unsafe extern "C" fn handle_fast_interrupt(_regs: *mut Registers, _esr: usize, _far: usize) {
-    let ic = interrupt_controller();
-    let id = ic.ack_interrupt().unwrap();
-    log::warn!("unhandled fast interrupt {id}");
-    ic.finish_interrupt(id);
-}
-
-#[no_mangle]
-unsafe extern "C" fn handle_system_error(regs: *mut Registers, esr: usize, far: usize) {
-    panic!(
-        "system error! ESR={esr:x}, FAR={far:x}, registers = {:?}",
-        regs.as_ref()
-    );
-}
-
-#[no_mangle]
-unsafe extern "C" fn handle_unimplemented_exception(regs: *mut Registers, esr: usize, far: usize) {
-    panic!(
-        "unimplemented exception! {}, FAR={far:x}, registers = {:?}",
-        ExceptionSyndromeRegister(esr as u64),
-        regs.as_ref()
-    );
-}
-
-extern "C" {
-    pub fn install_exception_vector_table();
 }

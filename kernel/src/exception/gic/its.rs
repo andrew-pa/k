@@ -1,3 +1,4 @@
+//! The MSI controller for the GICv3 ITS interface.
 use crate::{exception::MsiDescriptor, memory::PhysicalAddress};
 
 use super::MsiController;

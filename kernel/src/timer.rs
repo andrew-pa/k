@@ -1,3 +1,5 @@
+//! System timer driver.
+
 // TODO: thread sync? I think that these are per-core
 // TODO: other ELs?
 // TODO: physical vs virtual timers?

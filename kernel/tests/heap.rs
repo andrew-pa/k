@@ -72,7 +72,7 @@ pub extern "C" fn kmain() {
     unsafe {
         memory::zero_bss_section();
     }
-    init::init_logging(log::LevelFilter::Trace);
+    init::logging(log::LevelFilter::Trace);
 
     // do enough init to make the heap available
     unsafe {

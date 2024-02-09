@@ -6,7 +6,7 @@ echo $PWD
 if [ ! -f $scratch_disk ]; then
     qemu-img create -f qcow2 $scratch_disk 1M
 fi
-img_name=$(echo $1 | shasum | cut -d ' ' -f 1).img
+img_name=$(echo $1 | sha256sum | cut -d ' ' -f 1).img
 echo $1 "->" $img_name
 ./make-image.sh $1 .build/$img_name
 qemu-system-aarch64 -machine virt -cpu cortex-a57 \

@@ -144,7 +144,7 @@ impl<'sq> Command<'sq> {
 
                 log::trace!("region = {region:?}, current_offset = {current_offset}, num_blocks={num_blocks}, prp_page.len() = {}", prp_page.len());
                 prp_page[current_offset] = next_page_addr;
-                next_page_addr = next_page_addr.offset(PAGE_SIZE as isize);
+                next_page_addr = next_page_addr.add(PAGE_SIZE);
                 current_offset += 1;
                 num_blocks += blocks_per_page;
             }
@@ -200,7 +200,7 @@ impl SubmissionQueue {
         parent: Option<Arc<Mutex<SubmissionQueue>>>,
     ) -> Result<SubmissionQueue, MemoryError> {
         let tail_doorbell =
-            doorbell_base.offset((2 * (id as isize)) * (4 << doorbell_stride as isize));
+            doorbell_base.add((2 * (id as usize)) * (4 << doorbell_stride as usize));
         let head: Arc<Mutex<u16>> = Arc::default();
         associated_completion_queue
             .assoc_submit_queue_heads
@@ -304,7 +304,7 @@ impl SubmissionQueue {
                 core::slice::from_raw_parts_mut(
                     self.queue_memory
                         .virtual_address()
-                        .offset(((self.tail as usize) * SUBMISSION_ENTRY_SIZE) as isize)
+                        .add((self.tail as usize) * SUBMISSION_ENTRY_SIZE)
                         .as_ptr::<u32>(),
                     16,
                 )
@@ -395,7 +395,7 @@ impl CompletionQueue {
         parent: Option<Arc<Mutex<SubmissionQueue>>>,
     ) -> Result<CompletionQueue, MemoryError> {
         let head_doorbell =
-            doorbell_base.offset((2 * (id as isize) + 1) * (4 << doorbell_stride as isize));
+            doorbell_base.add((2 * (id as usize) + 1) * (4 << doorbell_stride as usize));
         let page_count = (entry_count as usize * COMPLETION_ENTRY_SIZE).div_ceil(PAGE_SIZE);
         Ok(CompletionQueue {
             id,
@@ -481,7 +481,7 @@ impl CompletionQueue {
             let sl = (self
                 .queue_memory
                 .virtual_address()
-                .offset((self.head as usize * COMPLETION_ENTRY_SIZE) as isize)
+                .add(self.head as usize * COMPLETION_ENTRY_SIZE)
                 .as_ptr::<[u32; 4]>())
             .read_volatile();
             // log::trace!(
@@ -495,7 +495,7 @@ impl CompletionQueue {
             let ptr = self
                 .queue_memory
                 .virtual_address()
-                .offset((self.head as usize * COMPLETION_ENTRY_SIZE) as isize)
+                .add(self.head as usize * COMPLETION_ENTRY_SIZE)
                 .as_ptr::<Completion>();
 
             ptr.as_ref().unwrap()

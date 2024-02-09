@@ -1,3 +1,4 @@
+//! The physical memory allocator.
 use core::cell::OnceCell;
 
 use crate::{
@@ -10,6 +11,12 @@ use spin::Mutex;
 
 use super::{MemoryError, PhysicalAddress};
 
+/// The allocator for physical pages of memory.
+///
+/// This allocator is currently a bitmap-style allocator.
+///
+/// There is a single instance of this allocator responsible for managing all the pages of physical
+/// memory in the system, accessable through [physical_memory_allocator].
 pub struct PhysicalMemoryAllocator {
     allocated_pages: &'static mut BitSlice,
     memory_start: usize,
@@ -17,6 +24,7 @@ pub struct PhysicalMemoryAllocator {
 }
 
 impl PhysicalMemoryAllocator {
+    /// Initalize the allocator using information in the device tree.
     fn init(device_tree: &DeviceTree) -> PhysicalMemoryAllocator {
         // for now, find the first memory node and use it to determine how big RAM is
         let memory_props = device_tree
@@ -69,7 +77,7 @@ impl PhysicalMemoryAllocator {
         allocated_pages.fill(false);
 
         // allocate the space taken up by the device tree blob
-        let dtb_len_pages = device_tree.header().total_size() as usize / PAGE_SIZE;
+        let dtb_len_pages = device_tree.size_of_blob() / PAGE_SIZE;
         log::debug!("device tree takes {dtb_len_pages} pages");
         allocated_pages[0..dtb_len_pages].fill(true);
         // allocate the space taken up by the kernel image
@@ -92,22 +100,27 @@ impl PhysicalMemoryAllocator {
         }
     }
 
+    /// Get the physical address of the start of main memory (RAM).
     pub fn memory_start_addr(&self) -> PhysicalAddress {
         PhysicalAddress(self.memory_start)
     }
 
+    /// Get the total size of main memory (RAM) in bytes.
     pub fn total_memory_size(&self) -> usize {
         self.memory_length
     }
 
+    /// Allocate a single physical page.
     pub fn alloc(&mut self) -> Result<PhysicalAddress, MemoryError> {
         self.alloc_contig(1)
     }
 
+    /// Free a physical page starting at `base_address`.
     pub fn free(&mut self, base_address: PhysicalAddress) {
         self.free_pages(base_address, 1)
     }
 
+    /// Free a contiguous range of pages of length `page_count` starting at `base_address`.
     pub fn free_pages(&mut self, base_address: PhysicalAddress, page_count: usize) {
         let page_index = (base_address.0 - self.memory_start).div_ceil(PAGE_SIZE);
         if self.allocated_pages[page_index..(page_index + page_count)].not_all() {
@@ -117,6 +130,10 @@ impl PhysicalMemoryAllocator {
         log::trace!("freed {page_count} pages at {base_address}");
     }
 
+    /// Allocate a contiguous range of pages of length `page_count`.
+    ///
+    /// It is best to avoid allocating large ranges if possible, to avoid fragmenting physical
+    /// memory.
     pub fn alloc_contig(&mut self, page_count: usize) -> Result<PhysicalAddress, MemoryError> {
         let mut pi = self.allocated_pages.iter_mut().enumerate();
         'top: loop {
@@ -165,6 +182,7 @@ impl PhysicalMemoryAllocator {
 
 static mut PMA: OnceCell<Mutex<PhysicalMemoryAllocator>> = OnceCell::new();
 
+/// Initalize the physical memory allocator, using information from the device tree.
 pub fn init_physical_memory_allocator(device_tree: &DeviceTree) {
     unsafe {
         PMA.set(Mutex::new(PhysicalMemoryAllocator::init(device_tree)))
@@ -173,6 +191,7 @@ pub fn init_physical_memory_allocator(device_tree: &DeviceTree) {
     }
 }
 
+/// Lock and gain access to the current physical memory allocator.
 pub fn physical_memory_allocator() -> spin::MutexGuard<'static, PhysicalMemoryAllocator> {
     unsafe {
         PMA.get()

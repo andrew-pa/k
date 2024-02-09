@@ -1,6 +1,8 @@
+//! Registers related to threads/execution state.
 use super::*;
 
 bitfield! {
+    /// The value of the SPSR (Saved Program Status) register.
     pub struct SavedProgramStatus(u64);
     impl Debug;
     pub n, set_n: 31;

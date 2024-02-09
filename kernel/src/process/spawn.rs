@@ -117,7 +117,7 @@ pub fn attach_channel(
     page_tables
         .map_range(
             com_buf.physical_address(),
-            base_addr.offset_fwd(sub_buf.len()),
+            base_addr.add(sub_buf.len()),
             com_buf.page_count(),
             true,
             &map_opts,
@@ -259,7 +259,7 @@ pub async fn spawn_process(
         pid,
         tid,
         VirtualAddress(bin.ehdr.e_entry as usize),
-        stack_vaddr.offset((stack_page_count * PAGE_SIZE) as isize - 64),
+        stack_vaddr.add((stack_page_count * PAGE_SIZE) - 64),
         ThreadPriority::Normal,
         start_regs,
     ));

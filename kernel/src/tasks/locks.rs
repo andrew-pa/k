@@ -57,6 +57,7 @@ impl Future for WaitFuture {
 }
 
 impl Semaphore {
+    /// Create a new semaphore, initalized with `count`.
     pub fn new(count: usize) -> Semaphore {
         Semaphore {
             count: Arc::new(AtomicUsize::new(count)),
@@ -83,6 +84,7 @@ impl Semaphore {
     }
 }
 
+/// A mutex for sharing data between tasks.
 pub struct Mutex<T: ?Sized> {
     s: Semaphore,
     data: UnsafeCell<T>,
@@ -91,11 +93,13 @@ pub struct Mutex<T: ?Sized> {
 unsafe impl<T: ?Sized + Send> Send for Mutex<T> {}
 unsafe impl<T: ?Sized + Send> Sync for Mutex<T> {}
 
+/// A typical mutex guard type for [Mutex].
 pub struct MutexGuard<'a, T: ?Sized> {
     m: &'a Mutex<T>,
 }
 
 impl<T> Mutex<T> {
+    /// Create a new Mutex.
     pub fn new(data: T) -> Mutex<T> {
         Mutex {
             s: Semaphore::new(1),
@@ -105,6 +109,8 @@ impl<T> Mutex<T> {
 }
 
 impl<T: ?Sized> Mutex<T> {
+    /// Asynchronously lock this mutex. If the mutex is already taken, then this will yield until
+    /// it becomes available.
     pub async fn lock(&self) -> MutexGuard<T> {
         self.s.wait().await;
         MutexGuard { m: self }
@@ -137,6 +143,7 @@ impl<'a, T: ?Sized> Drop for MutexGuard<'a, T> {
     }
 }
 
+/// A read/write lock for sharing data between tasks.
 pub struct RwLock<T: ?Sized> {
     reader_count: Mutex<usize>,
     write_mutex: Semaphore,
@@ -146,15 +153,18 @@ pub struct RwLock<T: ?Sized> {
 unsafe impl<T: ?Sized + Send> Send for RwLock<T> {}
 unsafe impl<T: ?Sized + Send> Sync for RwLock<T> {}
 
+/// A typical read guard for [RwLock].
 pub struct RwLockReadGuard<'a, T: ?Sized> {
     lock: &'a RwLock<T>,
 }
 
+/// A typical write guard for [RwLock].
 pub struct RwLockWriteGuard<'a, T: ?Sized> {
     lock: &'a RwLock<T>,
 }
 
 impl<T> RwLock<T> {
+    /// Create a new RwLock.
     pub fn new(data: T) -> Self {
         Self {
             reader_count: Mutex::new(0),
@@ -165,6 +175,7 @@ impl<T> RwLock<T> {
 }
 
 impl<T: ?Sized> RwLock<T> {
+    /// Lock for reading (shared but exclusive with writing). If the data is unavailable, this yields until it becomes available.
     pub async fn read(&self) -> RwLockReadGuard<T> {
         let mut count = self.reader_count.lock().await;
         *count += 1;
@@ -176,6 +187,7 @@ impl<T: ?Sized> RwLock<T> {
         RwLockReadGuard { lock: self }
     }
 
+    /// Lock for writing (exclusive access). If the data is unavailable, yields until the data becomes available.
     pub async fn write(&self) -> RwLockWriteGuard<T> {
         self.write_mutex.wait().await;
         RwLockWriteGuard { lock: self }

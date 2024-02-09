@@ -26,13 +26,13 @@ mod interrupt;
 mod queue;
 
 // PCIe Register offsets (in bytes)
-const REG_CAP: isize = 0x00;
-const REG_VS: isize = 0x08;
-const REG_CC: isize = 0x14;
-const REG_CSTS: isize = 0x1c;
-const REG_AQA: isize = 0x24;
-const REG_ASQ: isize = 0x28;
-const REG_ACQ: isize = 0x30;
+const REG_CAP: usize = 0x00;
+const REG_VS: usize = 0x08;
+const REG_CC: usize = 0x14;
+const REG_CSTS: usize = 0x1c;
+const REG_AQA: usize = 0x24;
+const REG_ASQ: usize = 0x28;
+const REG_ACQ: usize = 0x30;
 
 const SUBMISSION_ENTRY_SIZE: usize = 64; //bytes
 const COMPLETION_ENTRY_SIZE: usize = 16; //bytes (at least)
@@ -231,7 +231,7 @@ impl RegistryHandler for NvmeDeviceRegistryHandler {
 
 impl NvmeDeviceRegistryHandler {
     fn doorbell_base(&self) -> VirtualAddress {
-        self.base_address.offset(0x1000)
+        self.base_address.add(0x1000)
     }
 
     fn configure(
@@ -241,18 +241,18 @@ impl NvmeDeviceRegistryHandler {
     ) -> Result<Self, pcie::Error> {
         let cap: ControllerCapabilities = unsafe {
             base_address
-                .offset(REG_CAP)
+                .add(REG_CAP)
                 .as_ptr::<ControllerCapabilities>()
                 .read_volatile()
         };
         log::trace!("CAP = {:?}", cap);
 
-        let csts: *mut u8 = base_address.offset(REG_CSTS).as_ptr();
+        let csts: *mut u8 = base_address.add(REG_CSTS).as_ptr();
         log::debug!("checking to see if the controller was ever ready");
         busy_wait_for_ready_bit(csts, true);
 
         // reset the controller
-        let cc: *mut ControllerConfigReg = base_address.offset(REG_CC).as_ptr();
+        let cc: *mut ControllerConfigReg = base_address.add(REG_CC).as_ptr();
         unsafe {
             let mut r = cc.read_volatile();
             log::trace!("initial controller config = {:?}", r);
@@ -267,7 +267,7 @@ impl NvmeDeviceRegistryHandler {
         busy_wait_for_ready_bit(csts, false);
 
         // 3. configure admin queues
-        let doorbell_base = base_address.offset(0x1000);
+        let doorbell_base = base_address.add(0x1000);
 
         // make each queue exactly 1 page worth of entries
         let mut admin_cq = CompletionQueue::new_admin(
@@ -288,10 +288,10 @@ impl NvmeDeviceRegistryHandler {
         unsafe {
             log::trace!(
                 "old admin queue addresses: rx@{:x}, tx@{:x}; new attribs={:?}",
-                base_address.offset(REG_ACQ).as_ptr::<u64>().read_volatile(),
-                base_address.offset(REG_ASQ).as_ptr::<u64>().read_volatile(),
+                base_address.add(REG_ACQ).as_ptr::<u64>().read_volatile(),
+                base_address.add(REG_ASQ).as_ptr::<u64>().read_volatile(),
                 base_address
-                    .offset(REG_AQA)
+                    .add(REG_AQA)
                     .as_ptr::<AdminQueueAttributes>()
                     .read_volatile()
             );
@@ -302,17 +302,17 @@ impl NvmeDeviceRegistryHandler {
         admin_queue_attrbs.set_completion_queue_size(admin_sq.size());
         unsafe {
             base_address
-                .offset(REG_AQA)
+                .add(REG_AQA)
                 .as_ptr::<AdminQueueAttributes>()
                 .write_volatile(admin_queue_attrbs);
         }
         unsafe {
             base_address
-                .offset(REG_ASQ)
+                .add(REG_ASQ)
                 .as_ptr::<u64>()
                 .write_volatile(admin_sq.address().0 as u64);
             base_address
-                .offset(REG_ACQ)
+                .add(REG_ACQ)
                 .as_ptr::<u64>()
                 .write_volatile(admin_cq.address().0 as u64);
         }
@@ -370,7 +370,7 @@ impl NvmeDeviceRegistryHandler {
             log::info!(
                 "nvme controller PCIe vendor id = {:x}, sqes/cqes={:x}",
                 id_res.read_volatile(),
-                id_res.offset(512 / 2).read_volatile()
+                id_res.add(512 / 2).read_volatile()
             );
         }
 
@@ -390,7 +390,7 @@ impl NvmeDeviceRegistryHandler {
         let mut namespace_ids = Vec::new();
         unsafe {
             for i in 0..1024 {
-                let val = id_res.offset(i).read();
+                let val = id_res.add(i).read();
                 if val == 0 {
                     break;
                 }
@@ -442,14 +442,14 @@ pub fn init_nvme_over_pcie(
     log::debug!(
         "NVMe base address = {:x} ({:x} <? {:x})",
         base_address,
-        base_address as usize + base.mmio.0,
+        base_address as usize + base.mmio_phy.0,
         base.mmio_size
     );
 
-    let base_vaddress = pcie::PCI_MMIO_START.offset((base_address as usize - base.mmio.0) as isize);
+    let base_vaddress = base.mmio_vrt.add(base_address as usize - base.mmio_phy.0);
     log::debug!("vbar = {}", base_vaddress);
 
-    let nvme_version = unsafe { base_vaddress.offset(REG_VS).as_ptr::<u32>().read_volatile() };
+    let nvme_version = unsafe { base_vaddress.add(REG_VS).as_ptr::<u32>().read_volatile() };
 
     log::info!("device supports NVMe version {nvme_version:x}");
 

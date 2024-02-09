@@ -1,3 +1,7 @@
+//! The GICv2m MSI controller.
+//!
+//! This driver is a translation of the driver found in the Linux kernel. There appears to be no
+//! other publicly available information about GICv2m.
 use crate::{
     exception::{InterruptId, MsiDescriptor},
     memory::PhysicalAddress,

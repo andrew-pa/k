@@ -36,7 +36,7 @@ pub extern "C" fn kmain() {
     unsafe {
         memory::zero_bss_section();
     }
-    init::init_logging(log::LevelFilter::Debug);
+    init::logging(log::LevelFilter::Debug);
     let dt = unsafe { dtb::DeviceTree::at_address(memory::VirtualAddress(0xffff_0000_4000_0000)) };
 
     // initialize virtual memory and interrupts
@@ -60,7 +60,9 @@ pub extern "C" fn kmain() {
     );
     bus::pcie::init(&dt, &pcie_drivers);
 
-    exception::write_interrupt_mask(exception::InterruptMask::all_enabled());
+    unsafe {
+        exception::write_interrupt_mask(exception::InterruptMask::all_enabled());
+    }
 
     test_main();
 }

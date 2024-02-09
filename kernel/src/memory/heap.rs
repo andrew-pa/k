@@ -1,3 +1,7 @@
+//! The kernel Rust heap allocator, implements [GlobalAlloc].
+//!
+//! The allocator is a simple free list style allocator. Free blocks are stored in the unused
+//! memory of the heap.
 use core::{
     alloc::{GlobalAlloc, Layout},
     mem::size_of,
@@ -61,9 +65,9 @@ enum BlockAdjacency {
 
 impl FreeBlock {
     fn check_adjacency(&self, other: &FreeBlock) -> BlockAdjacency {
-        if self.address.offset(self.size as isize) == other.address {
+        if self.address.add(self.size) == other.address {
             BlockAdjacency::Before
-        } else if self.address == other.address.offset(other.size as isize) {
+        } else if self.address == other.address.add(other.size) {
             BlockAdjacency::After
         } else {
             BlockAdjacency::NotAdjacent
@@ -335,7 +339,7 @@ impl KernelGlobalAlloc {
                 + size_of::<AllocatedBlockHeader>()
                 + block
                     .address
-                    .offset(size_of::<AllocatedBlockHeader>() as isize)
+                    .add(size_of::<AllocatedBlockHeader>())
                     .align_offset(layout.align());
 
             if block.size >= required_size {
@@ -447,7 +451,7 @@ unsafe impl GlobalAlloc for KernelGlobalAlloc {
             // make it allocated, returning any extra back to the free list
             let padding = block
                 .address
-                .offset(size_of::<AllocatedBlockHeader>() as isize)
+                .add(size_of::<AllocatedBlockHeader>())
                 .align_offset(layout.align());
             log::trace!("found block {block:?}, required padding = {padding}",);
             let req_block_size = (layout.size() + size_of::<AllocatedBlockHeader>() + padding)
@@ -457,7 +461,7 @@ unsafe impl GlobalAlloc for KernelGlobalAlloc {
             let actual_block_size = if block.size - req_block_size > size_of::<FreeBlockHeader>() {
                 // put back the unused part of the block at the end
                 self.add_free_block(FreeBlock {
-                    address: block.address.offset(req_block_size as isize),
+                    address: block.address.add(req_block_size),
                     size: block.size - req_block_size,
                 });
                 req_block_size
@@ -466,7 +470,7 @@ unsafe impl GlobalAlloc for KernelGlobalAlloc {
                 block.size
             };
             assert!(actual_block_size >= size_of::<FreeBlockHeader>());
-            let padded_address = block.address.offset(padding as isize);
+            let padded_address = block.address.add(padding);
             // write the allocated block header
             let header: *mut AllocatedBlockHeader = padded_address.as_ptr();
             unsafe {
@@ -524,6 +528,7 @@ unsafe impl GlobalAlloc for KernelGlobalAlloc {
     }
 }
 
+/// Write information about the global kernel heap to the log.
 pub fn log_heap_info(level: log::Level) {
     GLOBAL_HEAP.log_heap_info(level);
 }

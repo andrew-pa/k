@@ -1,3 +1,10 @@
+//! The kernel for the ??? operating system.
+//!
+//! The kernel has a modular, but monolithic design.
+//! Execution starts in `src/main.rs`, in the `kmain` function.
+//! Devices are detected using the Device Tree blob provided by `u-boot` (see [dtb]).
+//! The kernel uses `async`/`await` to handle asynchronous operations, and includes a kernel-level
+//! task executor to drive tasks to completion (see [tasks]). This runs in its own kernel thread.
 #![no_std]
 #![no_main]
 #![recursion_limit = "256"]
@@ -35,27 +42,36 @@ use core::{arch::global_asm, panic::PanicInfo};
 
 global_asm!(include_str!("start.S"));
 
+/// A concurrent hash map using spinlocks.
 pub type CHashMapG<K, V> =
     chashmap::CHashMap<K, V, hashbrown::hash_map::DefaultHashBuilder, spin::RwLock<()>>;
+/// The read guard for [CHashMapG].
 pub type CHashMapGReadGuard<'a, K, V> =
     chashmap::ReadGuard<'a, K, V, hashbrown::hash_map::DefaultHashBuilder, spin::RwLock<()>>;
+/// The write guard for [CHashMapG].
 pub type CHashMapGWriteGuard<'a, K, V> =
     chashmap::WriteGuard<'a, K, V, hashbrown::hash_map::DefaultHashBuilder, spin::RwLock<()>>;
 
+/// Wait for an interrupt to occur. The function returns after an interrupt is triggered.
+///
+/// This uses the `wfi` instruction once.
 #[inline]
 pub fn wait_for_interrupt() {
     unsafe { core::arch::asm!("wfi", options(nomem, nostack)) }
 }
 
-/// disable interrupts and loop forever
+/// Disable interrupts and loop forever, preventing any further execution.
 pub fn halt() -> ! {
-    exception::write_interrupt_mask(exception::InterruptMask::all_disabled());
+    unsafe {
+        exception::write_interrupt_mask(exception::InterruptMask::all_disabled());
+    }
     loop {
         wait_for_interrupt();
     }
 }
 
-pub fn current_el() -> usize {
+/// Read the current exception level.
+pub fn read_current_el() -> usize {
     let mut current_el: usize;
     unsafe {
         core::arch::asm!(
@@ -66,7 +82,8 @@ pub fn current_el() -> usize {
     current_el >> 2
 }
 
-pub fn mair() -> usize {
+/// Read the MAIR register.
+pub fn read_mair() -> usize {
     let mut x: usize;
     unsafe {
         core::arch::asm!(
@@ -77,7 +94,8 @@ pub fn mair() -> usize {
     x >> 2
 }
 
-pub fn sp_sel() -> bool {
+/// Read the stack pointer select register.
+pub fn read_sp_sel() -> bool {
     let mut v: usize;
     unsafe {
         core::arch::asm!(
@@ -88,6 +106,7 @@ pub fn sp_sel() -> bool {
     v == 1
 }
 
+/// Handle panics in the kernel by writing them to the debug UART.
 #[panic_handler]
 pub fn panic_handler(info: &core::panic::PanicInfo) -> ! {
     use core::fmt::Write;
@@ -109,7 +128,7 @@ pub extern "C" fn kmain() {
     unsafe {
         memory::zero_bss_section();
     }
-    init::init_logging(log::LevelFilter::Trace);
+    init::logging(log::LevelFilter::Trace);
 
     // initialize virtual memory and exceptions
     unsafe {
@@ -142,6 +161,7 @@ where
     }
 }
 
+/// Run provided tests, then exit QEMU or halt.
 pub fn test_runner(tests: &[&dyn Testable]) {
     log::info!("running {} tests...", tests.len());
     for test in tests {

@@ -1,3 +1,7 @@
+//! Kernel task executor and async/await infrastructure.
+//!
+//! The task executor runs in seperate threads and allows the kernel to schedule arbitrary
+//! asynchronous tasks.
 use alloc::{boxed::Box, rc::Rc, sync::Arc, task::Wake};
 use core::{
     cell::OnceCell,
@@ -45,8 +49,9 @@ impl Wake for TaskWaker {
     }
 }
 
+/// The executor state.
 #[derive(Clone)]
-pub struct Executor {
+struct Executor {
     ready_queue: ReadyTaskQueue,
     new_task_queue: NewTaskQueue,
     next_task_id: Arc<AtomicU32>,
@@ -63,7 +68,7 @@ impl Default for Executor {
 }
 
 impl Executor {
-    pub fn spawn(&self, task: impl Future<Output = ()> + 'static) {
+    fn spawn(&self, task: impl Future<Output = ()> + 'static) {
         let task_id = self
             .next_task_id
             .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
@@ -75,7 +80,7 @@ impl Executor {
     }
 
     /// Run the task executor forever. This is intended to be the effective entry point for the executor thread.
-    pub fn run_forever(self) -> ! {
+    fn run_forever(self) -> ! {
         let mut tasks = HashMap::new();
         let mut waker_cache = HashMap::new();
 
@@ -120,6 +125,7 @@ impl Executor {
 // TODO: we will eventually need one of these per-CPU
 static mut EXEC: OnceCell<Executor> = OnceCell::new();
 
+/// Initialize the kernel task executor.
 pub fn init_executor() {
     unsafe {
         EXEC.set(Executor::default()).ok().expect("init executor");
@@ -128,11 +134,14 @@ pub fn init_executor() {
 
 // TODO: also will eventually need to be per-CPU?
 
+/// Spawn an asynchronous task.
+// TODO: the task should probably be marked `Send`.
 pub fn spawn(task: impl Future<Output = ()> + 'static) {
     let exec = unsafe { EXEC.get().expect("executor initialized") };
     exec.spawn(task);
 }
 
+/// The entry point for the task executor thread.
 pub fn run_executor() -> ! {
     log::info!("starting task executor");
     let exec = unsafe { EXEC.get().expect("executor initialized").clone() };
@@ -150,6 +159,7 @@ impl Wake for BlockingWaiter {
     }
 }
 
+/// Run an asynchronous task on the current thread.
 pub fn block_on<O, F: Future<Output = O>>(task: F) -> O {
     let mut task = Box::pin(task);
     let signal = Arc::new(AtomicBool::default());

@@ -1,3 +1,7 @@
+//! Device driver for ARM's Generic Interrupt Controller (GIC).
+//!
+//! This driver supports GICv2 and also the v2m MSI extension.
+//! It should be forward compatable with GICv3 as well, although the ITS MSI implementation is currently TODO.
 use core::{ffi::CStr, mem::size_of};
 
 use alloc::boxed::Box;
@@ -24,6 +28,8 @@ use super::{InterruptConfig, InterruptController, InterruptId, MsiDescriptor};
  * ideally it would be directly well supported by the base GIC - for goodness' sake it's required for PCIe!
  */
 
+/// Support different MSI implementations for GIC using a trait object that handles `alloc_msi`
+/// from [InterruptController].
 trait MsiController {
     fn alloc_msi(&mut self) -> MsiDescriptor;
 }
@@ -31,6 +37,7 @@ trait MsiController {
 mod its;
 mod v2m;
 
+/// ARM Generic Interrupt Controller driver.
 pub struct GenericInterruptController {
     distributor_base: *mut u32,
     cpu_base: *mut u32,
@@ -58,6 +65,8 @@ fn find_regs_for_node<'i, 'a: 'i>(
 }
 
 impl GenericInterruptController {
+    /// Initialize a GIC from information stored in the device tree, returning the
+    /// [InterruptController] implementation if a GIC is found.
     pub fn in_device_tree(device_tree: &DeviceTree) -> Option<GenericInterruptController> {
         let mut gic_mem_regions = None;
         let mut found_node = false;
@@ -229,17 +238,8 @@ impl InterruptController for GenericInterruptController {
         self.read_bit_for_id(self.distributor_base, GICD_ISPENDR_N, id)
     }
 
-    fn set_pending(&self, id: InterruptId, enabled: bool) {
-        self.write_bit_for_id(
-            self.distributor_base,
-            if enabled {
-                GICD_ISPENDR_N
-            } else {
-                GICD_ICPENDR_N
-            },
-            id,
-            true,
-        )
+    fn clear_pending(&self, id: InterruptId) {
+        self.write_bit_for_id(self.distributor_base, GICD_ICPENDR_N, id, true)
     }
 
     fn is_active(&self, id: InterruptId) -> bool {

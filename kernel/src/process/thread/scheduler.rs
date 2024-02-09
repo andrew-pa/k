@@ -1,3 +1,4 @@
+//! Thread scheduling.
 use alloc::{collections::VecDeque, vec::Vec};
 use spin::{Mutex, MutexGuard};
 
@@ -5,6 +6,15 @@ use crate::exception;
 
 use super::*;
 
+/// The thread scheduler.
+///
+/// This is a simple round-robin scheduler with a simple priority strategy.
+/// Highest priority threads are considered first in order. If none are ready to run, then the next lowest
+/// priority is considered the same way, and so on.
+///
+/// There must be at least one thread that is always ready or the scheduler will panic.
+/// This should be the [IDLE_THREAD].
+// TODO: make sure that all threads get a chance to run at least occasionally.
 pub struct ThreadScheduler {
     /// Threads to run at each priority level, forming a queue with (<threads in queue>, <index of queue head>)
     queues: [(Vec<ThreadId>, usize); 3],
@@ -12,17 +22,27 @@ pub struct ThreadScheduler {
 }
 
 impl ThreadScheduler {
-    pub fn new(first_thread: ThreadId) -> ThreadScheduler {
+    /// Create a new scheduler, assuming that the currently running thread is the idle thread.
+    ///
+    /// The first call to [Self::pause_current_thread] will assign whatever execution state it
+    /// finds to the idle thread. The idle thread runs at lowest priority.
+    fn new() -> ThreadScheduler {
         ThreadScheduler {
-            queues: [(Vec::new(), 0), (Vec::new(), 0), (Vec::new(), 0)],
-            current_thread: first_thread,
+            queues: [
+                (Vec::new(), 0),
+                (Vec::new(), 0),
+                (alloc::vec![IDLE_THREAD], 0),
+            ],
+            current_thread: IDLE_THREAD,
         }
     }
 
+    /// Get the ID of the thread that is currrently running.
     pub fn currently_running(&self) -> ThreadId {
         self.current_thread
     }
 
+    /// Find the next ready thread and make it current.
     pub fn schedule_next_thread(&mut self) {
         for (queue, next) in self.queues.iter_mut() {
             if queue.is_empty() {
@@ -45,19 +65,26 @@ impl ThreadScheduler {
             }
             self.current_thread = queue[*next];
             *next = (*next + 1) % queue.len();
-            break;
+            return;
         }
+        // since there is an idle thread we shouldn't get here.
+        panic!("no available thread found to schedule as current");
     }
 
+    /// Force the task executor thread to become current.
     pub fn make_task_executor_current(&mut self) {
         self.current_thread = TASK_THREAD;
     }
 
+    /// Add a thread to the scheduler so that it can run.
     pub fn add_thread(&mut self, thread: ThreadId) {
         let t = threads().get(&thread).unwrap();
         self.queues[t.priority as usize].0.push(thread);
     }
 
+    /// Remove a thread from the scheduler.
+    ///
+    /// If the thread was current, a new ready thread will be scheduled.
     pub fn remove_thread(&mut self, thread: ThreadId) {
         let t = threads().get(&thread).unwrap();
         self.queues[t.priority as usize]
@@ -127,21 +154,24 @@ impl ThreadScheduler {
 // TODO: we will eventually need one of these per-CPU
 static mut SCHD: OnceCell<Mutex<ThreadScheduler>> = OnceCell::new();
 
-// TODO: maybe the first thread should always be the idle thread??
-pub fn init_scheduler(first_thread: ThreadId) {
+/// Initialize the global thread scheduler. The first thread to run must be the idle thread.
+pub fn init_scheduler() {
     unsafe {
-        SCHD.set(Mutex::new(ThreadScheduler::new(first_thread)))
+        SCHD.set(Mutex::new(ThreadScheduler::new()))
             .ok()
             .expect("init scheduler");
     }
 }
 
 // TODO: also will eventually need to be per-CPU?
+/// Lock and gain access to the global thread scheduler.
 pub fn scheduler() -> MutexGuard<'static, ThreadScheduler> {
     unsafe { SCHD.get().unwrap().lock() }
 }
 
-pub fn current_thread_id() -> Option<ThreadId> {
+/// Try to read the ID of the current thread running from the global scheduler.
+/// If the lock cannot be locked or the scheduler is not yet initialized, then None is returned.
+pub fn try_current_thread_id() -> Option<ThreadId> {
     unsafe {
         SCHD.get()
             .and_then(|s| s.try_lock())

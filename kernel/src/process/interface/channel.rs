@@ -50,7 +50,7 @@ impl<T> Queue<T> {
         // put the messages after the head and tail pointers in the buffer
         let data_ptr: *mut T = buffer
             .virtual_address()
-            .offset((core::mem::size_of::<AtomicUsize>() * 2) as isize)
+            .add(core::mem::size_of::<AtomicUsize>() * 2)
             .as_ptr();
 
         Ok(Queue {

@@ -1,3 +1,4 @@
+//! The virtual address allocator.
 use core::cell::OnceCell;
 
 use alloc::collections::LinkedList;
@@ -6,7 +7,7 @@ use spin::Mutex;
 
 use super::{MemoryError, VirtualAddress, PAGE_SIZE};
 
-const START_ADDRESS: VirtualAddress = VirtualAddress(0xffff_0010_0000_0000);
+const START_ADDRESS: VirtualAddress = VirtualAddress(0xffff_0001_0000_0000);
 const TOTAL_SIZE: usize = 0x0100_0000_0000 / PAGE_SIZE; //1TiB in pages
 
 #[derive(Debug)]
@@ -15,9 +16,16 @@ struct FreeBlock {
     size: usize,
 }
 
-/// VirtualAddressAllocator allocates virtual address ranges for mapping already allocated memory
-/// This is important if the physical address of a piece of memory is neccessary and/or a device has specific physical requirements
-/// This allocator requires that the kernel heap is already active
+/// An allocator for virtual address ranges.
+///
+/// This allocator is a free list style allocator, using the Rust heap to keep track of the free
+/// regions of the virtual address space. This is lazy, but makes it much simpler since virtual
+/// address ranges on their own can't store anything.
+///
+/// This allocator allows for seperate allocation and managment of the virtual addresses allocated
+/// and the physical memory they are mapped to.
+/// This is important if the physical address of a piece of memory is neccessary and/or a device has specific physical requirements.
+/// This allocator requires that the kernel heap is already active.
 pub struct VirtualAddressAllocator {
     free_list: LinkedList<FreeBlock>,
 }
@@ -36,9 +44,11 @@ impl VirtualAddressAllocator {
         }
     }
 
-    /// Remove a specific range of virtual addresses from the free pool. These addresses will not be
-    /// returned from `alloc()`. To return the addresses to the pool, call `free()` as normal. If
-    /// the range cannot be reserved (because it has already been allocated), an error will be
+    /// Remove a specific range of virtual addresses from the free pool.
+    ///
+    /// These addresses will not be returned from `alloc()`.
+    /// To return the addresses to the pool, call `free()` as normal.
+    /// If the range cannot be reserved (because it has already been allocated), an error will be
     /// returned. It is best to use this function before ever calling `alloc()`.
     pub fn reserve(
         &mut self,
@@ -50,10 +60,10 @@ impl VirtualAddressAllocator {
         // otherwise, remove the reserved range from the block, potentially yielding up to two new
         // free blocks if the range is in the middle
 
-        let end_address = start_address.offset_fwd(page_count * PAGE_SIZE);
+        let end_address = start_address.add(page_count * PAGE_SIZE);
         let mut cur = self.free_list.cursor_front_mut();
         while let Some(block) = cur.current() {
-            let block_end = block.address.offset_fwd(block.size * PAGE_SIZE);
+            let block_end = block.address.add(block.size * PAGE_SIZE);
 
             if block.address <= start_address && block_end >= end_address {
                 // we found the overlapping free block, modify it to accommodate the reserved range
@@ -61,7 +71,7 @@ impl VirtualAddressAllocator {
                     if block.size == page_count {
                         cur.remove_current();
                     } else {
-                        block.address = block.address.offset_fwd(page_count);
+                        block.address = block.address.add(page_count);
                         block.size -= page_count;
                     }
                 } else if block_end == end_address {
@@ -98,7 +108,7 @@ impl VirtualAddressAllocator {
                 if block.size == page_count {
                     cur.remove_current();
                 } else {
-                    block.address = block.address.offset((PAGE_SIZE * page_count) as isize);
+                    block.address = block.address.add(PAGE_SIZE * page_count);
                     block.size -= page_count;
                 }
                 log::trace!("allocated {page_count} pages at {addr}");
@@ -110,13 +120,14 @@ impl VirtualAddressAllocator {
     }
 
     /// Return a range of previously allocated addresses to the pool.
-    /// Warning: if you don't free exactly as many pages as you allocated, this will leak any left-over pages
+    ///
+    /// **Warning**: if you don't free exactly as many pages as you allocated, this will leak any left-over pages
     pub fn free(&mut self, address: VirtualAddress, page_count: usize) {
         log::trace!("freeing {page_count} pages at {address}");
-        let end_address = address.offset((PAGE_SIZE * page_count) as isize);
+        let end_address = address.add(PAGE_SIZE * page_count);
         let mut cur = self.free_list.cursor_front_mut();
         while let Some(block) = cur.current() {
-            let back = block.address.offset((PAGE_SIZE * block.size) as isize);
+            let back = block.address.add(PAGE_SIZE * block.size);
             if end_address == block.address {
                 // the block we're freeing is immediately before this block
                 block.address = address;
@@ -143,6 +154,7 @@ impl VirtualAddressAllocator {
 
 static mut VAA: OnceCell<Mutex<VirtualAddressAllocator>> = OnceCell::new();
 
+/// Initialize the global virtual address allocator.
 pub fn init_virtual_address_allocator() {
     unsafe {
         VAA.set(Mutex::new(VirtualAddressAllocator::new(
@@ -154,6 +166,7 @@ pub fn init_virtual_address_allocator() {
     }
 }
 
+/// Lock and gain access to the global virtual address allocator.
 pub fn virtual_address_allocator() -> spin::MutexGuard<'static, VirtualAddressAllocator> {
     unsafe {
         VAA.get()
