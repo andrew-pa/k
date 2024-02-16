@@ -56,7 +56,7 @@ pub trait BlockStore: Send {
     /// Returns the number of blocks written, or an error if one occurred
     async fn write_blocks<'a>(
         &mut self,
-        source_addrs: &'a [(PhysicalAddress, usize)],
+        sources: &'a [(PhysicalAddress, usize)],
         destination_addr: BlockAddress,
     ) -> Result<usize, Error>;
 }

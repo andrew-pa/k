@@ -116,14 +116,18 @@ impl BlockCache {
         let tag = address
             .0
             .bit_range(63, self.chunk_id_bits + self.block_offset_bits);
-        let chunk_id = address.0.bit_range(
-            self.chunk_id_bits + self.block_offset_bits - 1,
-            self.block_offset_bits,
-        );
+        let chunk_id = if self.chunk_id_bits == 0 {
+            0
+        } else {
+            address.0.bit_range(
+                self.chunk_id_bits + self.block_offset_bits - 1,
+                self.block_offset_bits,
+            )
+        };
         let block_offset = address.0.bit_range(self.block_offset_bits - 1, 0);
         /*log::trace!(
-            "decomposing {:b} => {tag:b}:{chunk_id:b}:{block_offset:b}",
-            address.0
+        "decomposing {:b} => {tag:b}:{chunk_id:b}:{block_offset:b}",
+        address.0
         );*/
         assert!(
             (chunk_id as usize) < self.num_chunks,
@@ -305,27 +309,30 @@ mod test {
         fn supported_block_size(&self) -> usize {
             self.block_size
         }
-        async fn read_blocks(
+        async fn read_blocks<'a>(
             &mut self,
             source_addr: BlockAddress,
-            destination_addr: PhysicalAddress,
-            num_blocks: usize,
+            destinations: &'a [(PhysicalAddress, usize)],
         ) -> Result<usize, Error> {
-            unsafe {
-                let p: *mut u8 = destination_addr.to_virtual_canonical().as_ptr();
-                let mut s = core::slice::from_raw_parts_mut(p, self.block_size * num_blocks);
-                for (i, d) in s.iter_mut().enumerate() {
-                    *d = (i % 255) as u8;
+            let mut total = 0;
+            for (destination_addr, num_blocks) in destinations {
+                unsafe {
+                    let p: *mut u8 = destination_addr.to_virtual_canonical().as_ptr();
+                    let mut s = core::slice::from_raw_parts_mut(p, self.block_size * num_blocks);
+                    for (i, d) in s.iter_mut().enumerate() {
+                        *d = (i % 255) as u8;
+                    }
                 }
+                self.read_counter.fetch_add(*num_blocks, Ordering::Release);
+                total += num_blocks;
             }
-            self.read_counter.fetch_add(num_blocks, Ordering::Release);
-            Ok(num_blocks)
+            Ok(total)
         }
-        async fn write_blocks(
+
+        async fn write_blocks<'a>(
             &mut self,
-            source_addr: PhysicalAddress,
+            source_addrs: &'a [(PhysicalAddress, usize)],
             destination_addr: BlockAddress,
-            num_blocks: usize,
         ) -> Result<usize, Error> {
             unimplemented!()
         }
@@ -392,43 +399,49 @@ mod test {
             8
         }
 
-        async fn read_blocks(
+        async fn read_blocks<'a>(
             &mut self,
             source_addr: BlockAddress,
-            destination_addr: PhysicalAddress,
-            num_blocks: usize,
+            destinations: &'a [(PhysicalAddress, usize)],
         ) -> Result<usize, Error> {
-            log::debug!("read {source_addr} → {destination_addr}, {num_blocks} blocks");
-            unsafe {
-                let p: *mut u8 = destination_addr.to_virtual_canonical().as_ptr();
-                let mut s = core::slice::from_raw_parts_mut(p, 8 * num_blocks);
-                let start = (source_addr.0 * 8) as usize;
-                let end = start + num_blocks * 8;
-                if start > self.buffer.len() || end > self.buffer.len() {
-                    return Ok(0);
+            log::debug!("read {source_addr} → {destinations:?}");
+            let mut total = 0;
+            for (destination_addr, num_blocks) in destinations {
+                unsafe {
+                    let p: *mut u8 = destination_addr.to_virtual_canonical().as_ptr();
+                    let mut s = core::slice::from_raw_parts_mut(p, 8 * num_blocks);
+                    let start = (source_addr.0 * 8) as usize;
+                    let end = start + num_blocks * 8;
+                    if start > self.buffer.len() || end > self.buffer.len() {
+                        return Ok(0);
+                    }
+                    s.copy_from_slice(&self.buffer[start..end]);
                 }
-                s.copy_from_slice(&self.buffer[start..end]);
+                self.read_counter.fetch_add(*num_blocks, Ordering::Release);
+                total += num_blocks;
             }
-            self.read_counter.fetch_add(num_blocks, Ordering::Release);
-            Ok(num_blocks)
+            Ok(total)
         }
 
-        async fn write_blocks(
+        async fn write_blocks<'a>(
             &mut self,
-            source_addr: PhysicalAddress,
+            sources: &'a [(PhysicalAddress, usize)],
             destination_addr: BlockAddress,
-            num_blocks: usize,
         ) -> Result<usize, Error> {
-            log::debug!("write {source_addr} → {destination_addr}, {num_blocks} blocks");
-            unsafe {
-                let p: *mut u8 = source_addr.to_virtual_canonical().as_ptr();
-                let mut s = core::slice::from_raw_parts_mut(p, 8 * num_blocks);
-                let start = (destination_addr.0 * 8) as usize;
-                let end = start + num_blocks * 8;
-                self.buffer[start..end].copy_from_slice(s);
+            log::debug!("write {sources:?} → {destination_addr}");
+            let mut total = 0;
+            for (source_addr, num_blocks) in sources {
+                unsafe {
+                    let p: *mut u8 = source_addr.to_virtual_canonical().as_ptr();
+                    let mut s = core::slice::from_raw_parts_mut(p, 8 * num_blocks);
+                    let start = (destination_addr.0 * 8) as usize;
+                    let end = start + num_blocks * 8;
+                    self.buffer[start..end].copy_from_slice(s);
+                }
+                self.write_counter.fetch_add(*num_blocks, Ordering::Release);
+                total += num_blocks;
             }
-            self.write_counter.fetch_add(num_blocks, Ordering::Release);
-            Ok(num_blocks)
+            Ok(total)
         }
     }
 

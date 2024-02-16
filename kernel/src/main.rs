@@ -57,12 +57,17 @@ pub extern "C" fn kmain() {
     init::configure_time_slicing(&dt);
     init::register_system_call_handlers();
 
-    tasks::spawn(init::mount_root_fs_and_spawn_init());
-
     #[cfg(test)]
-    tasks::spawn(async {
-        test_main();
-    });
+    {
+        // there are no tests for the kernel executable but Cargo still builds the it for test
+        // mode.
+        log::info!("boot succesful!");
+        use qemu_exit::QEMUExit;
+        qemu_exit::aarch64::AArch64::new().exit_success();
+        halt();
+    }
+
+    tasks::spawn(init::mount_root_fs_and_spawn_init());
 
     init::spawn_task_executor_thread();
 
