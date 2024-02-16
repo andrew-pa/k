@@ -173,7 +173,7 @@ pub fn block_on<O, F: Future<Output = O>>(task: F) -> O {
             Poll::Pending => {
                 signal.store(true, core::sync::atomic::Ordering::Release);
                 while signal.load(core::sync::atomic::Ordering::Acquire) {
-                    crate::wait_for_interrupt();
+                    crate::intrinsics::wait_for_interrupt();
                 }
             }
         }

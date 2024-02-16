@@ -1,3 +1,10 @@
+//! The kernel for the ??? operating system.
+//!
+//! The kernel has a modular, but monolithic design.
+//! Execution starts in `src/main.rs`, in the `kmain` function.
+//! Devices are detected using the Device Tree blob provided by `u-boot` (see [dtb]).
+//! The kernel uses `async`/`await` to handle asynchronous operations, and includes a kernel-level
+//! task executor to drive tasks to completion (see [tasks]). This runs in its own kernel thread.
 #![no_std]
 #![no_main]
 #![recursion_limit = "256"]
@@ -7,17 +14,51 @@
 #![feature(custom_test_frameworks)]
 #![feature(iter_array_chunks)]
 #![feature(non_null_convenience)]
-#![test_runner(kernel::test_runner)]
+#![feature(error_in_core)]
+#![test_runner(crate::test_runner)]
 #![reexport_test_harness_main = "test_main"]
 #![allow(unused)]
+
+extern crate alloc;
 
 use core::{arch::global_asm, panic::PanicInfo};
 use smallvec::SmallVec;
 
-use kernel::{registry::Path, *};
+pub mod dtb;
+pub mod registry;
 
-extern crate alloc;
+pub mod exception;
+pub mod memory;
+pub mod process;
+pub mod tasks;
 
+pub mod bus;
+pub mod storage;
+pub mod timer;
+pub mod uart;
+
+pub mod fs;
+
+pub mod init;
+
+pub mod intrinsics;
+
+/// A concurrent hash map using spinlocks.
+pub type CHashMapG<K, V> =
+    chashmap::CHashMap<K, V, hashbrown::hash_map::DefaultHashBuilder, spin::RwLock<()>>;
+/// The read guard for [CHashMapG].
+pub type CHashMapGReadGuard<'a, K, V> =
+    chashmap::ReadGuard<'a, K, V, hashbrown::hash_map::DefaultHashBuilder, spin::RwLock<()>>;
+/// The write guard for [CHashMapG].
+pub type CHashMapGWriteGuard<'a, K, V> =
+    chashmap::WriteGuard<'a, K, V, hashbrown::hash_map::DefaultHashBuilder, spin::RwLock<()>>;
+
+global_asm!(include_str!("start.S"));
+
+/// The main entry point for the kernel.
+///
+/// This function is called by `start.S` to boot the kernel.
+/// The boot process initializes various kernel subsystems in order, then spawns the `init` process.
 #[no_mangle]
 pub extern "C" fn kmain() {
     unsafe {
@@ -26,8 +67,11 @@ pub extern "C" fn kmain() {
 
     init::logging(log::LevelFilter::Trace);
 
-    if read_current_el() != 1 {
-        todo!("switch from {} to EL1 at boot", read_current_el());
+    if intrinsics::read_current_el() != 1 {
+        todo!(
+            "switch from {} to EL1 at boot",
+            intrinsics::read_current_el()
+        );
     }
 
     // load the device tree blob that u-boot places at 0x4000_0000 when it loads the kernel
@@ -61,10 +105,8 @@ pub extern "C" fn kmain() {
     {
         // there are no tests for the kernel executable but Cargo still builds the it for test
         // mode.
-        log::info!("boot succesful!");
-        use qemu_exit::QEMUExit;
-        qemu_exit::aarch64::AArch64::new().exit_success();
-        halt();
+        log::info!("boot succesful, running unit tests!");
+        test_main();
     }
 
     tasks::spawn(init::mount_root_fs_and_spawn_init());
@@ -80,6 +122,53 @@ pub extern "C" fn kmain() {
     log::trace!("idle loop starting");
     loop {
         log::trace!("idle top of loop");
-        wait_for_interrupt()
+        intrinsics::wait_for_interrupt()
     }
+}
+
+/// Handle panics in the kernel by writing them to the debug UART.
+#[panic_handler]
+pub fn panic_handler(info: &core::panic::PanicInfo) -> ! {
+    use core::fmt::Write;
+    let mut uart = uart::DebugUart {
+        base: 0xffff_0000_0900_0000 as *mut u8,
+    };
+    let _ = uart.write_fmt(format_args!("\npanic! {info}\n"));
+    // TODO: why can't we get this to only happen during cfg(test)?
+    use qemu_exit::QEMUExit;
+    qemu_exit::aarch64::AArch64::new().exit_failure();
+    // prevent anything from getting scheduled after a kernel panic
+    intrinsics::halt();
+}
+
+/// Trait for custom test runner.
+pub trait Testable {
+    fn run(&self);
+}
+
+impl<T> Testable for T
+where
+    T: Fn(),
+{
+    fn run(&self) {
+        use core::fmt::Write;
+        let mut uart = uart::DebugUart {
+            base: 0xffff_0000_0900_0000 as *mut u8,
+        };
+        write!(&mut uart, "{}...\t", core::any::type_name::<T>());
+        self();
+        writeln!(&mut uart, "ok");
+    }
+}
+
+/// Run provided tests, then exit QEMU or halt.
+pub fn test_runner(tests: &[&dyn Testable]) {
+    log::info!("running {} tests...", tests.len());
+    for test in tests {
+        test.run();
+    }
+    log::info!("all tests successful");
+    use qemu_exit::QEMUExit;
+    qemu_exit::aarch64::AArch64::new().exit_success();
+    intrinsics::halt();
 }

@@ -20,7 +20,7 @@ use crate::{
         thread::reg::{read_exception_link_reg, read_stack_pointer},
         ProcessId,
     },
-    read_current_el, read_sp_sel, timer, CHashMapG,
+    timer, CHashMapG,
 };
 
 /// An interrupt identifier.
