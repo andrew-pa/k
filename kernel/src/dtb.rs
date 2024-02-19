@@ -5,12 +5,15 @@
 //! Individual device drivers are expected to make sense of the exact structure of the information
 //! in their respective portion of the tree, but this module contains common structures and
 //! iterators to make that easier.
+//!
+//! [DeviceTree Specification](https://github.com/devicetree-org/devicetree-specification)
 use core::{ffi::CStr, fmt::Debug};
 
 use byteorder::{BigEndian, ByteOrder};
 
 use crate::memory::VirtualAddress;
 
+/// The magic value expected in the device tree header.
 pub const EXPECTED_MAGIC: u32 = 0xd00d_feed;
 
 const FDT_BEGIN_NODE: u8 = 0x01;

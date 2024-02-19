@@ -6,6 +6,7 @@
 <<-END
     nvme scan
     fatload nvme 0 0x41000000 kernel.img
-    bootm 41000000
+    setenv bootargs 'testbootargs'
+    bootm 41000000 - 40000000
 END
 

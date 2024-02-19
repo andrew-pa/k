@@ -19,5 +19,5 @@ echo $1 "->" $img_name
 <<END
     nvme scan
     fatload nvme 0 0x41000000 $img_name
-    bootm 41000000
+    bootm 41000000 - 40000000
 END

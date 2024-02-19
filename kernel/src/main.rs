@@ -1,7 +1,7 @@
 //! The kernel for the ??? operating system.
 //!
 //! The kernel has a modular, but monolithic design.
-//! Execution starts in `src/main.rs`, in the `kmain` function.
+//! Execution starts in `start.S`, which then calls [kmain].
 //! Devices are detected using the Device Tree blob provided by `u-boot` (see [dtb]).
 //! The kernel uses `async`/`await` to handle asynchronous operations, and includes a kernel-level
 //! task executor to drive tasks to completion (see [tasks]). This runs in its own kernel thread.
@@ -18,10 +18,12 @@
 #![test_runner(crate::test_runner)]
 #![reexport_test_harness_main = "test_main"]
 #![allow(unused)]
+#![warn(missing_docs)]
 
 extern crate alloc;
 
 use core::{arch::global_asm, panic::PanicInfo};
+use memory::PhysicalAddress;
 use smallvec::SmallVec;
 
 pub mod dtb;
@@ -59,8 +61,10 @@ global_asm!(include_str!("start.S"));
 ///
 /// This function is called by `start.S` to boot the kernel.
 /// The boot process initializes various kernel subsystems in order, then spawns the `init` process.
+///
+/// This function never returns, but instead becomes the idle thread loop.
 #[no_mangle]
-pub extern "C" fn kmain() {
+pub extern "C" fn kmain(dtb_addr: PhysicalAddress) -> ! {
     unsafe {
         memory::zero_bss_section();
     }
@@ -74,10 +78,21 @@ pub extern "C" fn kmain() {
         );
     }
 
-    // load the device tree blob that u-boot places at 0x4000_0000 when it loads the kernel
-    let dt = unsafe {
-        dtb::DeviceTree::at_address(memory::PhysicalAddress(0x4000_0000).to_virtual_canonical())
-    };
+    // Load the device tree blob at the address provided by u-boot as a parameter.
+    // See u-boot/arch/arm/lib/bootm.c:boot_jump_linux(...).
+    log::debug!("reading device tree blob at {dtb_addr}");
+    let dt = unsafe { dtb::DeviceTree::at_address(dtb_addr.to_virtual_canonical()) };
+
+    dt.process_properties_for_node("chosen", |prop, data, _| match prop {
+        "bootargs" => {
+            let s = core::ffi::CStr::from_bytes_until_nul(data)
+                .unwrap()
+                .to_str()
+                .unwrap();
+            log::info!("bootargs = {s}");
+        }
+        _ => {}
+    });
 
     unsafe {
         exception::install_exception_vector_table();
@@ -143,6 +158,7 @@ pub fn panic_handler(info: &core::panic::PanicInfo) -> ! {
 
 /// Trait for custom test runner.
 pub trait Testable {
+    /// Execute the test.
     fn run(&self);
 }
 

@@ -6,6 +6,9 @@
 .global _start
 
 _start:
+    /* save address of flatted device tree blob */
+    mov x3, x0
+
     /* disable MMU */
     mrs x0, SCTLR_EL1
     bic x0, x0, #1
@@ -42,9 +45,10 @@ _start:
     add sp, sp, x0
 
     /* start the kernel, now running in the correct spot in virtual memory */
-    adr x0, kmain
-    movk x0, #0xffff, lsl 48
-    br x0
+    mov x0, x3
+    adr x3, kmain
+    movk x3, #0xffff, lsl 48
+    br x3
     .quad 0xbeefbeefbeefbeef
 
 .section .data.boot

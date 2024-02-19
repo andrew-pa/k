@@ -32,7 +32,7 @@ if command -v mkimage > /dev/null; then
 fi
 
 
-$MKIMAGE -A arm64 -O plan9 -T kernel -C none -a $LOAD_ADDR \
+$MKIMAGE -A arm64 -O linux -T kernel -C none -a $LOAD_ADDR \
     -e $ENTRY_ADDR -n "k" -d $BIN_NAME $2
 
 
