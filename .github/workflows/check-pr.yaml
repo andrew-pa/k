@@ -3,7 +3,7 @@ run-name: Checking ${{ github.event.pull_request.title }} for merge readiness
 
 on:
   pull_request:
-    types: [ready_for_review]
+    types: [opened, reopened, ready_for_review, auto_merge_enabled, synchronize]
 
 jobs:
   build-and-test:
@@ -29,7 +29,6 @@ jobs:
       - name: Run linter
         run: cargo clippy -- -D warnings
 
-      # Build/cache QEMU and U-boot
       - name: Hash submodule status for cache key
         id: submodules-cache-key
         run: echo "::set-output name=hash::$(git submodule status | sha256sum | cut -d' ' -f1)"
