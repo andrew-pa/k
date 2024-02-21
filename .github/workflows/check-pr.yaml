@@ -1,0 +1,66 @@
+name: check-pr
+run-name: Checking ${{ github.event.pull_request.title }} for merge readiness
+
+on:
+  pull_request:
+    types: [ready_for_review]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: 'recursive'
+
+      - name: Set up Rust toolchain
+        id: setup-rust
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          toolchain: nightly
+          components: rustfmt, clippy
+          targets: aarch64-unknown-none
+
+      - name: Check formatting
+        run: cargo fmt -- --check
+
+      - name: Run linter
+        run: cargo clippy -- -D warnings
+
+      # Build/cache QEMU and U-boot
+      - name: Hash submodule status for cache key
+        id: submodules-cache-key
+        run: echo "::set-output name=hash::$(git submodule status | sha256sum | cut -d' ' -f1)"
+
+      - name: Cache binary dependencies
+        id: cache-bindep
+        uses: actions/cache@v4
+        with:
+          path: |
+            ./qemu/.build
+            ./u-boot/.build
+          key: ${{runner.os}}-bindep-${{ steps.submodules-cache-key.outputs.hash }}
+
+      - name: Set up C/C++ toolchain for building dependencies
+        if: steps.cache-bindep.outputs.cache-hit != 'true'
+        run: apt-get update -y && apt-get install -y gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
+
+      - name: Build QEMU and U-boot
+        if: steps.cache-bindep.outputs.cache-hit != 'true'
+        run: make all-bindep
+
+      - name: Cache Rust dependencies and build intermediates
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ steps.setup-rust.outputs.cachekey }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build and run tests
+        run: make test

@@ -22,7 +22,7 @@ $(QEMU):
 	mkdir -p $(QEMU_BIN) && cd $(QEMU_BIN) && ../configure --target-list=aarch64-softmmu
 	$(MAKE) -C $(QEMU_BIN) -j all
 
-
+all-bindep: $(QEMU) $(UBOOT_BIN)/u-boot.bin $(UBOOT_BIN)/tools/mkimage
 
 # Building/Packaging the Kernel
 build-all: $(BUILD_DIR)/kernel.img $(BUILD_DIR)/init #? Build and package everything.
@@ -47,7 +47,7 @@ run: build-all $(QEMU) $(UBOOT_BIN)/u-boot.bin #? Boots the system inside QEMU.
 debug: build-all $(QEMU) $(UBOOT_BIN)/u-boot.bin #? Run with QEMU in debug mode. Waits for GDB to attach before continuing.
 	./scripts/qemu-exec.sh $(BUILD_DIR) '{}' '-s -S'
 
-test: ./u-boot/.build/u-boot.bin #? Run unit tests.
+test: $(QEMU) $(UBOOT_BIN)/u-boot.bin $(UBOOT_BIN)/tools/mkimage #? Run unit tests.
 	cargo test -p kernel
 
 
