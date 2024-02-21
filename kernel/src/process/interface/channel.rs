@@ -3,16 +3,12 @@ use core::{ptr::NonNull, sync::atomic::AtomicUsize};
 use crate::memory::{paging::PageTableEntryOptions, MemoryError, PhysicalBuffer};
 
 use kapi::{Command, Completion};
-use postcard::experimental::max_size::MaxSize;
 use snafu::Snafu;
 
 #[derive(Debug, Snafu)]
 pub enum QueueError {
     #[snafu(display("queue is too full to receive message"))]
     Full,
-    Serialize {
-        cause: postcard::Error,
-    },
 }
 
 pub type QueueId = u32;

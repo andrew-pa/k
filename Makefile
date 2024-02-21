@@ -42,7 +42,7 @@ $(BUILD_DIR)/init: build-rust $(TARGET_DIR)/init
 
 # QEMU Run/Test/Debug
 run: build-all $(QEMU) $(UBOOT_BIN)/u-boot.bin #? Boots the system inside QEMU.
-	./scripts/qemu-exec.sh $(BUILD_DIR) '{}'
+	./scripts/qemu-exec.sh $(BUILD_DIR) '{"init_process_path":"/fat/init"}'
 
 debug: build-all $(QEMU) $(UBOOT_BIN)/u-boot.bin #? Run with QEMU in debug mode. Waits for GDB to attach before continuing.
 	./scripts/qemu-exec.sh $(BUILD_DIR) '{}' '-s -S'

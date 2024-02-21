@@ -283,7 +283,7 @@ impl Handler {
                             Err(e) => return Some((Err(e), (cache, source, offset))),
                         }
 
-                        log::trace!("{:?}", bytemuck::cast_ref::<_, DirEntry>(&entry_bytes));
+                        // log::trace!("{:?}", bytemuck::cast_ref::<_, DirEntry>(&entry_bytes));
 
                         offset += core::mem::size_of::<DirEntry>();
                         if offset >= size_of_segment {

@@ -214,7 +214,7 @@ impl BlockCache {
         let (starting_tag, starting_chunk_id, initial_block_offset) =
             self.decompose_address(address);
 
-        log::trace!("copying from {starting_tag}:{starting_chunk_id}:{initial_block_offset} + {byte_offset} [{address}]");
+        //log::trace!("copying from {starting_tag}:{starting_chunk_id}:{initial_block_offset} + {byte_offset} [{address}]");
         let num_chunks_inclusive = dest.len().div_ceil(self.chunk_size);
         if num_chunks_inclusive > self.num_chunks {
             // if the read is larger than the entire cache

@@ -22,8 +22,10 @@
 
 extern crate alloc;
 
+use alloc::boxed::Box;
 use core::{arch::global_asm, panic::PanicInfo};
 use memory::PhysicalAddress;
+use qemu_exit::QEMUExit as _;
 use smallvec::SmallVec;
 
 pub mod dtb;
@@ -78,25 +80,15 @@ pub extern "C" fn kmain(dtb_addr: PhysicalAddress) -> ! {
         );
     }
 
-    // Load the device tree blob at the address provided by u-boot as a parameter.
-    // See u-boot/arch/arm/lib/bootm.c:boot_jump_linux(...).
-    log::debug!("reading device tree blob at {dtb_addr}");
-    let dt = unsafe { dtb::DeviceTree::at_address(dtb_addr.to_virtual_canonical()) };
-
-    dt.process_properties_for_node("chosen", |prop, data, _| match prop {
-        "bootargs" => {
-            let s = core::ffi::CStr::from_bytes_until_nul(data)
-                .unwrap()
-                .to_str()
-                .unwrap();
-            log::info!("bootargs = {s}");
-        }
-        _ => {}
-    });
-
+    // set up our exception handlers as soon as possible so we can detect kernel errors.
     unsafe {
         exception::install_exception_vector_table();
     }
+
+    // Load the device tree blob at the address provided by u-boot as a parameter.
+    // See u-boot/arch/arm/lib/bootm.c:boot_jump_linux(...).
+    log::trace!("reading device tree blob at {dtb_addr}");
+    let dt = unsafe { dtb::DeviceTree::at_address(dtb_addr.to_virtual_canonical()) };
 
     memory::init_physical_memory_allocator(&dt);
     memory::paging::init_kernel_page_table();
@@ -109,22 +101,27 @@ pub extern "C" fn kmain(dtb_addr: PhysicalAddress) -> ! {
     tasks::init_executor();
     registry::init_registry();
 
+    init::configure_time_slicing(&dt);
+    init::register_system_call_handlers();
+
     log::info!("kernel systems initialized");
 
     init::pcie(&dt);
 
-    init::configure_time_slicing(&dt);
-    init::register_system_call_handlers();
+    let dt = Box::leak(Box::new(dt));
+    let opts = init::find_boot_options(dt);
 
     #[cfg(test)]
     {
-        // there are no tests for the kernel executable but Cargo still builds the it for test
-        // mode.
         log::info!("boot succesful, running unit tests!");
         test_main();
+        qemu_exit::aarch64::AArch64::new().exit_success();
+        intrinsics::halt();
     }
 
-    tasks::spawn(init::mount_root_fs_and_spawn_init());
+    // Spawn a task to finish booting the system. This task won't actually run until after we
+    // enable interrupts and the scheduler schedules the task executor.
+    tasks::spawn(init::finish_boot(opts));
 
     init::spawn_task_executor_thread();
 
@@ -150,7 +147,6 @@ pub fn panic_handler(info: &core::panic::PanicInfo) -> ! {
     };
     let _ = uart.write_fmt(format_args!("\npanic! {info}\n"));
     // TODO: why can't we get this to only happen during cfg(test)?
-    use qemu_exit::QEMUExit;
     qemu_exit::aarch64::AArch64::new().exit_failure();
     // prevent anything from getting scheduled after a kernel panic
     intrinsics::halt();
@@ -184,7 +180,4 @@ pub fn test_runner(tests: &[&dyn Testable]) {
         test.run();
     }
     log::info!("all tests successful");
-    use qemu_exit::QEMUExit;
-    qemu_exit::aarch64::AArch64::new().exit_success();
-    intrinsics::halt();
 }

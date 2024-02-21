@@ -12,6 +12,7 @@ bitfield = "0.14"
 bitflags = { version = "2", features = ["bytemuck"] }
 async-trait = "0.1"
 async-recursion = "1"
+serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
 
 # extra data structures
 hashbrown = "0.14"
@@ -23,7 +24,7 @@ widestring = { version = "1", default-features = false, features = ["alloc"] }
 
 # logging / errors
 log = "0.4"
-snafu = { version = "0.7", default-features = false, features = ["unstable-core-error", "rust_1_61"] }
+snafu = { version = "0.8", default-features = false, features = ["unstable-core-error", "rust_1_65"] }
 
 # concurrency
 spin = "0.9"
@@ -38,7 +39,7 @@ qemu-exit = "3.0.1"
 # software interface
 kapi = { path = "../kapi" }
 elf = { version = "0.7.2", default-features = false }
-postcard = { version = "1", features = ["experimental-derive"] }
+serde-json-core = "0.5"
 
 [dev-dependencies]
 paste = "1"

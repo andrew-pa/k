@@ -8,7 +8,7 @@ if [ ! -f $scratch_disk ]; then
 fi
 img_name=$(echo $1 | sha256sum | cut -d ' ' -f 1).img
 echo $1 "->" $img_name
-./make-image.sh $1 .build/$img_name
+./scripts/make-image.sh $1 .build/$img_name
 ./qemu/.build/qemu-system-aarch64 -machine virt -cpu cortex-a57 \
     -display none -monitor none -serial stdio -semihosting \
     -bios ./u-boot/.build/u-boot.bin \

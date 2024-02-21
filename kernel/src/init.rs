@@ -13,6 +13,45 @@ pub fn logging(log_level: log::LevelFilter) {
     log::info!("starting kernel!");
 }
 
+fn default_init_process_path() -> &'static str {
+    "/fat/init"
+}
+
+/// Kernel "command line" parameters.
+///
+/// The kernel deserializes this struct from JSON as found in the bootargs device tree parameter.
+/// Use `env set bootargs ...` to set these in u-boot before booting the kernel.
+#[derive(serde::Deserialize, Debug, Default)]
+pub struct BootOptions<'a> {
+    #[serde(default = "default_init_process_path")]
+    init_process_path: &'a str,
+}
+
+/// Find and parse the boot options from the device tree `/chosen/bootargs` field if present,
+/// otherwise returning the defaults.
+pub fn find_boot_options<'a>(dt: &'a DeviceTree) -> BootOptions<'a> {
+    let mut opts = None;
+    dt.process_properties_for_node("chosen", |prop, data, _| match prop {
+        "bootargs" => {
+            let s = core::ffi::CStr::from_bytes_until_nul(data)
+                .expect("devicetree /chosen/bootargs terminated correctly")
+                .to_str()
+                .expect("devicetree /chosen/bootargs valid UTF-8 string");
+            log::trace!("bootargs = \"{s}\"");
+            if s.trim().is_empty() {
+                return;
+            }
+            opts = match serde_json_core::from_str(s) {
+                Ok((o, _)) => Some(o),
+                Err(e) => panic!("failed to parse boot options from JSON: {e} (source = {s})"),
+            };
+        }
+        _ => {}
+    });
+    log::debug!("kernel boot options = {opts:?}");
+    opts.unwrap_or_default()
+}
+
 /// Configure time slicing interrupts and initialize the system timer.
 ///
 /// The timer will trigger as soon as interrupts are enabled.
@@ -94,8 +133,8 @@ pub fn spawn_task_executor_thread() {
     core::mem::forget(task_stack);
 }
 
-/// Mount the root filesystem and spawn the `init` process.
-pub async fn mount_root_fs_and_spawn_init() {
+/// This finishes the boot process, executing the asynchronous tasks required to mount the root filesystem and spawn the `init` process.
+pub async fn finish_boot(opts: BootOptions<'_>) {
     log::info!("open /dev/nvme/pci@0:2:0/1");
     let mut bs = {
         registry::registry()
@@ -113,7 +152,7 @@ pub async fn mount_root_fs_and_spawn_init() {
 
     log::info!("spawning init process");
     let init_pid = process::spawn_process(
-        "/fat/init",
+        opts.init_process_path,
         Some(|proc: &mut process::Process| {
             proc.attach_file(test_file).unwrap();
         }),
