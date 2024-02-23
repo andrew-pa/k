@@ -42,7 +42,7 @@ jobs:
 
       - name: Hash submodule status for cache key
         id: submodules-cache-key
-        run: echo "::set-output name=hash::$(git submodule status | sha256sum | cut -d' ' -f1)"
+        run: echo "hash=$(git submodule status | sha256sum | cut -d' ' -f1)" >> $GITHUB_OUTPUT
 
       - name: Cache binary dependencies
         id: cache-bindep
@@ -55,7 +55,7 @@ jobs:
 
       - name: Set up C/C++ toolchain for building dependencies
         if: steps.cache-bindep.outputs.cache-hit != 'true'
-        run: apt-get update -y && apt-get install -y gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
+        run: sudo apt-get update -y && sudo apt-get install -y gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
 
       - name: Build everything and run tests
         run: make test
