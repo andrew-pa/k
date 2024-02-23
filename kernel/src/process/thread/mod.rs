@@ -43,13 +43,13 @@ pub const IDLE_THREAD: ThreadId = 0;
 /// The task thread runs the async task executor on its own stack at SP_EL0.
 pub const TASK_THREAD: ThreadId = 1;
 
-static mut THREADS: OnceCell<CHashMapG<ThreadId, Thread>> = OnceCell::new();
+static mut THREADS: OnceCell<CHashMap<ThreadId, Thread>> = OnceCell::new();
 
 /// The global tables of threads by ID.
-pub fn threads() -> &'static CHashMapG<ThreadId, Thread> {
+pub fn threads() -> &'static CHashMap<ThreadId, Thread> {
     unsafe {
         THREADS.get_or_init(|| {
-            let mut ths: CHashMapG<ThreadId, Thread> = Default::default();
+            let mut ths: CHashMap<ThreadId, Thread> = Default::default();
             // Create the idle thread, which will just wait for interrupts
             let mut program_status = SavedProgramStatus::initial_for_el1();
             program_status.set_sp(true); // the idle thread runs on the EL1 stack normally used by interrupts and kmain

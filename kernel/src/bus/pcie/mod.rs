@@ -13,7 +13,6 @@ use snafu::{ResultExt, Snafu};
 use crate::{
     dtb::{DeviceTree, MemRegionIter},
     memory::{self, PhysicalAddress, VirtualAddress, PAGE_SIZE},
-    CHashMapG,
 };
 
 #[derive(Debug)]

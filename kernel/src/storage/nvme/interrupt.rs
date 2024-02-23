@@ -9,7 +9,7 @@ use smallvec::SmallVec;
 
 use crate::{
     exception::{self, InterruptId},
-    CHashMapG,
+    CHashMap,
 };
 
 use super::queue::{Command, Completion, CompletionQueue, QueueId};
@@ -17,7 +17,7 @@ use super::queue::{Command, Completion, CompletionQueue, QueueId};
 pub struct CompletionFuture {
     cmd_id: u16,
     extra_data_ptr_pages_to_drop: SmallVec<[crate::memory::PhysicalBuffer; 1]>,
-    pending_completions: Arc<CHashMapG<u16, PendingCompletion>>,
+    pending_completions: Arc<CHashMap<u16, PendingCompletion>>,
 }
 
 impl Future for CompletionFuture {
@@ -54,7 +54,7 @@ enum PendingCompletion {
 
 pub struct CompletionQueueHandle {
     next_cmd_id: u16,
-    pending_completions: Arc<CHashMapG<u16, PendingCompletion>>,
+    pending_completions: Arc<CHashMap<u16, PendingCompletion>>,
     int_id: InterruptId,
 }
 
@@ -87,7 +87,7 @@ impl Drop for CompletionQueueHandle {
 fn handle_interrupt(
     int_id: InterruptId,
     qu: &mut CompletionQueue,
-    pending_completions: &Arc<CHashMapG<u16, PendingCompletion>>,
+    pending_completions: &Arc<CHashMap<u16, PendingCompletion>>,
 ) {
     use PendingCompletion::*;
     log::debug!("handling NVMe interrupt {int_id}, {}", qu.queue_id());
@@ -130,7 +130,7 @@ pub fn register_completion_queue(
     int_id: InterruptId,
     mut qu: CompletionQueue,
 ) -> CompletionQueueHandle {
-    let pending_completions: Arc<CHashMapG<u16, PendingCompletion>> = Arc::new(Default::default());
+    let pending_completions: Arc<CHashMap<u16, PendingCompletion>> = Arc::new(Default::default());
     {
         let pending_completions = pending_completions.clone();
         exception::interrupt_handlers().insert(

@@ -16,15 +16,18 @@ use futures::Future;
 
 use super::block_on;
 
-/// A semaphore for coordination between tasks.
-#[derive(Clone)]
-pub struct Semaphore {
-    count: Arc<AtomicUsize>,
-    waker_queue: Arc<SegQueue<Waker>>,
+/// Inner fields that make up a semaphore but are shared between owners.
+struct SemaphoreInner {
+    count: AtomicUsize,
+    waker_queue: SegQueue<Waker>,
 }
 
+/// A semaphore for coordination between tasks.
+#[derive(Clone)]
+pub struct Semaphore(Arc<SemaphoreInner>);
+
 struct WaitFuture {
-    p: Semaphore,
+    p: Arc<SemaphoreInner>,
 }
 
 impl Future for WaitFuture {
@@ -59,10 +62,10 @@ impl Future for WaitFuture {
 impl Semaphore {
     /// Create a new semaphore, initalized with `count`.
     pub fn new(count: usize) -> Semaphore {
-        Semaphore {
-            count: Arc::new(AtomicUsize::new(count)),
+        Semaphore(Arc::new(SemaphoreInner {
+            count: AtomicUsize::new(count),
             waker_queue: Default::default(),
-        }
+        }))
     }
 
     /// Returns a future that waits for the semaphore value to become non-zero.
@@ -70,15 +73,15 @@ impl Semaphore {
     pub fn wait(&self) -> impl Future<Output = ()> {
         // Decrements the value of semaphore variable by 1. If the new value of the semaphore variable is negative, the future returned will wait. Otherwise, the task continues execution, having used a unit of the resource.
 
-        WaitFuture { p: self.clone() }
+        WaitFuture { p: self.0.clone() }
     }
 
     /// Increments the semaphore value, allowing another waiting task to execute.
     pub fn signal(&self) {
         // Increments the value of semaphore variable by 1. After the increment, if the pre-increment value was negative (meaning there are tasks waiting for a resource), it transfers a blocked task from the semaphore's waiting queue to the ready queue.
 
-        self.count.fetch_add(1, Ordering::AcqRel);
-        if let Some(w) = self.waker_queue.pop() {
+        self.0.count.fetch_add(1, Ordering::AcqRel);
+        if let Some(w) = self.0.waker_queue.pop() {
             w.wake();
         }
     }
@@ -204,12 +207,6 @@ impl<'a, T: ?Sized> Drop for RwLockReadGuard<'a, T> {
     }
 }
 
-impl<'a, T: ?Sized> Drop for RwLockWriteGuard<'a, T> {
-    fn drop(&mut self) {
-        self.lock.write_mutex.signal();
-    }
-}
-
 impl<'a, T: ?Sized + 'a> Deref for RwLockReadGuard<'a, T> {
     type Target = T;
 
@@ -226,8 +223,94 @@ impl<'a, T: ?Sized + 'a> Deref for RwLockWriteGuard<'a, T> {
     }
 }
 
+impl<'a, T: ?Sized> Drop for RwLockWriteGuard<'a, T> {
+    fn drop(&mut self) {
+        self.lock.write_mutex.signal();
+    }
+}
+
 impl<'a, T: ?Sized + 'a> DerefMut for RwLockWriteGuard<'a, T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         unsafe { &mut *self.lock.data.get() }
+    }
+}
+
+/// A mapped read lock guard for [RwLock], allowing a function to return immutable access to only part of a locked data structure.
+pub struct MappedRwLockReadGuard<'a, T: ?Sized, U: ?Sized> {
+    /// The parent guard.
+    g: RwLockReadGuard<'a, T>,
+    /// A raw reference to the inner data.
+    mv: *const U,
+}
+
+impl<'a, T: ?Sized + 'a> RwLockReadGuard<'a, T> {
+    /// Map the guard to dereference to an inner value in the `T`.
+    pub fn map<U>(self, f: impl FnOnce(&T) -> &U) -> MappedRwLockReadGuard<'a, T, U> {
+        MappedRwLockReadGuard {
+            mv: f(&self),
+            g: self,
+        }
+    }
+
+    /// Try to map the guard to dereference to an inner value in the `T`, returning None if the inner value is None.
+    pub fn maybe_map<U>(
+        self,
+        f: impl FnOnce(&T) -> Option<&U>,
+    ) -> Option<MappedRwLockReadGuard<'a, T, U>> {
+        match f(&self) {
+            Some(mv) => Some(MappedRwLockReadGuard { mv, g: self }),
+            None => None,
+        }
+    }
+}
+
+impl<'a, T: ?Sized + 'a, U: ?Sized + 'a> Deref for MappedRwLockReadGuard<'a, T, U> {
+    type Target = U;
+
+    fn deref(&self) -> &Self::Target {
+        unsafe { &*self.mv }
+    }
+}
+
+/// A mapped write lock guard for [RwLock], allowing a function to return mutable access to only part of a locked data structure.
+pub struct MappedRwLockWriteGuard<'a, T: ?Sized, U: ?Sized> {
+    /// The parent guard.
+    g: RwLockWriteGuard<'a, T>,
+    /// A raw reference to the inner data.
+    mv: *mut U,
+}
+
+impl<'a, T: ?Sized + 'a> RwLockWriteGuard<'a, T> {
+    /// Map the guard to dereference to an inner value in the `T`.
+    pub fn map<U>(mut self, f: impl FnOnce(&mut T) -> &mut U) -> MappedRwLockWriteGuard<'a, T, U> {
+        MappedRwLockWriteGuard {
+            mv: f(&mut self),
+            g: self,
+        }
+    }
+
+    /// Try to map the guard to dereference to an inner value in the `T`, returning None if the inner value is None.
+    pub fn maybe_map<U>(
+        mut self,
+        f: impl FnOnce(&mut T) -> Option<&mut U>,
+    ) -> Option<MappedRwLockWriteGuard<'a, T, U>> {
+        match f(&mut self) {
+            Some(mv) => Some(MappedRwLockWriteGuard { mv, g: self }),
+            None => None,
+        }
+    }
+}
+
+impl<'a, T: ?Sized + 'a, U: ?Sized + 'a> Deref for MappedRwLockWriteGuard<'a, T, U> {
+    type Target = U;
+
+    fn deref(&self) -> &Self::Target {
+        unsafe { &*self.mv }
+    }
+}
+
+impl<'a, T: ?Sized + 'a, U: ?Sized + 'a> DerefMut for MappedRwLockWriteGuard<'a, T, U> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        unsafe { &mut *self.mv }
     }
 }

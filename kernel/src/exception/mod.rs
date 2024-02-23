@@ -20,7 +20,7 @@ use crate::{
         thread::reg::{read_exception_link_reg, read_stack_pointer},
         ProcessId,
     },
-    timer, CHashMapG,
+    timer, CHashMap,
 };
 
 /// An interrupt identifier.
@@ -133,8 +133,8 @@ pub type InterruptHandler = Box<dyn FnMut(InterruptId, &mut Registers)>;
 pub type SyscallHandler = fn(u16, process::ProcessId, process::ThreadId, &mut Registers);
 
 static mut IC: OnceCell<Mutex<Box<dyn InterruptController>>> = OnceCell::new();
-static mut INTERRUPT_HANDLERS: OnceCell<CHashMapG<InterruptId, InterruptHandler>> = OnceCell::new();
-static mut SYSTEM_CALL_HANDLERS: OnceCell<CHashMapG<u16, SyscallHandler>> = OnceCell::new();
+static mut INTERRUPT_HANDLERS: OnceCell<CHashMap<InterruptId, InterruptHandler>> = OnceCell::new();
+static mut SYSTEM_CALL_HANDLERS: OnceCell<CHashMap<u16, SyscallHandler>> = OnceCell::new();
 
 /// Initialize the interrupt controller using information in the device tree.
 /// The type of the interrupt controller is automatically detected.
@@ -162,12 +162,12 @@ pub fn interrupt_controller() -> MutexGuard<'static, Box<dyn InterruptController
 }
 
 /// Get the interrupt handler table.
-pub fn interrupt_handlers() -> &'static CHashMapG<InterruptId, InterruptHandler> {
+pub fn interrupt_handlers() -> &'static CHashMap<InterruptId, InterruptHandler> {
     unsafe { INTERRUPT_HANDLERS.get().expect("init interrupts") }
 }
 
 /// Get the system call handler table.
-pub fn system_call_handlers() -> &'static CHashMapG<u16, SyscallHandler> {
+pub fn system_call_handlers() -> &'static CHashMap<u16, SyscallHandler> {
     unsafe { SYSTEM_CALL_HANDLERS.get().expect("init syscall table") }
 }
 

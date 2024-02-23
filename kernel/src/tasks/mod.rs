@@ -15,7 +15,7 @@ use futures::FutureExt;
 use hashbrown::HashMap;
 use spin::Mutex;
 
-use crate::CHashMapG;
+use crate::CHashMap;
 
 pub mod locks;
 

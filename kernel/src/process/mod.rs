@@ -7,7 +7,7 @@ use crate::{
         physical_memory_allocator, MemoryError, PhysicalAddress, PhysicalBuffer, VirtualAddress,
         VirtualAddressAllocator, PAGE_SIZE,
     },
-    CHashMapG,
+    CHashMap,
 };
 use alloc::{boxed::Box, vec::Vec};
 use async_trait::async_trait;
@@ -129,12 +129,12 @@ impl Process {
 }
 
 // TODO: what we really want here is a concurrent SlotMap
-static mut PROCESSES: OnceCell<CHashMapG<ProcessId, Process>> = OnceCell::new();
+static mut PROCESSES: OnceCell<CHashMap<ProcessId, Process>> = OnceCell::new();
 
 static mut NEXT_PID: AtomicU32 = AtomicU32::new(1);
 
 /// The global table of processes by ID.
-pub fn processes() -> &'static CHashMapG<ProcessId, Process> {
+pub fn processes() -> &'static CHashMap<ProcessId, Process> {
     unsafe { PROCESSES.get_or_init(Default::default) }
 }
 
