@@ -47,7 +47,8 @@ run: build-all $(QEMU) $(UBOOT_BIN)/u-boot.bin #? Boots the system inside QEMU.
 debug: build-all $(QEMU) $(UBOOT_BIN)/u-boot.bin #? Run with QEMU in debug mode. Waits for GDB to attach before continuing.
 	./scripts/qemu-exec.sh $(BUILD_DIR) '{}' '-s -S'
 
-test: $(QEMU) $(UBOOT_BIN)/u-boot.bin $(UBOOT_BIN)/tools/mkimage #? Run unit tests.
+test: build-all $(QEMU) $(UBOOT_BIN)/u-boot.bin $(UBOOT_BIN)/tools/mkimage #? Run unit tests.
+	mkdir -p $(BUILD_DIR)
 	cargo test -p kernel
 
 
