@@ -55,7 +55,9 @@ jobs:
 
       - name: Set up C/C++ toolchain for building dependencies
         if: steps.cache-bindep.outputs.cache-hit != 'true'
-        run: sudo apt-get update -y && sudo apt-get install -y gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu ninja-build libfdt-dev zlib1g-dev
 
       - name: Build everything and run tests
         run: make test
