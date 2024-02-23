@@ -31,8 +31,8 @@ pub struct BootOptions<'a> {
 /// otherwise returning the defaults.
 pub fn find_boot_options<'a>(dt: &'a DeviceTree) -> BootOptions<'a> {
     let mut opts = None;
-    dt.process_properties_for_node("chosen", |prop, data, _| match prop {
-        "bootargs" => {
+    dt.process_properties_for_node("chosen", |prop, data, _| {
+        if prop == "bootargs" {
             let s = core::ffi::CStr::from_bytes_until_nul(data)
                 .expect("devicetree /chosen/bootargs terminated correctly")
                 .to_str()
@@ -46,7 +46,6 @@ pub fn find_boot_options<'a>(dt: &'a DeviceTree) -> BootOptions<'a> {
                 Err(e) => panic!("failed to parse boot options from JSON: {e} (source = {s})"),
             };
         }
-        _ => {}
     });
     log::debug!("kernel boot options = {opts:?}");
     opts.unwrap_or_default()

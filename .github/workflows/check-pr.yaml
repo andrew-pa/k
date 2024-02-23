@@ -13,7 +13,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          submodules: 'recursive'
+          submodules: 'true'
 
       - name: Set up Rust toolchain
         id: setup-rust
@@ -22,6 +22,17 @@ jobs:
           toolchain: nightly
           components: rustfmt, clippy
           targets: aarch64-unknown-none
+
+      - name: Cache Rust dependencies and build intermediates
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ steps.setup-rust.outputs.cachekey }}-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Check formatting
         run: cargo fmt -- --check
@@ -46,20 +57,5 @@ jobs:
         if: steps.cache-bindep.outputs.cache-hit != 'true'
         run: apt-get update -y && apt-get install -y gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
 
-      - name: Build QEMU and U-boot
-        if: steps.cache-bindep.outputs.cache-hit != 'true'
-        run: make all-bindep
-
-      - name: Cache Rust dependencies and build intermediates
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-cargo-${{ steps.setup-rust.outputs.cachekey }}-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Build and run tests
+      - name: Build everything and run tests
         run: make test

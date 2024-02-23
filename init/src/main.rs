@@ -14,17 +14,6 @@ use kapi::Command;
 mod channel;
 
 #[inline]
-fn log_oof(code: usize) {
-    unsafe {
-        asm!(
-            "mov x0, {i}",
-            "svc #3",
-            i = in(reg) code
-        )
-    }
-}
-
-#[inline]
 fn log_record(r: &log::Record) {
     unsafe {
         asm!(
@@ -106,7 +95,7 @@ pub extern "C" fn _start(
         }
     }
 
-    loop {}
+    exit();
 }
 
 #[panic_handler]
