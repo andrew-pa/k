@@ -85,6 +85,7 @@ impl PhysicalAddress {
     }
 
     /// Compute the address starting at self and adding `byte_offset`, saturating at the maximum.
+    #[allow(clippy::should_implement_trait)]
     pub fn add(self, byte_offset: usize) -> PhysicalAddress {
         PhysicalAddress(self.0.saturating_add(byte_offset))
     }
@@ -149,6 +150,7 @@ impl VirtualAddress {
     }
 
     /// Compute the address starting at self and adding `byte_offset`, wrapping at the maximum.
+    #[allow(clippy::should_implement_trait)]
     pub fn add(self, byte_offset: usize) -> VirtualAddress {
         // TODO: is wrapping right or should we panic on overflow?
         VirtualAddress(self.0.wrapping_add(byte_offset))

@@ -610,7 +610,7 @@ impl PageTableIter<'_> {
     fn current_va_from_stack(&self) -> VirtualAddress {
         VirtualAddress::from_parts(
             self.tag,
-            self.stack.get(0).map(|(_, i)| *i).unwrap_or(0),
+            self.stack.first().map(|(_, i)| *i).unwrap_or(0),
             self.stack.get(1).map(|(_, i)| *i).unwrap_or(0),
             self.stack.get(2).map(|(_, i)| *i).unwrap_or(0),
             self.stack.get(3).map(|(_, i)| *i).unwrap_or(0),

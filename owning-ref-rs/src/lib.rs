@@ -289,6 +289,9 @@ impl<T> Erased for T {}
 /// Helper trait for erasing the concrete type of what an owner derferences to,
 /// for example `Box<T> -> Box<dyn Erased>`. This would be unneeded with
 /// higher kinded types support in the language.
+///
+/// # Safety
+/// Unknown.
 pub unsafe trait IntoErased<'a> {
     /// Owner with the dereference type substituted to `Erased`.
     type Erased;
@@ -331,6 +334,9 @@ impl<'t, O, T: ?Sized> OwningRef<'t, O, T> {
     ///
     /// This is useful for cases where coherence rules prevents implementing the trait
     /// without adding a dependency to this crate in a third-party library.
+    ///
+    /// # Safety
+    /// Caller checks trait promises.
     pub unsafe fn new_assert_stable_address(o: O) -> Self
     where
         O: Deref<Target = T>,
@@ -588,6 +594,9 @@ impl<'t, O, T: ?Sized> OwningRefMut<'t, O, T> {
     ///
     /// This is useful for cases where coherence rules prevents implementing the trait
     /// without adding a dependency to this crate in a third-party library.
+    ///
+    /// # Safety
+    /// Caller checks for StableAddress.
     pub unsafe fn new_assert_stable_address(mut o: O) -> Self
     where
         O: DerefMut<Target = T>,
@@ -884,6 +893,9 @@ pub trait ToHandle {
 
     /// Given an appropriately-long-lived pointer to ourselves, create a
     /// handle to be encapsulated by the `OwningHandle`.
+    ///
+    /// # Safety
+    /// Pointer is appropriately-long-lived.
     unsafe fn to_handle(x: *const Self) -> Self::Handle;
 }
 
@@ -894,6 +906,9 @@ pub trait ToHandleMut {
 
     /// Given an appropriately-long-lived pointer to ourselves, create a
     /// mutable handle to be encapsulated by the `OwningHandle`.
+    ///
+    /// # Safety
+    /// Pointer is appropriately-long-lived.
     unsafe fn to_handle_mut(x: *const Self) -> Self::HandleMut;
 }
 
@@ -982,11 +997,10 @@ where
 /////////////////////////////////////////////////////////////////////////////
 
 use core::borrow::Borrow;
-use core::cmp::{Eq, Ord, Ordering, PartialEq, PartialOrd};
-use core::convert::From;
+use core::cmp::Ordering;
 use core::fmt::{self, Debug};
 use core::hash::{Hash, Hasher};
-use core::marker::{PhantomData, Send, Sync};
+use core::marker::PhantomData;
 
 impl<O, T: ?Sized> Deref for OwningRef<'_, O, T> {
     type Target = T;

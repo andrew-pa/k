@@ -48,7 +48,7 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 use core::borrow::Borrow;
-use core::hash::{BuildHasher, Hash, Hasher};
+use core::hash::{BuildHasher, Hash};
 use core::sync::atomic::{self, AtomicUsize};
 use core::{cmp, fmt, iter, mem, ops};
 use lock_api::{RawRwLock, RwLock, RwLockReadGuard, RwLockWriteGuard};
@@ -100,20 +100,12 @@ enum Bucket<K, V> {
 impl<K, V> Bucket<K, V> {
     /// Is this bucket 'empty'?
     fn is_empty(&self) -> bool {
-        if let Bucket::Empty = *self {
-            true
-        } else {
-            false
-        }
+        matches!(*self, Bucket::Empty)
     }
 
     /// Is this bucket 'removed'?
     fn is_removed(&self) -> bool {
-        if let Bucket::Removed = *self {
-            true
-        } else {
-            false
-        }
+        matches!(*self, Bucket::Removed)
     }
 
     /// Is this bucket free?
@@ -579,6 +571,7 @@ impl<'a, R: RawRwLock, T> ops::DerefMut for StableRwLockWriteGuard<'a, R, T> {
 /// on drop.
 pub struct ReadGuard<'a, K: 'a, V: 'a, S, R: RawRwLock> {
     /// The inner hecking long type.
+    #[allow(clippy::type_complexity)]
     inner: OwningRef<
         'a,
         OwningHandle<
@@ -597,13 +590,6 @@ impl<'a, K, V, S, R: RawRwLock> ops::Deref for ReadGuard<'a, K, V, S, R> {
     }
 }
 
-impl<'a, K, V: PartialEq, S, R: RawRwLock> cmp::PartialEq for ReadGuard<'a, K, V, S, R> {
-    fn eq(&self, other: &ReadGuard<'a, K, V, S, R>) -> bool {
-        self == other
-    }
-}
-impl<'a, K, V: Eq, S, R: RawRwLock> cmp::Eq for ReadGuard<'a, K, V, S, R> {}
-
 impl<'a, K: fmt::Debug, V: fmt::Debug, S, R: RawRwLock> fmt::Debug for ReadGuard<'a, K, V, S, R> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "ReadGuard({:?})", &**self)
@@ -616,6 +602,7 @@ impl<'a, K: fmt::Debug, V: fmt::Debug, S, R: RawRwLock> fmt::Debug for ReadGuard
 /// on drop.
 pub struct WriteGuard<'a, K: 'a, V: 'a, S, R: RawRwLock> {
     /// The inner hecking long type.
+    #[allow(clippy::type_complexity)]
     inner: OwningHandle<
         OwningHandle<
             StableRwLockReadGuard<'a, R, Table<K, V, S, R>>,
@@ -638,13 +625,6 @@ impl<'a, K, V, S, R: RawRwLock> ops::DerefMut for WriteGuard<'a, K, V, S, R> {
         &mut self.inner
     }
 }
-
-impl<'a, K, V: PartialEq, S, R: lock_api::RawRwLock> cmp::PartialEq for WriteGuard<'a, K, V, S, R> {
-    fn eq(&self, other: &Self) -> bool {
-        self == other
-    }
-}
-impl<'a, K, V: Eq, S, R: lock_api::RawRwLock> cmp::Eq for WriteGuard<'a, K, V, S, R> {}
 
 impl<'a, K: fmt::Debug, V: fmt::Debug, S, R: RawRwLock> fmt::Debug for WriteGuard<'a, K, V, S, R> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {

@@ -1,13 +1,14 @@
 #!/bin/bash
-# set -v
+set -v
 scratch_disk=/tmp/k_scratch_disk.qcow2
 cd ..
 echo $PWD
 if [ ! -f $scratch_disk ]; then
-    qemu-img create -f qcow2 $scratch_disk 1M
+    ./qemu/.build/qemu-img create -f qcow2 $scratch_disk 1M
 fi
 img_name=$(echo $1 | sha256sum | cut -d ' ' -f 1).img
 echo $1 "->" $img_name
+ls .build/
 ./scripts/make-image.sh $1 .build/$img_name
 ./qemu/.build/qemu-system-aarch64 -machine virt -cpu cortex-a57 \
     -display none -monitor none -serial stdio -semihosting \

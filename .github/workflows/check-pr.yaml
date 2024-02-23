@@ -1,0 +1,71 @@
+name: check-pr
+run-name: Checking ${{ github.event.pull_request.title }} for merge readiness
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review, auto_merge_enabled, synchronize]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: 'true'
+
+      - name: Set up Rust toolchain
+        id: setup-rust
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          toolchain: nightly
+          components: rustfmt, clippy
+          targets: aarch64-unknown-none
+
+      - name: Cache Rust dependencies and build intermediates
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ steps.setup-rust.outputs.cachekey }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Check formatting
+        run: cargo fmt -- --check
+
+      - name: Run linter
+        run: cargo clippy -- -D warnings
+
+      - name: Hash submodule status for cache key
+        id: submodules-cache-key
+        run: |
+          echo "gcc_version_hash=$(aarch64-linux-gnu-gcc --version | sha256sum | cut -d ' ' -f 1)" >> $GITHUB_OUTPUT
+          echo "qemu_commit=$(git submodule status qemu | cut -d ' ' -f 2)" >> $GITHUB_OUTPUT
+          echo "uboot_commit=$(git submodule status u-boot | cut -d ' ' -f 2)" >> $GITHUB_OUTPUT
+
+      - name: Cache QEMU build
+        id: cache-bindep-qemu
+        uses: actions/cache@v4
+        with:
+          path: ./qemu/.build
+          key: ${{runner.os}}-bindep-${{ steps.submodules-cache-key.outputs.gcc_version_hash }}-${{ steps.submodules-cache-key.outputs.qemu_commit }}
+
+      - name: Cache U-boot build
+        id: cache-bindep-uboot
+        uses: actions/cache@v4
+        with:
+          path: ./u-boot/.build
+          key: ${{runner.os}}-bindep-${{ steps.submodules-cache-key.outputs.gcc_version_hash }}-${{ steps.submodules-cache-key.outputs.uboot_commit }}
+
+      - name: Set up C/C++ toolchain for building dependencies
+        if: steps.cache-bindep.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu ninja-build libfdt-dev zlib1g-dev
+
+      - name: Build everything and run tests
+        run: make test
