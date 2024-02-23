@@ -43,7 +43,7 @@ jobs:
       - name: Hash submodule status for cache key
         id: submodules-cache-key
         run: |
-          echo "gcc_version_hash=$(aarch64-linux-gnu-gcc --version | sha256sum)" >> $GITHUB_OUTPUT
+          echo "gcc_version_hash=$(aarch64-linux-gnu-gcc --version | sha256sum | cut -d ' ' -f 1)" >> $GITHUB_OUTPUT
           echo "qemu_commit=$(git submodule status qemu | cut -d ' ' -f 2)" >> $GITHUB_OUTPUT
           echo "uboot_commit=$(git submodule status u-boot | cut -d ' ' -f 2)" >> $GITHUB_OUTPUT
 
