@@ -219,6 +219,27 @@ pub unsafe fn write_interrupt_mask(m: InterruptMask) {
     core::arch::asm!("msr DAIF, {v}", v = in(reg) m.0);
 }
 
+/// A guard that disables interrupts until it is dropped, then reenables them.
+pub struct InterruptGuard;
+
+impl InterruptGuard {
+    /// Disable interrupts until the guard is dropped.
+    fn disable_interrupts_in_scope() -> Self {
+        unsafe {
+            write_interrupt_mask(InterruptMask::all_disabled());
+        }
+        InterruptGuard
+    }
+}
+
+impl Drop for InterruptGuard {
+    fn drop(&mut self) {
+        unsafe {
+            write_interrupt_mask(InterruptMask::all_enabled());
+        }
+    }
+}
+
 /// A stored version of the system registers x0..x31.
 // TODO: this doesn't really belong in this module.
 #[derive(Default, Copy, Clone)]

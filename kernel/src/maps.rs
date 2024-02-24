@@ -4,7 +4,9 @@
 
 use core::{
     borrow::Borrow,
-    hash::{BuildHasher, Hash, Hasher}, ops::{Deref, DerefMut}, sync::atomic::AtomicUsize,
+    hash::{BuildHasher, Hash, Hasher},
+    ops::{Deref, DerefMut},
+    sync::atomic::AtomicUsize,
 };
 
 use crate::tasks::locks::{MappedRwLockReadGuard, MappedRwLockWriteGuard, RwLock};
@@ -31,7 +33,7 @@ pub type Ref<'a, K, V, S> = MappedRwLockReadGuard<'a, HashMap<K, V, S>, V>;
 pub type RefMut<'a, K, V, S> = MappedRwLockWriteGuard<'a, HashMap<K, V, S>, V>;
 
 /// The default number of shards in a map.
-/// 
+///
 /// This value is set to four times the number of threads in DashMap, but since each task could
 /// potentially lock a shard, it is difficult to say exactly what the best value is here.
 /// Effectively it should be something like:
@@ -39,7 +41,9 @@ pub type RefMut<'a, K, V, S> = MappedRwLockWriteGuard<'a, HashMap<K, V, S>, V>;
 pub const DEFAULT_SHARD_COUNT: usize = 128;
 
 impl<K, V, S> Default for CHashMap<K, V, S>
-    where K: Eq + Hash, S: Default + BuildHasher + Clone
+where
+    K: Eq + Hash,
+    S: Default + BuildHasher + Clone,
 {
     fn default() -> Self {
         Self::with_hasher_and_shard_count(Default::default(), DEFAULT_SHARD_COUNT)
@@ -138,7 +142,7 @@ pub struct CHashMapAuto<K, V, S = hashbrown::hash_map::DefaultHashBuilder> {
     /// The underlying map.
     map: CHashMap<K, V, S>,
     /// The next key that will be issued.
-    next_key: AtomicUsize
+    next_key: AtomicUsize,
 }
 
 impl<K, V, S> Deref for CHashMapAuto<K, V, S> {
@@ -166,7 +170,10 @@ impl<K: From<usize> + Hash + Eq + Copy, V, S: BuildHasher + Clone> CHashMapAuto<
 
     /// Reserve a key so that a value can be inserted into the map later.
     pub fn reserve_key(&self) -> K {
-        K::from(self.next_key.fetch_add(1, core::sync::atomic::Ordering::AcqRel))
+        K::from(
+            self.next_key
+                .fetch_add(1, core::sync::atomic::Ordering::AcqRel),
+        )
     }
 }
 
