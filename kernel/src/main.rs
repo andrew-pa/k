@@ -45,18 +45,7 @@ pub mod init;
 pub mod intrinsics;
 
 pub mod maps;
-
 pub use maps::CHashMap;
-
-/// A concurrent hash map using spinlocks.
-//pub type CHashMap<K, V> =
-//chashmap::CHashMap<K, V, hashbrown::hash_map::DefaultHashBuilder, spin::RwLock<()>>;
-/// The read guard for [CHashMapG].
-pub type CHashMapGReadGuard<'a, K, V> =
-    chashmap::ReadGuard<'a, K, V, hashbrown::hash_map::DefaultHashBuilder, spin::RwLock<()>>;
-/// The write guard for [CHashMapG].
-pub type CHashMapGWriteGuard<'a, K, V> =
-    chashmap::WriteGuard<'a, K, V, hashbrown::hash_map::DefaultHashBuilder, spin::RwLock<()>>;
 
 global_asm!(include_str!("start.S"));
 
