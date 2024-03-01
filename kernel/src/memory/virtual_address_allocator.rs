@@ -2,7 +2,7 @@
 use core::cell::OnceCell;
 
 use alloc::collections::LinkedList;
-use snafu::ensure;
+
 use spin::Mutex;
 
 use super::{MemoryError, VirtualAddress, PAGE_SIZE};

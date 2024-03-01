@@ -1,8 +1,6 @@
 //! Thread scheduling.
-use alloc::{collections::VecDeque, vec::Vec};
+use alloc::vec::Vec;
 use spin::{Mutex, MutexGuard};
-
-use crate::exception;
 
 use super::*;
 

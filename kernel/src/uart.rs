@@ -24,7 +24,7 @@ pub struct DebugUartLogger;
 /// Modules that have Trace/Debug level logging disabled because they are very noisy
 const DISABLED_MODULES: &[&str] = &[
     "kernel::memory::paging",
-    // "kernel::memory::heap",
+    "kernel::memory::heap",
     "kernel::process::thread::scheduler",
     "kernel::exception",
 ];

@@ -1,23 +1,22 @@
 use alloc::sync::Arc;
 use bitfield::BitRangeMut;
-use bytemuck::{bytes_of, bytes_of_mut, Pod, Zeroable};
-use derive_more::Display;
+use bytemuck::{bytes_of, Pod, Zeroable};
+
 use hashbrown::HashMap;
 use snafu::{ensure, Snafu};
 use spin::Mutex;
 
 use super::{command::QueuePriority, *};
-use crate::{
-    exception::{self, InterruptId},
-    memory::{paging::PageTableEntryOptions, MemoryError, PhysicalAddress, PhysicalBuffer},
-};
+use crate::memory::{paging::PageTableEntryOptions, MemoryError, PhysicalAddress, PhysicalBuffer};
 
 // TODO: detect if the NVMe device has SGL and use it instead. Alas, QEMU does not appear to
 // support it, so for now the PRP list will have to do.
 #[repr(C)]
+#[allow(unused)]
 #[derive(Pod, Zeroable, Clone, Copy, Debug)]
 struct ScatterGatherDescriptor([u8; 16]);
 
+#[allow(unused)]
 impl ScatterGatherDescriptor {
     #[inline]
     fn typical(r#type: u8, address: u64, length: u64) -> ScatterGatherDescriptor {
@@ -73,31 +72,26 @@ impl<'sq> Command<'sq> {
     // low-level accessors
 
     #[inline]
-    pub fn set_command_id(mut self, id: u16) -> Command<'sq> {
+    pub fn set_command_id(self, id: u16) -> Command<'sq> {
         log::trace!("setting command id to {id}");
         self.cmd[0].set_bit_range(31, 16, id);
         self
     }
 
     #[inline]
-    pub fn set_opcode(mut self, op: u8) -> Command<'sq> {
+    pub fn set_opcode(self, op: u8) -> Command<'sq> {
         self.cmd[0].set_bit_range(7, 0, op);
         self
     }
 
     #[inline]
-    pub fn set_namespace_id(mut self, id: u32) -> Command<'sq> {
+    pub fn set_namespace_id(self, id: u32) -> Command<'sq> {
         self.cmd[1] = id;
         self
     }
 
     #[inline]
-    pub fn set_metadata_ptr(mut self, ptr: u64) -> Command<'sq> {
-        self.set_qword(4, ptr)
-    }
-
-    #[inline]
-    pub fn set_data_ptr_single(mut self, ptr: PhysicalAddress) -> Command<'sq> {
+    pub fn set_data_ptr_single(self, ptr: PhysicalAddress) -> Command<'sq> {
         // set data ptr to PRP mode
         // self.cmd[0].set_bit_range(15, 14, 0);
 
@@ -129,7 +123,7 @@ impl<'sq> Command<'sq> {
             let mut next_page_addr = region.0;
             while num_blocks < region.1 {
                 if current_offset == prp_page.len() - 1 {
-                    let mut buf = PhysicalBuffer::alloc_zeroed(1, &Default::default())
+                    let buf = PhysicalBuffer::alloc_zeroed(1, &Default::default())
                         .context(crate::storage::MemorySnafu)?;
                     prp_page[current_offset] = buf.physical_address();
                     current_offset = 0;
@@ -155,14 +149,14 @@ impl<'sq> Command<'sq> {
 
     /// Set a qword (64-bit) value in the command. Index is in terms of dwords.
     #[inline]
-    pub fn set_qword(mut self, idx: usize, data: u64) -> Command<'sq> {
+    pub fn set_qword(self, idx: usize, data: u64) -> Command<'sq> {
         self.cmd[idx] = data as u32;
         self.cmd[idx + 1] = (data >> 32) as u32;
         self
     }
 
     #[inline]
-    pub fn set_dword(mut self, idx: usize, data: u32) -> Command<'sq> {
+    pub fn set_dword(self, idx: usize, data: u32) -> Command<'sq> {
         self.cmd[idx] = data;
         self
     }
@@ -248,7 +242,7 @@ impl SubmissionQueue {
         priority: QueuePriority,
     ) -> Result<Self, QueueCreateError> {
         assert!(id > 0);
-        let mut s = Self::new(
+        let s = Self::new(
             id,
             entry_count,
             doorbell_base,
@@ -430,7 +424,7 @@ impl CompletionQueue {
         interrupt_index: Option<u16>,
     ) -> Result<Self, QueueCreateError> {
         assert!(id > 0);
-        let mut s = Self::new(
+        let s = Self::new(
             id,
             entry_count,
             doorbell_base,
@@ -478,12 +472,12 @@ impl CompletionQueue {
 
     pub fn pop(&mut self) -> Option<Completion> {
         let cmp = unsafe {
-            let sl = (self
-                .queue_memory
-                .virtual_address()
-                .add(self.head as usize * COMPLETION_ENTRY_SIZE)
-                .as_ptr::<[u32; 4]>())
-            .read_volatile();
+            // let sl = (self
+            //     .queue_memory
+            //     .virtual_address()
+            //     .add(self.head as usize * COMPLETION_ENTRY_SIZE)
+            //     .as_ptr::<[u32; 4]>())
+            // .read_volatile();
             // log::trace!(
             //     "cmp raw:\n0: {:8x}\n1: {:8x}\n2: {:8x}\n3: {:8x}",
             //     sl[0],

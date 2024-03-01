@@ -17,8 +17,6 @@ use futures::Future;
 
 use crate::exception::InterruptGuard;
 
-use super::block_on;
-
 /// A combined waker type for both tasks and threads waiting for the semaphore.
 enum SemaphoreWaker {
     /// A typical task waker.
@@ -256,12 +254,14 @@ unsafe impl<T: ?Sized + Send> Sync for RwLock<T> {}
 /// A typical read guard for [RwLock].
 pub struct RwLockReadGuard<'a, T: ?Sized> {
     lock: &'a RwLock<T>,
+    #[allow(unused)] //holding this only for dropping
     ig: Option<InterruptGuard>,
 }
 
 /// A typical write guard for [RwLock].
 pub struct RwLockWriteGuard<'a, T: ?Sized> {
     lock: &'a RwLock<T>,
+    #[allow(unused)] //holding this only for dropping
     ig: Option<InterruptGuard>,
 }
 
@@ -381,6 +381,7 @@ impl<'a, T: ?Sized + 'a> DerefMut for RwLockWriteGuard<'a, T> {
 /// A mapped read lock guard for [RwLock], allowing a function to return immutable access to only part of a locked data structure.
 pub struct MappedRwLockReadGuard<'a, T: ?Sized, U: ?Sized> {
     /// The parent guard.
+    #[allow(unused)] //holding this only for dropping
     g: RwLockReadGuard<'a, T>,
     /// A raw reference to the inner data.
     mv: *const U,
@@ -400,6 +401,7 @@ impl<'a, T: ?Sized + 'a> RwLockReadGuard<'a, T> {
         self,
         f: impl FnOnce(&T) -> Option<&U>,
     ) -> Option<MappedRwLockReadGuard<'a, T, U>> {
+        #[allow(clippy::manual_map)] // due to the borrow checker
         match f(&self) {
             Some(mv) => Some(MappedRwLockReadGuard { mv, g: self }),
             None => None,
@@ -418,6 +420,7 @@ impl<'a, T: ?Sized + 'a, U: ?Sized + 'a> Deref for MappedRwLockReadGuard<'a, T, 
 /// A mapped write lock guard for [RwLock], allowing a function to return mutable access to only part of a locked data structure.
 pub struct MappedRwLockWriteGuard<'a, T: ?Sized, U: ?Sized> {
     /// The parent guard.
+    #[allow(unused)] //holding this only for dropping
     g: RwLockWriteGuard<'a, T>,
     /// A raw reference to the inner data.
     mv: *mut U,
@@ -437,6 +440,7 @@ impl<'a, T: ?Sized + 'a> RwLockWriteGuard<'a, T> {
         mut self,
         f: impl FnOnce(&mut T) -> Option<&mut U>,
     ) -> Option<MappedRwLockWriteGuard<'a, T, U>> {
+        #[allow(clippy::manual_map)] // due to the borrow checker
         match f(&mut self) {
             Some(mv) => Some(MappedRwLockWriteGuard { mv, g: self }),
             None => None,

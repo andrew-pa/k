@@ -2,7 +2,7 @@
 //!
 //! This driver supports GICv2 and also the v2m MSI extension.
 //! It should be forward compatable with GICv3 as well, although the ITS MSI implementation is currently TODO.
-use core::{ffi::CStr, mem::size_of};
+use core::mem::size_of;
 
 use alloc::boxed::Box;
 use bitvec::{
@@ -149,10 +149,12 @@ impl GenericInterruptController {
     fn init_distributor(&mut self) {
         unsafe {
             // enable distributor
-            self.distributor_base.offset(GICD_CTLR).write_volatile(0x1);
+            self.distributor_base
+                .offset(dist_regs::CTLR)
+                .write_volatile(0x1);
 
-            // let typer = self.distributor_base.offset(GICD_TYPER).read_volatile();
-            // log::info!("GICD_TYPER = {:032b}", typer);
+            // let typer = self.distributor_base.offset(dist_regs::TYPER).read_volatile();
+            // log::info!("dist_regs::TYPER = {:032b}", typer);
             // if !typer.bit(16) {
             //     panic!("GIC does not support message-based interrupts");
             // } else {
@@ -164,19 +166,20 @@ impl GenericInterruptController {
     fn init_cpu_interface(&mut self) {
         unsafe {
             // enable cpu interface
-            // make writes to GICC_EOIR deactive interrupt (bits 9 and 10)
-            // TODO: these bits don't seem to eliminate the need to write to GICC_DIR anyways?
+            // make writes to cpu_regs::EOIR deactive interrupt (bits 9 and 10)
+            // TODO: these bits don't seem to eliminate the need to write to cpu_regs::DIR anyways?
             self.cpu_base
-                .offset(GICC_CTLR)
+                .offset(cpu_regs::CTLR)
                 .write_volatile(0b0000_0110_0000_0001);
             // accept interrupts of any priority by setting the minimum priority
             // register to the lowest possible priority
-            self.cpu_base.offset(GICC_PMR).write_volatile(0xff);
+            self.cpu_base.offset(cpu_regs::PMR).write_volatile(0xff);
             // disable group priority bits
-            self.cpu_base.offset(GICC_BPR).write_volatile(0x0);
+            self.cpu_base.offset(cpu_regs::BPR).write_volatile(0x0);
         }
     }
 
+    /// Get the bit flag of `register` for interrupt `id`.
     fn read_bit_for_id(&self, interface: *mut u32, register: isize, id: InterruptId) -> bool {
         let (word_offset, bit_offset) = id_to_bit_offset(id);
         let reg = unsafe {
@@ -186,6 +189,7 @@ impl GenericInterruptController {
         reg & (1 << bit_offset) != 0
     }
 
+    /// Get the byte of `register` for interrupt `id`.
     fn read_byte_for_id(&self, interface: *mut u32, register: isize, id: InterruptId) -> u8 {
         unsafe {
             let ptr = interface.offset(register);
@@ -193,7 +197,8 @@ impl GenericInterruptController {
         }
     }
 
-    fn write_bit_for_id(&self, interface: *mut u32, register: isize, id: InterruptId, bit: bool) {
+    /// Set the bit flag of `register` for the interrupt `id` high.
+    fn write_bit_for_id(&self, interface: *mut u32, register: isize, id: InterruptId) {
         let (word_offset, bit_offset) = id_to_bit_offset(id);
         unsafe {
             let ptr = interface.offset(register).offset(word_offset);
@@ -202,6 +207,7 @@ impl GenericInterruptController {
         }
     }
 
+    /// Set the byte of `register` for interrupt `id`.
     fn write_byte_for_id(&self, interface: *mut u32, register: isize, id: InterruptId, value: u8) {
         unsafe {
             let ptr = interface.offset(register).offset((id / 4) as isize);
@@ -218,61 +224,64 @@ fn id_to_bit_offset(id: InterruptId) -> (isize, u32) {
 
 impl InterruptController for GenericInterruptController {
     fn is_enabled(&self, id: InterruptId) -> bool {
-        self.read_bit_for_id(self.distributor_base, GICD_ISENABLER_N, id)
+        self.read_bit_for_id(self.distributor_base, dist_regs::ISENABLER_N, id)
     }
 
     fn set_enable(&self, id: InterruptId, enabled: bool) {
         self.write_bit_for_id(
             self.distributor_base,
             if enabled {
-                GICD_ISENABLER_N
+                dist_regs::ISENABLER_N
             } else {
-                GICD_ICENABLER_N
+                dist_regs::ICENABLER_N
             },
             id,
-            true,
         )
     }
 
     fn is_pending(&self, id: InterruptId) -> bool {
-        self.read_bit_for_id(self.distributor_base, GICD_ISPENDR_N, id)
+        self.read_bit_for_id(self.distributor_base, dist_regs::ISPENDR_N, id)
     }
 
     fn clear_pending(&self, id: InterruptId) {
-        self.write_bit_for_id(self.distributor_base, GICD_ICPENDR_N, id, true)
+        self.write_bit_for_id(self.distributor_base, dist_regs::ICPENDR_N, id)
     }
 
     fn is_active(&self, id: InterruptId) -> bool {
-        self.read_bit_for_id(self.distributor_base, GICD_ISACTIVER_N, id)
+        self.read_bit_for_id(self.distributor_base, dist_regs::ISACTIVER_N, id)
     }
 
     fn set_active(&self, id: InterruptId, enabled: bool) {
         self.write_bit_for_id(
             self.distributor_base,
             if enabled {
-                GICD_ISACTIVER_N
+                dist_regs::ISACTIVER_N
             } else {
-                GICD_ICACTIVER_N
+                dist_regs::ICACTIVER_N
             },
             id,
-            true,
         )
     }
 
     fn priority(&self, id: InterruptId) -> u8 {
-        self.read_byte_for_id(self.distributor_base, GICD_IPRIORITYR_N, id)
+        self.read_byte_for_id(self.distributor_base, dist_regs::IPRIORITYR_N, id)
     }
 
     fn set_priority(&self, id: InterruptId, priority: u8) {
-        self.write_byte_for_id(self.distributor_base, GICD_IPRIORITYR_N, id, priority)
+        self.write_byte_for_id(self.distributor_base, dist_regs::IPRIORITYR_N, id, priority)
     }
 
     fn target_cpu(&self, id: InterruptId) -> u8 {
-        self.read_byte_for_id(self.distributor_base, GICD_ITARGETSR_N, id)
+        self.read_byte_for_id(self.distributor_base, dist_regs::ITARGETSR_N, id)
     }
 
     fn set_target_cpu(&self, id: InterruptId, target_cpu: u8) {
-        self.write_byte_for_id(self.distributor_base, GICD_ITARGETSR_N, id, target_cpu)
+        self.write_byte_for_id(
+            self.distributor_base,
+            dist_regs::ITARGETSR_N,
+            id,
+            target_cpu,
+        )
     }
 
     fn config(&self, id: InterruptId) -> InterruptConfig {
@@ -283,7 +292,7 @@ impl InterruptController for GenericInterruptController {
         unsafe {
             let ptr = self
                 .distributor_base
-                .offset(GICD_ICFGR_N)
+                .offset(dist_regs::ICFGR_N)
                 .offset(word_offset);
             let bp =
                 BitPtr::<Const, u32, Lsb0>::new(ptr.as_ref().unwrap().into(), bit_offset).unwrap();
@@ -299,7 +308,7 @@ impl InterruptController for GenericInterruptController {
         unsafe {
             let ptr = self
                 .distributor_base
-                .offset(GICD_ICFGR_N)
+                .offset(dist_regs::ICFGR_N)
                 .offset(word_offset);
             let bp =
                 BitPtr::<Mut, u32, Lsb0>::new(ptr.as_mut().unwrap().into(), bit_offset).unwrap();
@@ -317,7 +326,7 @@ impl InterruptController for GenericInterruptController {
     }
 
     fn ack_interrupt(&self) -> Option<InterruptId> {
-        let id = unsafe { self.cpu_base.offset(GICC_IAR).read_volatile() };
+        let id = unsafe { self.cpu_base.offset(cpu_regs::IAR).read_volatile() };
         if id == INTID_NONE_PENDING {
             None
         } else {
@@ -327,8 +336,8 @@ impl InterruptController for GenericInterruptController {
 
     fn finish_interrupt(&self, id: InterruptId) {
         unsafe {
-            self.cpu_base.offset(GICC_EOIR).write_volatile(id);
-            self.cpu_base.offset(GICC_DIR).write_volatile(id);
+            self.cpu_base.offset(cpu_regs::EOIR).write_volatile(id);
+            self.cpu_base.offset(cpu_regs::DIR).write_volatile(id);
         }
     }
 
@@ -387,47 +396,53 @@ impl InterruptController for GenericInterruptController {
 // Offsets for GIC registers in units of words (u32) //
 // TODO: these should probably reside in modules or be made into a proper enum
 
-// Distributor offsets //
-const GICD_CTLR: isize = 0x0000 >> 2;
-const GICD_TYPER: isize = 0x0004 >> 2;
-const GICD_STATUSR: isize = 0x0010 >> 2;
-const GICD_SETSPI_NSR: isize = 0x0040 >> 2;
-const GICD_CLRSPI_NSR: isize = 0x0048 >> 2;
-const GICD_SETSPI_SR: isize = 0x0050 >> 2;
-const GICD_CLRSPI_SR: isize = 0x0058 >> 2;
-const GICD_IGROUPR_N: isize = 0x0080 >> 2;
-const GICD_ISENABLER_N: isize = 0x0100 >> 2;
-const GICD_ICENABLER_N: isize = 0x0180 >> 2;
-const GICD_ISPENDR_N: isize = 0x0200 >> 2;
-const GICD_ICPENDR_N: isize = 0x0280 >> 2;
-const GICD_ISACTIVER_N: isize = 0x0300 >> 2;
-const GICD_ICACTIVER_N: isize = 0x0380 >> 2;
-const GICD_IPRIORITYR_N: isize = 0x0400 >> 2;
-const GICD_ITARGETSR_N: isize = 0x0800 >> 2;
-const GICD_ICFGR_N: isize = 0x0c00 >> 2;
-const GICD_IGRPMOD_N: isize = 0x0d00 >> 2;
-const GICD_SGIR: isize = 0x0f00 >> 2;
-const GICD_CPENDSGIR_N: isize = 0x0f10 >> 2;
-const GICD_SPENDSGIR_N: isize = 0x0f20 >> 2;
-const GICD_INMIR: isize = 0x0f80 >> 2;
+/// Register offsets for the GIC distributor (relative to its base address).
+#[allow(unused)]
+mod dist_regs {
+    pub const CTLR: isize = 0x0000 >> 2;
+    pub const TYPER: isize = 0x0004 >> 2;
+    pub const STATUSR: isize = 0x0010 >> 2;
+    pub const SETSPI_NSR: isize = 0x0040 >> 2;
+    pub const CLRSPI_NSR: isize = 0x0048 >> 2;
+    pub const SETSPI_SR: isize = 0x0050 >> 2;
+    pub const CLRSPI_SR: isize = 0x0058 >> 2;
+    pub const IGROUPR_N: isize = 0x0080 >> 2;
+    pub const ISENABLER_N: isize = 0x0100 >> 2;
+    pub const ICENABLER_N: isize = 0x0180 >> 2;
+    pub const ISPENDR_N: isize = 0x0200 >> 2;
+    pub const ICPENDR_N: isize = 0x0280 >> 2;
+    pub const ISACTIVER_N: isize = 0x0300 >> 2;
+    pub const ICACTIVER_N: isize = 0x0380 >> 2;
+    pub const IPRIORITYR_N: isize = 0x0400 >> 2;
+    pub const ITARGETSR_N: isize = 0x0800 >> 2;
+    pub const ICFGR_N: isize = 0x0c00 >> 2;
+    pub const IGRPMOD_N: isize = 0x0d00 >> 2;
+    pub const SGIR: isize = 0x0f00 >> 2;
+    pub const CPENDSGIR_N: isize = 0x0f10 >> 2;
+    pub const SPENDSGIR_N: isize = 0x0f20 >> 2;
+    pub const INMIR: isize = 0x0f80 >> 2;
+}
 
-// CPU Interface offsets //
-const GICC_CTLR: isize = 0x000 >> 2;
-const GICC_PMR: isize = 0x0004 >> 2;
-const GICC_BPR: isize = 0x008 >> 2;
-const GICC_IAR: isize = 0x000c >> 2;
-const GICC_EOIR: isize = 0x0010 >> 2;
-const GICC_RPR: isize = 0x0014 >> 2;
-const GICC_HPPIR: isize = 0x0018 >> 2;
-const GICC_ABPR: isize = 0x001c >> 2;
-const GICC_AIAR: isize = 0x0020 >> 2;
-const GICC_AEOIR: isize = 0x0024 >> 2;
-const GICC_AHPPIR: isize = 0x0028 >> 2;
-const GICC_STATUSR: isize = 0x002c >> 2;
-const GICC_APR_N: isize = 0x00d0 >> 2;
-const GICC_NSAPR_N: isize = 0x00e0 >> 2;
-const GICC_IIDR: isize = 0x00fc >> 2;
-const GICC_DIR: isize = 0x1000 >> 2;
+/// Register offsets for the GIC CPU interface (relative to its base address).
+#[allow(unused)]
+mod cpu_regs {
+    pub const CTLR: isize = 0x000 >> 2;
+    pub const PMR: isize = 0x0004 >> 2;
+    pub const BPR: isize = 0x008 >> 2;
+    pub const IAR: isize = 0x000c >> 2;
+    pub const EOIR: isize = 0x0010 >> 2;
+    pub const RPR: isize = 0x0014 >> 2;
+    pub const HPPIR: isize = 0x0018 >> 2;
+    pub const ABPR: isize = 0x001c >> 2;
+    pub const AIAR: isize = 0x0020 >> 2;
+    pub const AEOIR: isize = 0x0024 >> 2;
+    pub const AHPPIR: isize = 0x0028 >> 2;
+    pub const STATUSR: isize = 0x002c >> 2;
+    pub const APR_N: isize = 0x00d0 >> 2;
+    pub const NSAPR_N: isize = 0x00e0 >> 2;
+    pub const IIDR: isize = 0x00fc >> 2;
+    pub const DIR: isize = 0x1000 >> 2;
+}
 
 // Special InterruptIds //
 const INTID_NONE_PENDING: InterruptId = 1023;

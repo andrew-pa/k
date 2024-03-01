@@ -21,10 +21,9 @@
 extern crate alloc;
 
 use alloc::boxed::Box;
-use core::{arch::global_asm, panic::PanicInfo};
+use core::arch::global_asm;
 use memory::PhysicalAddress;
 use qemu_exit::QEMUExit as _;
-use smallvec::SmallVec;
 
 pub mod dtb;
 pub mod registry;
@@ -142,6 +141,7 @@ pub extern "C" fn kmain(dtb_addr: PhysicalAddress) -> ! {
 
 /// Handle panics in the kernel by writing them to the debug UART.
 #[panic_handler]
+#[allow(unreachable_code)]
 pub fn panic_handler(info: &core::panic::PanicInfo) -> ! {
     use core::fmt::Write;
     let mut uart = uart::DebugUart {
@@ -169,9 +169,9 @@ where
         let mut uart = uart::DebugUart {
             base: 0xffff_0000_0900_0000 as *mut u8,
         };
-        write!(&mut uart, "{}...\t", core::any::type_name::<T>());
+        write!(&mut uart, "{}...\t", core::any::type_name::<T>()).unwrap();
         self();
-        writeln!(&mut uart, "ok");
+        writeln!(&mut uart, "ok").unwrap();
     }
 }
 

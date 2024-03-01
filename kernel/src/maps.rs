@@ -4,7 +4,7 @@
 
 use core::{
     borrow::Borrow,
-    hash::{BuildHasher, Hash, Hasher},
+    hash::{BuildHasher, Hash},
     ops::{Deref, DerefMut},
     sync::atomic::AtomicUsize,
 };
@@ -74,9 +74,9 @@ impl<K: Hash + Eq, V, S: BuildHasher + Clone> CHashMap<K, V, S> {
         K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        let hash = self.hash(&key);
+        let hash = self.hasher.hash_one(key);
         let shard_index = self.shard_index_for_hash(hash);
-        let mut shard = unsafe { self.shards.get_unchecked(shard_index) }
+        let shard = unsafe { self.shards.get_unchecked(shard_index) }
             .read()
             .await;
         shard.maybe_map(|m| m.get(key))
@@ -88,9 +88,9 @@ impl<K: Hash + Eq, V, S: BuildHasher + Clone> CHashMap<K, V, S> {
         K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        let hash = self.hash(&key);
+        let hash = self.hasher.hash_one(key);
         let shard_index = self.shard_index_for_hash(hash);
-        let mut shard = unsafe { self.shards.get_unchecked(shard_index) }
+        let shard = unsafe { self.shards.get_unchecked(shard_index) }
             .write()
             .await;
         shard.maybe_map(|m| m.get_mut(key))
@@ -99,7 +99,7 @@ impl<K: Hash + Eq, V, S: BuildHasher + Clone> CHashMap<K, V, S> {
     /// Associates a key with a value in the map.
     /// Returns the old value associated with the key if there was one.
     pub async fn insert(&self, k: K, v: V) -> Option<V> {
-        let hash = self.hash(&k);
+        let hash = self.hasher.hash_one(&k);
         let shard_index = self.shard_index_for_hash(hash);
         let mut shard = unsafe { self.shards.get_unchecked(shard_index) }
             .write()
@@ -114,7 +114,7 @@ impl<K: Hash + Eq, V, S: BuildHasher + Clone> CHashMap<K, V, S> {
         K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        let hash = self.hash(&k);
+        let hash = self.hasher.hash_one(k);
         let shard_index = self.shard_index_for_hash(hash);
         let mut shard = unsafe { self.shards.get_unchecked(shard_index) }
             .write()
@@ -128,9 +128,9 @@ impl<K: Hash + Eq, V, S: BuildHasher + Clone> CHashMap<K, V, S> {
         K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        let hash = self.hash(&key);
+        let hash = self.hasher.hash_one(key);
         let shard_index = self.shard_index_for_hash(hash);
-        let mut shard = unsafe { self.shards.get_unchecked(shard_index) }.read_blocking();
+        let shard = unsafe { self.shards.get_unchecked(shard_index) }.read_blocking();
         shard.maybe_map(|m| m.get(key))
     }
 
@@ -140,16 +140,16 @@ impl<K: Hash + Eq, V, S: BuildHasher + Clone> CHashMap<K, V, S> {
         K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        let hash = self.hash(&key);
+        let hash = self.hasher.hash_one(key);
         let shard_index = self.shard_index_for_hash(hash);
-        let mut shard = unsafe { self.shards.get_unchecked(shard_index) }.write_blocking();
+        let shard = unsafe { self.shards.get_unchecked(shard_index) }.write_blocking();
         shard.maybe_map(|m| m.get_mut(key))
     }
 
     /// Associates a key with a value in the map.
     /// Returns the old value associated with the key if there was one.
     pub fn insert_blocking(&self, k: K, v: V) -> Option<V> {
-        let hash = self.hash(&k);
+        let hash = self.hasher.hash_one(&k);
         let shard_index = self.shard_index_for_hash(hash);
         let mut shard = unsafe { self.shards.get_unchecked(shard_index) }.write_blocking();
         shard.insert(k, v)
@@ -162,23 +162,16 @@ impl<K: Hash + Eq, V, S: BuildHasher + Clone> CHashMap<K, V, S> {
         K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        let hash = self.hash(&k);
+        let hash = self.hasher.hash_one(k);
         let shard_index = self.shard_index_for_hash(hash);
         let mut shard = unsafe { self.shards.get_unchecked(shard_index) }.write_blocking();
         shard.remove(k)
     }
 
     /// Compute the index of the shard responsible for storing the key with this hash.
-    fn shard_index_for_hash(&self, hash: usize) -> usize {
+    fn shard_index_for_hash(&self, hash: u64) -> usize {
         // DashMap leaves the high 7 bits for the HashBrown SIMD tag.
-        (hash << 7) >> self.shard_index_shift
-    }
-
-    /// Helper to compute the hash code for a key.
-    fn hash<T: Hash>(&self, x: &T) -> usize {
-        let mut h = self.hasher.build_hasher();
-        x.hash(&mut h);
-        h.finish() as usize
+        ((hash << 7) >> self.shard_index_shift) as usize
     }
 }
 

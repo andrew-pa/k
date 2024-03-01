@@ -1,21 +1,21 @@
 //! PCIe bus device driver.
 //!
 //! This module provides basic PCIe data structures, bus initialization and device discovery.
-use core::{cell::OnceCell, marker::PhantomData};
+use core::marker::PhantomData;
 
-use alloc::{boxed::Box, string::String};
 use bitfield::Bit;
-use byteorder::{BigEndian, ByteOrder, LittleEndian};
-use derive_more::Display;
+use byteorder::{BigEndian, ByteOrder};
+
 use hashbrown::HashMap;
 use snafu::{ResultExt, Snafu};
 
 use crate::{
-    dtb::{DeviceTree, MemRegionIter},
+    dtb::DeviceTree,
     memory::{self, PhysicalAddress, VirtualAddress, PAGE_SIZE},
 };
 
 #[derive(Debug)]
+#[allow(unused)]
 struct HostCtrlDeviceTreeNode<'dt> {
     size_cells: u32,
     address_cells: u32,
@@ -209,8 +209,8 @@ pub struct ConfigBlock {
 // offsets in units of u8s from the start of configuration space
 const HEADER_VENDOR_ID: isize = 0x0;
 const HEADER_DEVICE_ID: isize = 0x2;
-const HEADER_COMMAND: isize = 0x4;
-const HEADER_STATUS: isize = 0x6;
+// const HEADER_COMMAND: isize = 0x4;
+// const HEADER_STATUS: isize = 0x6;
 const HEADER_CLASS_CODE: isize = 0x8;
 const HEADER_TYPE_ID: isize = 0xe;
 

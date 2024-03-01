@@ -133,7 +133,6 @@ pub async fn spawn_process(
     before_launch: Option<impl FnOnce(&mut Process)>,
 ) -> Result<ProcessId, SpawnError> {
     use crate::registry::registry;
-    use alloc::vec::Vec;
 
     // load & parse binary
     let path = binary_path.as_ref();
@@ -145,10 +144,11 @@ pub async fn spawn_process(
 
     let f_len = f.len() as usize;
     log::debug!("binary file size = {f_len}");
-    let mut src_data = PhysicalBuffer::alloc(f_len.div_ceil(PAGE_SIZE), &Default::default())
-        .context(MemorySnafu {
+    let src_data = PhysicalBuffer::alloc(f_len.div_ceil(PAGE_SIZE), &Default::default()).context(
+        MemorySnafu {
             reason: "allocate temporary buffer for binary",
-        })?;
+        },
+    )?;
     f.load_pages(0, src_data.physical_address(), src_data.page_count())
         .await
         .context(FileSystemSnafu {
@@ -216,7 +216,7 @@ pub async fn spawn_process(
             el0_access: true,
         },
     )
-    .context(MemoryMapSnafu);
+    .context(MemoryMapSnafu)?;
     address_space_allocator
         .reserve(stack_vaddr, stack_page_count)
         .expect("user process VA allocations should not overlap, and the page table should check");

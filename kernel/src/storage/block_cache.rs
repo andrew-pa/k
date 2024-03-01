@@ -1,15 +1,13 @@
 use super::*;
-use crate::memory::{
-    virtual_address_allocator, PhysicalAddress, PhysicalBuffer, VirtualAddress, PAGE_SIZE,
-};
+use crate::memory::{PhysicalAddress, PhysicalBuffer, PAGE_SIZE};
 use crate::tasks::locks::{Mutex, RwLock};
-use alloc::{boxed::Box, sync::Arc, vec::Vec};
-use async_trait::async_trait;
+use alloc::{boxed::Box, vec::Vec};
+
 use bitfield::{bitfield, BitRange};
-use derive_more::Display;
+
 use futures::future;
-use hashbrown::HashMap;
-use snafu::{ResultExt, Snafu};
+
+use snafu::ResultExt;
 
 // TODO: we could entirely get rid of this and use the MMU instead, given that all block
 // stores could be addressed within the kernel's address space.
@@ -171,7 +169,7 @@ impl BlockCache {
                     &[(self.chunk_phy_addr(chunk_id), self.blocks_per_chunk)],
                 )
                 .await?;
-            let mut md = &mut self.metadata.write().await[chunk_id as usize];
+            let md = &mut self.metadata.write().await[chunk_id as usize];
             md.set_tag(tag);
             md.set_occupied(true);
             md.set_dirty(mark_dirty);
@@ -275,9 +273,9 @@ impl BlockCache {
     /// Update bytes in the cache in a certain range. All blocks in the range will be loaded into the cache if they are unloaded.
     pub async fn update_bytes(
         &self,
-        address: BlockAddress,
-        size_in_bytes: usize,
-        f: impl FnOnce(&mut [u8]),
+        _address: BlockAddress,
+        _size_in_bytes: usize,
+        _f: impl FnOnce(&mut [u8]),
     ) {
         todo!()
     }
@@ -286,6 +284,8 @@ impl BlockCache {
 #[cfg(test)]
 mod test {
     use core::sync::atomic::{AtomicUsize, Ordering};
+
+    use alloc::sync::Arc;
 
     use super::*;
     use crate::tasks::block_on;

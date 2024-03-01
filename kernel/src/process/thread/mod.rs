@@ -49,11 +49,11 @@ static mut THREADS: OnceCell<CHashMap<ThreadId, Thread>> = OnceCell::new();
 pub fn threads() -> &'static CHashMap<ThreadId, Thread> {
     unsafe {
         THREADS.get_or_init(|| {
-            let mut ths: CHashMap<ThreadId, Thread> = Default::default();
+            let ths: CHashMap<ThreadId, Thread> = Default::default();
             // Create the idle thread, which will just wait for interrupts
             let mut program_status = SavedProgramStatus::initial_for_el1();
             program_status.set_sp(true); // the idle thread runs on the EL1 stack normally used by interrupts and kmain
-            ths.insert(
+            ths.insert_blocking(
                 IDLE_THREAD,
                 Thread {
                     id: IDLE_THREAD,
@@ -84,7 +84,8 @@ pub fn next_thread_id() -> ThreadId {
 /// This inserts the thread in the global table and also adds it to the scheduler.
 pub fn spawn_thread(thread: Thread) {
     let id = thread.id;
-    threads().insert(id, thread);
+    // TODO: async version?
+    threads().insert_blocking(id, thread);
     scheduler::scheduler().add_thread(id);
 }
 

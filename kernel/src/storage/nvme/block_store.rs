@@ -4,10 +4,10 @@ use crate::{
 };
 use alloc::boxed::Box;
 use async_trait::async_trait;
-use snafu::ResultExt;
 
 use super::{interrupt::CompletionQueueHandle, queue::SubmissionQueue};
 
+#[allow(unused)]
 pub(super) struct NamespaceBlockStore {
     pub total_size: u64,
     pub capacity: u64,

@@ -1,6 +1,6 @@
 //! Storage device drivers i.e. block devices.
 use crate::memory::PhysicalAddress;
-use alloc::{boxed::Box, vec::Vec};
+use alloc::boxed::Box;
 use async_trait::async_trait;
 use derive_more::Display;
 use snafu::Snafu;

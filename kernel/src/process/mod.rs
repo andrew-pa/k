@@ -4,19 +4,18 @@ use crate::{
     exception::Registers,
     memory::{
         paging::{PageTable, PageTableEntryOptions},
-        physical_memory_allocator, MemoryError, PhysicalAddress, PhysicalBuffer, VirtualAddress,
+        physical_memory_allocator, MemoryError, PhysicalBuffer, VirtualAddress,
         VirtualAddressAllocator, PAGE_SIZE,
     },
     CHashMap,
 };
-use alloc::{boxed::Box, vec::Vec};
-use async_trait::async_trait;
+use alloc::boxed::Box;
+
 use bitfield::{bitfield, Bit};
-use core::{cell::OnceCell, error::Error, sync::atomic::AtomicU32};
-use futures::Future;
+use core::{cell::OnceCell, sync::atomic::AtomicU32};
 use hashbrown::HashMap;
 use smallvec::{smallvec, SmallVec};
-use snafu::{ensure, OptionExt, ResultExt, Snafu};
+use snafu::{OptionExt, ResultExt, Snafu};
 
 pub mod thread;
 pub use thread::{scheduler::scheduler, threads, Thread, ThreadId};
@@ -63,7 +62,7 @@ impl Process {
                 let mut proc = processes().get_mut_blocking(&pid).unwrap();
                 match proc.channel.post(&cmpl) {
                     Ok(()) => {}
-                    Err(e) => {
+                    Err(_) => {
                         todo!("kill process on queue overflow")
                     }
                 }
@@ -198,19 +197,19 @@ fn exit_process(pid: ProcessId) {
 pub fn register_system_call_handlers() {
     use kapi::system_calls::SystemCallNumber;
     let h = crate::exception::system_call_handlers();
-    h.insert(SystemCallNumber::Exit as u16, |_id, pid, _tid, _regs| {
+    h.insert_blocking(SystemCallNumber::Exit as u16, |_id, pid, _tid, _regs| {
         exit_process(pid);
     });
-    h.insert(SystemCallNumber::Yield as u16, |_id, _pid, _tid, _regs| {
+    h.insert_blocking(SystemCallNumber::Yield as u16, |_id, _pid, _tid, _regs| {
         scheduler().schedule_next_thread();
     });
-    h.insert(SystemCallNumber::WaitForMessage as u16, |_id, _pid, tid, _regs| {
+    h.insert_blocking(SystemCallNumber::WaitForMessage as u16, |_id, _pid, tid, _regs| {
         threads().get_mut_blocking(&tid)
             .expect("valid thread ID is currently running")
             .state = ThreadState::Waiting;
         // TODO: where do we check for messages to resume execution?
         todo!("which thread will resume when the process recieves a message which could equally be for any thread?");
         // TODO: perhaps each thread should have its own channel, or we should otherwise do something about that?
-        scheduler().schedule_next_thread();
+        // scheduler().schedule_next_thread();
     });
 }

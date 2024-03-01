@@ -12,10 +12,11 @@ use crate::{
     CHashMap,
 };
 
-use super::queue::{Command, Completion, CompletionQueue, QueueId};
+use super::queue::{Command, Completion, CompletionQueue};
 
 pub struct CompletionFuture {
     cmd_id: u16,
+    #[allow(unused)] // we're only holding these to drop them when the future is dropped
     extra_data_ptr_pages_to_drop: SmallVec<[crate::memory::PhysicalBuffer; 1]>,
     pending_completions: Arc<CHashMap<u16, PendingCompletion>>,
 }
@@ -33,13 +34,13 @@ impl Future for CompletionFuture {
             None => {
                 log::debug!("pending");
                 self.pending_completions
-                    .insert(self.cmd_id, Waiting(cx.waker().clone()));
+                    .insert_blocking(self.cmd_id, Waiting(cx.waker().clone()));
                 Poll::Pending
             }
             Some(Waiting(_)) => {
                 log::warn!("future repolled while waiting");
                 self.pending_completions
-                    .insert(self.cmd_id, Waiting(cx.waker().clone()));
+                    .insert_blocking(self.cmd_id, Waiting(cx.waker().clone()));
                 Poll::Pending
             }
             Some(Ready(cmp)) => Poll::Ready(cmp),
@@ -80,7 +81,7 @@ impl Drop for CompletionQueueHandle {
         // make sure the underlying completion queue gets dropped and that interrupts won't
         // happen that will go unhandled
         // TODO: disable interrupts
-        exception::interrupt_handlers().remove(&self.int_id);
+        exception::interrupt_handlers().remove_blocking(&self.int_id);
     }
 }
 
@@ -109,7 +110,7 @@ fn handle_interrupt(
             }
         } else {
             log::debug!("inserting pending ready completion");
-            pending_completions.insert(cmp.id, Ready(cmp));
+            pending_completions.insert_blocking(cmp.id, Ready(cmp));
         }
     } else {
         // panic here?
@@ -133,7 +134,7 @@ pub fn register_completion_queue(
     let pending_completions: Arc<CHashMap<u16, PendingCompletion>> = Arc::new(Default::default());
     {
         let pending_completions = pending_completions.clone();
-        exception::interrupt_handlers().insert(
+        exception::interrupt_handlers().insert_blocking(
             int_id,
             Box::new(move |int_id, _| handle_interrupt(int_id, &mut qu, &pending_completions)),
         );

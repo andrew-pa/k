@@ -1,5 +1,5 @@
 //! File system drivers.
-use alloc::{boxed::Box, string::String};
+use alloc::boxed::Box;
 use async_trait::async_trait;
 use snafu::Snafu;
 

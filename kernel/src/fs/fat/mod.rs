@@ -2,15 +2,13 @@
 //! Currently this only supports FAT16.
 // See <qemu-src>/block/vvfat.c
 
-use alloc::{boxed::Box, string::String, sync::Arc, vec::Vec};
+use alloc::{boxed::Box, sync::Arc, vec::Vec};
 use async_recursion::async_recursion;
 use async_trait::async_trait;
-use bitfield::bitfield;
-use byteorder::{ByteOrder, LittleEndian};
+
 use futures::{Stream, StreamExt};
 use smallvec::SmallVec;
 use snafu::{ensure, OptionExt, ResultExt};
-use widestring::Utf16Str;
 
 use crate::{
     fs::{BadMetadataSnafu, OtherSnafu, OutOfBoundsSnafu},
@@ -108,12 +106,11 @@ impl File for FatFile {
 
     async fn flush_pages(
         &mut self,
-        dest_offset: u64,
-        src_address: PhysicalAddress,
-        num_pages: usize,
+        _dest_offset: u64,
+        _src_address: PhysicalAddress,
+        _num_pages: usize,
     ) -> Result<(), Error> {
         todo!();
-        Ok(())
     }
 }
 
@@ -162,7 +159,7 @@ struct Handler {
 
 impl Handler {
     async fn new(block_store: Box<dyn BlockStore>) -> Result<Handler, Error> {
-        let mut cache = BlockCache::new(block_store, CACHE_SIZE).context(super::StorageSnafu)?;
+        let cache = BlockCache::new(block_store, CACHE_SIZE).context(super::StorageSnafu)?;
 
         // read the relevant part of the MBR, starting at byte 446
         let mut mbr_data = [0u8; 66];
@@ -211,7 +208,7 @@ impl Handler {
         log::debug!("FAT bootsector = {bootsector:x?}");
         bootsector.validate()?;
 
-        let mut hh = Handler {
+        let hh = Handler {
             cache: Arc::new(cache),
             params: VolumeParams::compute_from_bootsector(partition_addr, bootsector),
         };
@@ -312,7 +309,8 @@ impl Handler {
 
                         if entry_bytes[0] == 0 {
                             return None;
-                        } else if entry_bytes[11] == DirEntryAttributes::LongName.bits() {
+                        }
+                        if entry_bytes[11] == DirEntryAttributes::LongName.bits() {
                             entry_name.insert_many(
                                 0,
                                 (1..11)
@@ -375,9 +373,8 @@ impl Handler {
                     return self
                         .find_entry_for_path(DirectorySource::Clusters(de.cluster_num_lo), comps)
                         .await;
-                } else {
-                    return Ok(Some(*de));
                 }
+                return Ok(Some(*de));
             }
         }
 
@@ -389,7 +386,7 @@ impl Handler {
 impl RegistryHandler for Handler {
     async fn open_block_store(
         &self,
-        subpath: &Path,
+        _subpath: &Path,
     ) -> Result<Box<dyn BlockStore>, crate::registry::RegistryError> {
         Err(crate::registry::RegistryError::Unsupported)
     }

@@ -28,7 +28,7 @@ struct Queue<T> {
 
 impl<T> Queue<T> {
     fn new(size_in_pages: usize) -> Result<Queue<T>, MemoryError> {
-        let mut buffer = PhysicalBuffer::alloc_zeroed(
+        let buffer = PhysicalBuffer::alloc_zeroed(
             size_in_pages,
             &PageTableEntryOptions {
                 read_only: false,

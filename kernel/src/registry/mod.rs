@@ -2,7 +2,7 @@
 use core::cell::OnceCell;
 
 use crate::{fs::File, storage::BlockStore};
-use alloc::{boxed::Box, string::String, vec::Vec};
+use alloc::{boxed::Box, string::String};
 use async_trait::async_trait;
 
 pub mod path;
@@ -102,7 +102,7 @@ impl Node {
             (p @ Some(Component::Root | Component::ParentDir | Component::CurrentDir), _) => {
                 panic!("unexpected path component encountered {p:?}")
             }
-            (None, Node::Directory(_)) => Err(todo!()),
+            (None, Node::Directory(_)) => todo!(),
             _ => todo!(),
         }
     }

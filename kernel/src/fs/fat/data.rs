@@ -3,13 +3,11 @@ use core::ops::Deref;
 
 use alloc::string::String;
 use bitflags::bitflags;
-use bytemuck::{bytes_of, bytes_of_mut, from_bytes, Pod, Zeroable};
-use futures::Stream;
+use bytemuck::{Pod, Zeroable};
+
 use smallvec::SmallVec;
 use snafu::Snafu;
 use widestring::Utf16Str;
-
-use crate::fs::StorageSnafu;
 
 use super::*;
 
@@ -185,7 +183,7 @@ impl LongDirEntry {
         if self.name.is_empty() {
             if name.len() <= 11 {
                 let (name, ext) = name.split_once('.').unwrap_or_else(|| (&name[0..], ""));
-                let ename = (&self.short_name[0..8]);
+                let ename = &self.short_name[0..8];
                 let eext = &self.short_name[8..11];
                 // compare by bytes b/c if the name isn't ASCII then it can't match
                 // regardless

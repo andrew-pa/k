@@ -1,8 +1,4 @@
-use core::{
-    borrow::Borrow,
-    fmt::{Display, Write},
-    ops::Deref,
-};
+use core::{borrow::Borrow, fmt::Display, ops::Deref};
 
 use alloc::string::String;
 
@@ -204,7 +200,7 @@ impl Deref for PathBuf {
 
 impl PathBuf {
     pub fn push(&mut self, p: impl AsRef<Path>) {
-        if (!self.s.ends_with(PATH_SEP)) {
+        if !self.s.ends_with(PATH_SEP) {
             self.s.push(PATH_SEP);
         }
         self.s.push_str(p.as_ref().as_str());

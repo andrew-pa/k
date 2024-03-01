@@ -15,12 +15,8 @@ use spin::{Mutex, MutexGuard};
 
 use crate::{
     memory::{PhysicalAddress, VirtualAddress},
-    process::{
-        self,
-        thread::reg::{read_exception_link_reg, read_stack_pointer},
-        ProcessId,
-    },
-    timer, CHashMap,
+    process::{self, thread::reg::read_exception_link_reg, ProcessId},
+    CHashMap,
 };
 
 /// An interrupt identifier.
@@ -345,7 +341,7 @@ impl core::fmt::Debug for ExceptionClass {
             0b100100 => write!(f, "[Data Abort exception from a lower Exception level]"),
             0b100101 => write!(f, "[Data Abort exception taken without a change in Exception level]"),
             0b100110 => write!(f, "[SP alignment fault exception]"),
-            c => write!(f, "[Unknown]")
+            _ => write!(f, "[Unknown]")
         }
     }
 }
