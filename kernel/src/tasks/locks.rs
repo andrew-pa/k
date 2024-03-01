@@ -6,7 +6,8 @@
 use core::{
     cell::UnsafeCell,
     ops::{Deref, DerefMut},
-    sync::atomic::{AtomicUsize, Ordering},
+    ptr::NonNull,
+    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
     task::{Poll, Waker},
 };
 
@@ -14,18 +15,51 @@ use alloc::sync::Arc;
 use crossbeam::queue::SegQueue;
 use futures::Future;
 
+use crate::exception::InterruptGuard;
+
 use super::block_on;
+
+/// A combined waker type for both tasks and threads waiting for the semaphore.
+enum SemaphoreWaker {
+    /// A typical task waker.
+    Task(Waker),
+    /// A shared signal with a thread to wake it.
+    Thread(NonNull<AtomicBool>),
+}
+
+/// # Safety
+///
+/// The [Waker] is Send, and the thread signal is safe because of atomics and the guarentee that it
+/// will remain live until we signal it.
+unsafe impl Send for SemaphoreWaker {}
+
+impl SemaphoreWaker {
+    /// Signal the waiting task/thread to wake up.
+    fn wake(self) {
+        match self {
+            SemaphoreWaker::Task(t) => t.wake(),
+            SemaphoreWaker::Thread(v) => {
+                // SAFETY: this pointer is guarenteed to be valid as long as `wait_blocking` only
+                // returns after getting signaled.
+                unsafe {
+                    v.as_ref().store(false, Ordering::Release);
+                }
+            }
+        }
+    }
+}
 
 /// Inner fields that make up a semaphore but are shared between owners.
 struct SemaphoreInner {
     count: AtomicUsize,
-    waker_queue: SegQueue<Waker>,
+    waker_queue: SegQueue<SemaphoreWaker>,
 }
 
 /// A semaphore for coordination between tasks.
 #[derive(Clone)]
 pub struct Semaphore(Arc<SemaphoreInner>);
 
+/// A future that resolves when the semaphore has been acquired.
 struct WaitFuture {
     p: Arc<SemaphoreInner>,
 }
@@ -40,19 +74,21 @@ impl Future for WaitFuture {
         let mut count = self.p.count.load(Ordering::Acquire);
         loop {
             if count == 0 {
-                self.p.waker_queue.push(cx.waker().clone());
+                self.p
+                    .waker_queue
+                    .push(SemaphoreWaker::Task(cx.waker().clone()));
                 return Poll::Pending;
-            } else {
-                match self.p.count.compare_exchange(
-                    count,
-                    count - 1,
-                    Ordering::AcqRel,
-                    Ordering::Acquire,
-                ) {
-                    Ok(_) => return Poll::Ready(()),
-                    Err(c) => {
-                        count = c;
-                    }
+            }
+
+            match self.p.count.compare_exchange(
+                count,
+                count - 1,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return Poll::Ready(()),
+                Err(c) => {
+                    count = c;
                 }
             }
         }
@@ -74,6 +110,51 @@ impl Semaphore {
         // Decrements the value of semaphore variable by 1. If the new value of the semaphore variable is negative, the future returned will wait. Otherwise, the task continues execution, having used a unit of the resource.
 
         WaitFuture { p: self.0.clone() }
+    }
+
+    /// Wait for the semaphore value to become non-zero, then decrement it.
+    ///
+    /// # Safety
+    /// If an interrupt handler also interacts with this semaphore, it is possible to create a
+    /// deadlock if an interrupt happens after/during a `wait_blocking()` that then itself calls
+    /// `wait_blocking()`. To prevent this deadlock, interrupts must be disabled accordingly.
+    pub unsafe fn wait_blocking(&self) {
+        let mut signal = AtomicBool::new(true);
+
+        let mut count = self.0.count.load(Ordering::Acquire);
+
+        loop {
+            // wait for count to become non-zero
+            while count == 0 {
+                signal.store(true, Ordering::Release);
+
+                self.0
+                    .waker_queue
+                    .push(SemaphoreWaker::Thread(NonNull::new(&mut signal).unwrap()));
+
+                // wait to get signaled that the count might be non-zero
+                while signal.load(core::sync::atomic::Ordering::Acquire) {
+                    core::hint::spin_loop();
+                }
+
+                count = self.0.count.load(Ordering::Acquire);
+            }
+
+            // try to decrement the count
+            match self.0.count.compare_exchange(
+                count,
+                count - 1,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                // if successful we're done
+                Ok(_) => return,
+                // if the decrement failed, try again from the beginning
+                Err(c) => {
+                    count = c;
+                }
+            }
+        }
     }
 
     /// Increments the semaphore value, allowing another waiting task to execute.
@@ -99,6 +180,7 @@ unsafe impl<T: ?Sized + Send> Sync for Mutex<T> {}
 /// A typical mutex guard type for [Mutex].
 pub struct MutexGuard<'a, T: ?Sized> {
     m: &'a Mutex<T>,
+    ig: Option<InterruptGuard>,
 }
 
 impl<T> Mutex<T> {
@@ -116,7 +198,22 @@ impl<T: ?Sized> Mutex<T> {
     /// it becomes available.
     pub async fn lock(&self) -> MutexGuard<T> {
         self.s.wait().await;
-        MutexGuard { m: self }
+        MutexGuard { m: self, ig: None }
+    }
+
+    /// Synchronously lock this mutex. If the mutex is already taken, then this will spin until
+    /// it becomes available.
+    ///
+    /// This function disables interrupts until the guard is dropped to prevent deadlocks.
+    pub fn lock_blocking(&self) -> MutexGuard<T> {
+        let ig = InterruptGuard::disable_interrupts_until_drop();
+        unsafe {
+            self.s.wait_blocking();
+        }
+        MutexGuard {
+            m: self,
+            ig: Some(ig),
+        }
     }
 }
 
@@ -159,11 +256,13 @@ unsafe impl<T: ?Sized + Send> Sync for RwLock<T> {}
 /// A typical read guard for [RwLock].
 pub struct RwLockReadGuard<'a, T: ?Sized> {
     lock: &'a RwLock<T>,
+    ig: Option<InterruptGuard>,
 }
 
 /// A typical write guard for [RwLock].
 pub struct RwLockWriteGuard<'a, T: ?Sized> {
     lock: &'a RwLock<T>,
+    ig: Option<InterruptGuard>,
 }
 
 impl<T> RwLock<T> {
@@ -187,19 +286,63 @@ impl<T: ?Sized> RwLock<T> {
             // readers from continuing if a task has the write mutex.
             self.write_mutex.wait().await;
         }
-        RwLockReadGuard { lock: self }
+        RwLockReadGuard {
+            lock: self,
+            ig: None,
+        }
     }
 
     /// Lock for writing (exclusive access). If the data is unavailable, yields until the data becomes available.
     pub async fn write(&self) -> RwLockWriteGuard<T> {
         self.write_mutex.wait().await;
-        RwLockWriteGuard { lock: self }
+        RwLockWriteGuard {
+            lock: self,
+            ig: None,
+        }
+    }
+
+    /// Lock for reading (shared but exclusive with writing). If the data is unavailable, this spins until it becomes available.
+    ///
+    /// This function is blocking, thus it must be used cautiously if interrupts are expected
+    /// within the critical section, or else deadlocks will occur.
+    pub fn read_blocking(&self) -> RwLockReadGuard<T> {
+        let mut count = self.reader_count.lock_blocking();
+        *count += 1;
+        if *count == 1 {
+            // this will prevent the reader_count lock from releasing, preventing any additional
+            // readers from continuing if a task has the write mutex.
+            unsafe {
+                // SAFETY: this is safe because we just disabled interrupts with `lock_blocking()`.
+                self.write_mutex.wait_blocking();
+            }
+        }
+        RwLockReadGuard {
+            lock: self,
+            // pass the interrupt guard along from the mutex to preserve it
+            ig: count.ig.take(),
+        }
+    }
+
+    /// Lock for writing (exclusive access). If the data is unavailable, this spins until the data becomes available.
+    ///
+    /// This function is blocking, thus it must be used cautiously if interrupts are expected
+    /// within the critical section, or else deadlocks will occur.
+    pub fn write_blocking(&self) -> RwLockWriteGuard<T> {
+        let ig = InterruptGuard::disable_interrupts_until_drop();
+        unsafe {
+            // SAFETY: this is safe because we just disabled interrupts with `ig`.
+            self.write_mutex.wait_blocking();
+        }
+        RwLockWriteGuard {
+            lock: self,
+            ig: Some(ig),
+        }
     }
 }
 
 impl<'a, T: ?Sized> Drop for RwLockReadGuard<'a, T> {
     fn drop(&mut self) {
-        let mut count = block_on(self.lock.reader_count.lock());
+        let mut count = self.lock.reader_count.lock_blocking();
         *count -= 1;
         if *count == 0 {
             self.lock.write_mutex.signal();

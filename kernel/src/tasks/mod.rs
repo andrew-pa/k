@@ -169,11 +169,14 @@ pub fn block_on<O, F: Future<Output = O>>(task: F) -> O {
     let mut context = Context::from_waker(&waker);
     loop {
         match task.as_mut().poll(&mut context) {
-            Poll::Ready(v) => return v,
+            Poll::Ready(v) => {
+                log::trace!("end of block on");
+                return v;
+            }
             Poll::Pending => {
                 signal.store(true, core::sync::atomic::Ordering::Release);
                 while signal.load(core::sync::atomic::Ordering::Acquire) {
-                    crate::intrinsics::wait_for_interrupt();
+                    core::hint::spin_loop();
                 }
             }
         }

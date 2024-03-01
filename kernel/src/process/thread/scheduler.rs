@@ -50,8 +50,9 @@ impl ThreadScheduler {
             }
             // skip any threads that are waiting in this queue
             let mut skips = queue.len();
+            // TODO: great spot for try_get
             while threads()
-                .get(&queue[*next])
+                .get_blocking(&queue[*next])
                 .expect("valid thread ids in queue")
                 .state
                 == ThreadState::Waiting
@@ -78,7 +79,7 @@ impl ThreadScheduler {
 
     /// Add a thread to the scheduler so that it can run.
     pub fn add_thread(&mut self, thread: ThreadId) {
-        let t = threads().get(&thread).unwrap();
+        let t = threads().get_blocking(&thread).unwrap();
         self.queues[t.priority as usize].0.push(thread);
     }
 
@@ -86,7 +87,7 @@ impl ThreadScheduler {
     ///
     /// If the thread was current, a new ready thread will be scheduled.
     pub fn remove_thread(&mut self, thread: ThreadId) {
-        let t = threads().get(&thread).unwrap();
+        let t = threads().get_blocking(&thread).unwrap();
         self.queues[t.priority as usize]
             .0
             .retain(|id| *id != thread);
@@ -107,7 +108,7 @@ impl ThreadScheduler {
         current_regs: &mut Registers,
     ) -> (Option<ProcessId>, ThreadId) {
         let current = self.currently_running();
-        if let Some(mut t) = threads().get_mut(&current) {
+        if let Some(mut t) = threads().get_mut_blocking(&current) {
             t.save(current_regs);
             log::trace!("paused thread {current} @ {}, sp={}", t.pc, t.sp);
             (t.parent, current)
@@ -124,11 +125,11 @@ impl ThreadScheduler {
         previous_asid: Option<u16>,
     ) {
         let thread = threads()
-            .get_mut(&id)
+            .get_mut_blocking(&id)
             .expect("scheduler has valid thread IDs");
         log::trace!("resuming thread {id} @ {}, sp={}", thread.pc, thread.sp);
 
-        if let Some(proc) = thread.parent.and_then(|id| processes().get(&id)) {
+        if let Some(proc) = thread.parent.and_then(|id| processes().get_blocking(&id)) {
             proc.page_tables.activate();
         }
 

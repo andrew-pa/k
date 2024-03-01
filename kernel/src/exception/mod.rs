@@ -152,6 +152,7 @@ pub fn init_interrupts(device_tree: &crate::dtb::DeviceTree) {
             .expect("init interrupts once");
         SYSTEM_CALL_HANDLERS
             .set(Default::default())
+            .ok()
             .expect("init syscall table once");
     }
 }
@@ -220,22 +221,26 @@ pub unsafe fn write_interrupt_mask(m: InterruptMask) {
 }
 
 /// A guard that disables interrupts until it is dropped, then reenables them.
-pub struct InterruptGuard;
+pub struct InterruptGuard {
+    previous_mask: InterruptMask,
+}
 
 impl InterruptGuard {
-    /// Disable interrupts until the guard is dropped.
-    fn disable_interrupts_in_scope() -> Self {
+    /// Disable interrupts until the guard is dropped, when the previous interrupt mask will be
+    /// restored.
+    pub fn disable_interrupts_until_drop() -> Self {
+        let previous_mask = read_interrupt_mask();
         unsafe {
             write_interrupt_mask(InterruptMask::all_disabled());
         }
-        InterruptGuard
+        InterruptGuard { previous_mask }
     }
 }
 
 impl Drop for InterruptGuard {
     fn drop(&mut self) {
         unsafe {
-            write_interrupt_mask(InterruptMask::all_enabled());
+            write_interrupt_mask(InterruptMask(self.previous_mask.0));
         }
     }
 }

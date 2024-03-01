@@ -248,7 +248,7 @@ pub async fn spawn_process(
         b(&mut proc);
     }
 
-    let p = processes().insert(pid, proc);
+    let p = processes().insert_blocking(pid, proc);
     assert!(p.is_none());
 
     let start_regs =

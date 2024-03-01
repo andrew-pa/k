@@ -60,7 +60,7 @@ impl Process {
             let pid = self.id;
             crate::tasks::spawn(async move {
                 let cmpl = interface::dispatch(pid, tid, cmd).await;
-                let mut proc = processes().get_mut(&pid).unwrap();
+                let mut proc = processes().get_mut_blocking(&pid).unwrap();
                 match proc.channel.post(&cmpl) {
                     Ok(()) => {}
                     Err(e) => {
@@ -85,7 +85,11 @@ impl Process {
             {
                 Ok(()) => {
                     // resume thread
-                    threads().get_mut(&tid).expect("thread ID valid").state = ThreadState::Running;
+                    threads()
+                        .get_mut(&tid)
+                        .await
+                        .expect("thread ID valid")
+                        .state = ThreadState::Running;
                 }
                 Err(e) => {
                     log::error!(
@@ -143,13 +147,15 @@ pub fn processes() -> &'static CHashMap<ProcessId, Process> {
 fn exit_process(pid: ProcessId) {
     log::trace!("process {pid} exited");
     let mut proc = processes()
-        .remove(&pid)
+        .remove_blocking(&pid)
         .expect("processes only exit once and can only exit if they have already started running");
 
     // delete and unschedule all threads
     for tid in proc.threads.into_iter() {
         scheduler().remove_thread(tid);
-        threads().remove(&tid).expect("process only has valid tids");
+        threads()
+            .remove_blocking(&tid)
+            .expect("process only has valid tids");
         // drop thread
     }
 
@@ -199,7 +205,7 @@ pub fn register_system_call_handlers() {
         scheduler().schedule_next_thread();
     });
     h.insert(SystemCallNumber::WaitForMessage as u16, |_id, _pid, tid, _regs| {
-        threads().get_mut(&tid)
+        threads().get_mut_blocking(&tid)
             .expect("valid thread ID is currently running")
             .state = ThreadState::Waiting;
         // TODO: where do we check for messages to resume execution?

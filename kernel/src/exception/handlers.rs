@@ -22,7 +22,7 @@ fn handle_system_call(
     regs: &mut Registers,
     id: u16,
 ) {
-    match system_call_handlers().get(&id) {
+    match system_call_handlers().get_blocking(&id) {
         Some(h) => (*h)(id, pid.unwrap_or(0), tid, regs),
         None => {
             log::warn!(
@@ -56,7 +56,7 @@ unsafe extern "C" fn handle_synchronous_exception(regs: *mut Registers, esr: usi
     let (pid, tid) = process::scheduler().pause_current_thread(regs);
 
     let previous_asid = pid
-        .and_then(|pid| process::processes().get_mut(&pid))
+        .and_then(|pid| process::processes().get_mut_blocking(&pid))
         .map(|mut proc| {
             proc.dispatch_new_commands(tid);
             proc.asid()
@@ -71,7 +71,7 @@ unsafe extern "C" fn handle_synchronous_exception(regs: *mut Registers, esr: usi
 
         // pause the thread so it won't get scheduled before we fix up its address space
         process::threads()
-            .get_mut(&tid)
+            .get_mut_blocking(&tid)
             .expect("valid thread id from scheduler")
             .state = process::thread::ThreadState::Waiting;
 
@@ -79,7 +79,7 @@ unsafe extern "C" fn handle_synchronous_exception(regs: *mut Registers, esr: usi
 
         crate::tasks::spawn(async move {
             let mut proc = process::processes()
-                .get_mut(&pid)
+                .get_mut_blocking(&pid)
                 .expect("valid process ID from scheduler");
             proc.on_page_fault(tid, VirtualAddress(far)).await;
         });
@@ -105,7 +105,7 @@ unsafe extern "C" fn handle_interrupt(regs: *mut Registers, _esr: usize, _far: u
     let (pid, tid) = process::scheduler().pause_current_thread(regs);
 
     let previous_asid = pid
-        .and_then(|pid| process::processes().get_mut(&pid))
+        .and_then(|pid| process::processes().get_mut_blocking(&pid))
         .map(|mut proc| {
             proc.dispatch_new_commands(tid);
             proc.asid()
@@ -113,7 +113,7 @@ unsafe extern "C" fn handle_interrupt(regs: *mut Registers, _esr: usize, _far: u
 
     while let Some(id) = ic.ack_interrupt() {
         log::trace!("handling interrupt {id} ELR={}", read_exception_link_reg());
-        match interrupt_handlers().get_mut(&id) {
+        match interrupt_handlers().get_mut_blocking(&id) {
             Some(mut h) => (*h)(id, regs),
             None => log::warn!("unhandled interrupt {id}"),
         }

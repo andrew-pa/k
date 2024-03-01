@@ -58,7 +58,7 @@ impl<K: Hash + Eq, V, S: BuildHasher + Clone> CHashMap<K, V, S> {
         let shard_index_shift = (usize::BITS - shard_count.trailing_zeros()) as usize;
 
         let shards = (0..shard_count)
-            .map(|_| RwLock::new(HashMap::with_hasher(hasher.clone())))
+            .map(|_| RwLock::new(HashMap::with_capacity_and_hasher(0, hasher.clone())))
             .collect();
 
         Self {
@@ -122,6 +122,52 @@ impl<K: Hash + Eq, V, S: BuildHasher + Clone> CHashMap<K, V, S> {
         shard.remove(k)
     }
 
+    /// Get an immutable (and possibly shared) reference to a value in the map by key.
+    pub fn get_blocking<Q>(&self, key: &Q) -> Option<Ref<K, V, S>>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        let hash = self.hash(&key);
+        let shard_index = self.shard_index_for_hash(hash);
+        let mut shard = unsafe { self.shards.get_unchecked(shard_index) }.read_blocking();
+        shard.maybe_map(|m| m.get(key))
+    }
+
+    /// Get an mutable (and exclusive) reference to a value in the map by key.
+    pub fn get_mut_blocking<Q>(&self, key: &Q) -> Option<RefMut<K, V, S>>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        let hash = self.hash(&key);
+        let shard_index = self.shard_index_for_hash(hash);
+        let mut shard = unsafe { self.shards.get_unchecked(shard_index) }.write_blocking();
+        shard.maybe_map(|m| m.get_mut(key))
+    }
+
+    /// Associates a key with a value in the map.
+    /// Returns the old value associated with the key if there was one.
+    pub fn insert_blocking(&self, k: K, v: V) -> Option<V> {
+        let hash = self.hash(&k);
+        let shard_index = self.shard_index_for_hash(hash);
+        let mut shard = unsafe { self.shards.get_unchecked(shard_index) }.write_blocking();
+        shard.insert(k, v)
+    }
+
+    /// Remove a value by its associated key from the map.
+    /// Returns the value associated with the key.
+    pub fn remove_blocking<Q>(&self, k: &Q) -> Option<V>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        let hash = self.hash(&k);
+        let shard_index = self.shard_index_for_hash(hash);
+        let mut shard = unsafe { self.shards.get_unchecked(shard_index) }.write_blocking();
+        shard.remove(k)
+    }
+
     /// Compute the index of the shard responsible for storing the key with this hash.
     fn shard_index_for_hash(&self, hash: usize) -> usize {
         // DashMap leaves the high 7 bits for the HashBrown SIMD tag.
@@ -182,37 +228,63 @@ mod tests {
     use super::*;
     use crate::tasks::block_on;
 
-    #[test]
+    #[test_case]
     fn insert_and_retrieve() {
         block_on(async {
-            let mut map = CHashMap::default();
+            let map: CHashMap<&str, &str, hashbrown::hash_map::DefaultHashBuilder> =
+                CHashMap::default();
             assert!(map.insert("test1", "test value 1").await.is_none());
             assert!(map.insert("BLUB", "test value 2").await.is_none());
             {
                 let t1 = map.get("test1").await;
-                assert!(t1.is_some_and(|t| t == "test value 1"));
+                assert!(t1.is_some_and(|t| *t == "test value 1"));
             }
             {
-                let blub = map.get("blub").await;
-                assert!(blub.is_some_and(|t| t == "test value 2"));
+                let blub = map.get("BLUB").await;
+                if let Some(b) = blub.as_ref() {
+                    log::debug!("blub is {}", **b);
+                } else {
+                    log::debug!("blub is none");
+                }
+                assert!(blub.is_some_and(|t| *t == "test value 2"));
+            }
+            {
+                assert!(map.get("not in the map").await.is_none());
             }
         });
     }
 
-    #[test]
+    #[test_case]
     fn insert_and_remove() {
+        log::trace!("test starts");
         block_on(async {
-            let mut map = CHashMap::default();
+            log::trace!("test task starts");
+            let map: CHashMap<&str, &str, hashbrown::hash_map::DefaultHashBuilder> =
+                CHashMap::default();
+            log::trace!("map allocated");
             assert!(map.insert("test1", "test value 1").await.is_none());
             assert!(map.insert("BLUB", "test value 2").await.is_none());
+            log::trace!("post insert");
             {
                 let t1 = map.remove("test1").await;
                 assert!(t1.is_some_and(|t| t == "test value 1"));
             }
+            log::trace!("after first remove");
             {
-                let blub = map.remove("blub").await;
+                let blub = map.remove("BLUB").await;
+                if let Some(b) = blub.as_ref() {
+                    log::debug!("blub is {}", *b);
+                } else {
+                    log::debug!("blub is none");
+                }
                 assert!(blub.is_some_and(|t| t == "test value 2"));
+                log::trace!("post assert 278");
             }
+            {
+                assert!(map.get("test1").await.is_none());
+                assert!(map.get("BLUB").await.is_none());
+            }
+            log::trace!("end");
         });
     }
 }
