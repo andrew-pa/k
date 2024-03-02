@@ -1,15 +1,13 @@
 //! Data structures for FAT filesystems
+use super::*;
 use core::ops::Deref;
 
 use alloc::string::String;
 use bitflags::bitflags;
 use bytemuck::{Pod, Zeroable};
 
-use smallvec::SmallVec;
 use snafu::Snafu;
 use widestring::Utf16Str;
-
-use super::*;
 
 /// A entry in the partition table found in the MBR.
 #[repr(C, packed)]

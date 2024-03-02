@@ -102,6 +102,7 @@ pub extern "C" fn kmain(dtb_addr: PhysicalAddress) -> ! {
     let opts = init::find_boot_options(dt);
 
     #[cfg(test)]
+    #[allow(unreachable_code)]
     {
         log::info!("boot succesful, running unit tests!");
         test_main();

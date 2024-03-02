@@ -1,13 +1,11 @@
-use alloc::sync::Arc;
+use super::{command::QueuePriority, *};
 use bitfield::BitRangeMut;
 use bytemuck::{bytes_of, Pod, Zeroable};
 
 use hashbrown::HashMap;
 use snafu::{ensure, Snafu};
-use spin::Mutex;
 
-use super::{command::QueuePriority, *};
-use crate::memory::{paging::PageTableEntryOptions, MemoryError, PhysicalAddress, PhysicalBuffer};
+use crate::memory::{paging::PageTableEntryOptions, MemoryError, PhysicalAddress};
 
 // TODO: detect if the NVMe device has SGL and use it instead. Alas, QEMU does not appear to
 // support it, so for now the PRP list will have to do.

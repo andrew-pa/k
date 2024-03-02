@@ -1,7 +1,7 @@
 use super::*;
-use crate::memory::{PhysicalAddress, PhysicalBuffer, PAGE_SIZE};
+use crate::memory::{PhysicalBuffer, PAGE_SIZE};
 use crate::tasks::locks::{Mutex, RwLock};
-use alloc::{boxed::Box, vec::Vec};
+use alloc::vec::Vec;
 
 use bitfield::{bitfield, BitRange};
 

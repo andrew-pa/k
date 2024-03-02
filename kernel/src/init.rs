@@ -1,10 +1,7 @@
 //! Initialization routines that are called during the boot process by `kmain` to setup the system.
-use alloc::boxed::Box;
-use hashbrown::HashMap;
-
-use crate::{dtb::DeviceTree, registry::Path};
-
 use super::*;
+use crate::{dtb::DeviceTree, registry::Path};
+use hashbrown::HashMap;
 
 /// Configure logging using [log] and the [uart::DebugUartLogger].
 pub fn logging(log_level: log::LevelFilter) {

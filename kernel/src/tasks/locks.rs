@@ -155,6 +155,20 @@ impl Semaphore {
         }
     }
 
+    /// Returns true if the semaphore value is non-zero and decrements it.
+    /// If it is already zero, `try_wait` returns false.
+    /// This function does not block.
+    pub fn try_wait(&self) -> bool {
+        let count = self.0.count.load(Ordering::Acquire);
+        if count == 0 {
+            return false;
+        }
+        self.0
+            .count
+            .compare_exchange(count, count - 1, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+    }
+
     /// Increments the semaphore value, allowing another waiting task to execute.
     pub fn signal(&self) {
         // Increments the value of semaphore variable by 1. After the increment, if the pre-increment value was negative (meaning there are tasks waiting for a resource), it transfers a blocked task from the semaphore's waiting queue to the ready queue.
@@ -212,6 +226,14 @@ impl<T: ?Sized> Mutex<T> {
             m: self,
             ig: Some(ig),
         }
+    }
+
+    /// Try to lock the mutex. If it is already taken, then None is returned.
+    pub fn try_lock(&self) -> Option<MutexGuard<T>> {
+        self.s.try_wait().then(|| MutexGuard {
+            m: self,
+            ig: Some(InterruptGuard::disable_interrupts_until_drop()),
+        })
     }
 }
 
@@ -337,6 +359,28 @@ impl<T: ?Sized> RwLock<T> {
             lock: self,
             ig: Some(ig),
         }
+    }
+
+    /// Try to lock for reading (shared but exclusive with writing). If the data is unavailable, None is returned.
+    pub fn try_read(&self) -> Option<RwLockReadGuard<T>> {
+        let mut count = self.reader_count.try_lock()?;
+        *count += 1;
+        if *count == 1 && !self.write_mutex.try_wait() {
+            return None;
+        }
+        Some(RwLockReadGuard {
+            lock: self,
+            // pass the interrupt guard along from the mutex to preserve it
+            ig: count.ig.take(),
+        })
+    }
+
+    /// Try to lock for writing (exclusive access). If the data is unavailable, None is returned.
+    pub fn try_write(&self) -> Option<RwLockWriteGuard<T>> {
+        self.write_mutex.try_wait().then(|| RwLockWriteGuard {
+            lock: self,
+            ig: Some(InterruptGuard::disable_interrupts_until_drop()),
+        })
     }
 }
 
