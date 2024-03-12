@@ -15,8 +15,6 @@ use alloc::sync::Arc;
 use crossbeam::queue::SegQueue;
 use futures::Future;
 
-use crate::exception::InterruptGuard;
-
 /// A combined waker type for both tasks and threads waiting for the semaphore.
 enum SemaphoreWaker {
     /// A typical task waker.
@@ -192,7 +190,6 @@ unsafe impl<T: ?Sized + Send> Sync for Mutex<T> {}
 /// A typical mutex guard type for [Mutex].
 pub struct MutexGuard<'a, T: ?Sized> {
     m: &'a Mutex<T>,
-    ig: Option<InterruptGuard>,
 }
 
 impl<T> Mutex<T> {
@@ -210,30 +207,21 @@ impl<T: ?Sized> Mutex<T> {
     /// it becomes available.
     pub async fn lock(&self) -> MutexGuard<T> {
         self.s.wait().await;
-        MutexGuard { m: self, ig: None }
+        MutexGuard { m: self }
     }
 
     /// Synchronously lock this mutex. If the mutex is already taken, then this will spin until
     /// it becomes available.
-    ///
-    /// This function disables interrupts until the guard is dropped to prevent deadlocks.
     pub fn lock_blocking(&self) -> MutexGuard<T> {
-        let ig = InterruptGuard::disable_interrupts_until_drop();
         unsafe {
             self.s.wait_blocking();
         }
-        MutexGuard {
-            m: self,
-            ig: Some(ig),
-        }
+        MutexGuard { m: self }
     }
 
     /// Try to lock the mutex. If it is already taken, then None is returned.
     pub fn try_lock(&self) -> Option<MutexGuard<T>> {
-        self.s.try_wait().then(|| MutexGuard {
-            m: self,
-            ig: Some(InterruptGuard::disable_interrupts_until_drop()),
-        })
+        self.s.try_wait().then(|| MutexGuard { m: self })
     }
 }
 
@@ -276,15 +264,11 @@ unsafe impl<T: ?Sized + Send> Sync for RwLock<T> {}
 /// A typical read guard for [RwLock].
 pub struct RwLockReadGuard<'a, T: ?Sized> {
     lock: &'a RwLock<T>,
-    #[allow(unused)] //holding this only for dropping
-    ig: Option<InterruptGuard>,
 }
 
 /// A typical write guard for [RwLock].
 pub struct RwLockWriteGuard<'a, T: ?Sized> {
     lock: &'a RwLock<T>,
-    #[allow(unused)] //holding this only for dropping
-    ig: Option<InterruptGuard>,
 }
 
 impl<T> RwLock<T> {
@@ -308,19 +292,13 @@ impl<T: ?Sized> RwLock<T> {
             // readers from continuing if a task has the write mutex.
             self.write_mutex.wait().await;
         }
-        RwLockReadGuard {
-            lock: self,
-            ig: None,
-        }
+        RwLockReadGuard { lock: self }
     }
 
     /// Lock for writing (exclusive access). If the data is unavailable, yields until the data becomes available.
     pub async fn write(&self) -> RwLockWriteGuard<T> {
         self.write_mutex.wait().await;
-        RwLockWriteGuard {
-            lock: self,
-            ig: None,
-        }
+        RwLockWriteGuard { lock: self }
     }
 
     /// Lock for reading (shared but exclusive with writing). If the data is unavailable, this spins until it becomes available.
@@ -338,11 +316,7 @@ impl<T: ?Sized> RwLock<T> {
                 self.write_mutex.wait_blocking();
             }
         }
-        RwLockReadGuard {
-            lock: self,
-            // pass the interrupt guard along from the mutex to preserve it
-            ig: count.ig.take(),
-        }
+        RwLockReadGuard { lock: self }
     }
 
     /// Lock for writing (exclusive access). If the data is unavailable, this spins until the data becomes available.
@@ -350,15 +324,10 @@ impl<T: ?Sized> RwLock<T> {
     /// This function is blocking, thus it must be used cautiously if interrupts are expected
     /// within the critical section, or else deadlocks will occur.
     pub fn write_blocking(&self) -> RwLockWriteGuard<T> {
-        let ig = InterruptGuard::disable_interrupts_until_drop();
         unsafe {
-            // SAFETY: this is safe because we just disabled interrupts with `ig`.
             self.write_mutex.wait_blocking();
         }
-        RwLockWriteGuard {
-            lock: self,
-            ig: Some(ig),
-        }
+        RwLockWriteGuard { lock: self }
     }
 
     /// Try to lock for reading (shared but exclusive with writing). If the data is unavailable, None is returned.
@@ -368,19 +337,14 @@ impl<T: ?Sized> RwLock<T> {
         if *count == 1 && !self.write_mutex.try_wait() {
             return None;
         }
-        Some(RwLockReadGuard {
-            lock: self,
-            // pass the interrupt guard along from the mutex to preserve it
-            ig: count.ig.take(),
-        })
+        Some(RwLockReadGuard { lock: self })
     }
 
     /// Try to lock for writing (exclusive access). If the data is unavailable, None is returned.
     pub fn try_write(&self) -> Option<RwLockWriteGuard<T>> {
-        self.write_mutex.try_wait().then(|| RwLockWriteGuard {
-            lock: self,
-            ig: Some(InterruptGuard::disable_interrupts_until_drop()),
-        })
+        self.write_mutex
+            .try_wait()
+            .then(|| RwLockWriteGuard { lock: self })
     }
 }
 
