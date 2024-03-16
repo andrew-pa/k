@@ -1,6 +1,7 @@
 //! Initialization routines that are called during the boot process by `kmain` to setup the system.
 use super::*;
 use crate::{dtb::DeviceTree, registry::Path};
+use alloc::sync::Arc;
 use hashbrown::HashMap;
 
 /// Configure logging using [log] and the [uart::DebugUartLogger].
@@ -141,20 +142,10 @@ pub async fn finish_boot(opts: BootOptions<'_>) {
     log::info!("mount FAT filesystem");
     fs::fat::mount(Path::new("/fat"), bs).await.unwrap();
 
-    let test_file = registry::registry()
-        .open_file(Path::new("/fat/abcdefghij/test.txt"))
-        .await
-        .expect("open file");
-
     log::info!("spawning init process");
-    let init_pid = process::spawn_process(
-        opts.init_process_path,
-        Some(|proc: &mut process::Process| {
-            proc.attach_file(test_file).unwrap();
-        }),
-    )
-    .await
-    .expect("spawn init process");
+    let init_proc = process::spawn_process(opts.init_process_path, None::<fn(_)>)
+        .await
+        .expect("spawn init process");
 
-    log::info!("init pid = {init_pid}");
+    log::info!("init pid = {}", init_proc.id);
 }

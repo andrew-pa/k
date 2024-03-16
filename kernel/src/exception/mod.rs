@@ -9,13 +9,13 @@
 //! time, accessable by calling [interrupt_controller].
 use core::{arch::global_asm, cell::OnceCell, fmt::Display};
 
-use alloc::boxed::Box;
+use alloc::{boxed::Box, sync::Arc};
 use bitfield::bitfield;
 use spin::{Mutex, MutexGuard};
 
 use crate::{
     memory::{PhysicalAddress, VirtualAddress},
-    process::{self, thread::reg::read_exception_link_reg, ProcessId},
+    process::{self, thread::reg::read_exception_link_reg, Process, ProcessId, Thread},
     CHashMap,
 };
 
@@ -124,9 +124,9 @@ pub type InterruptHandler = Box<dyn FnMut(InterruptId, &mut Registers)>;
 /// A callback that can be registered to handle a system call.
 ///
 /// The function is given the number of the system call it is handling,
-/// the process and thread ID that invoked the system call,
+/// the process and thread that invoked the system call,
 /// and a mutable reference to the current [Registers] of the running thread.
-pub type SyscallHandler = fn(u16, process::ProcessId, process::ThreadId, &mut Registers);
+pub type SyscallHandler = fn(u16, Arc<Process>, Arc<Thread>, &mut Registers);
 
 static mut IC: OnceCell<Mutex<Box<dyn InterruptController>>> = OnceCell::new();
 static mut INTERRUPT_HANDLERS: OnceCell<CHashMap<InterruptId, InterruptHandler>> = OnceCell::new();

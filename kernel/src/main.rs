@@ -44,6 +44,8 @@ pub mod init;
 
 pub mod intrinsics;
 
+// TODO: new module for all data structures
+pub mod lists;
 pub mod maps;
 pub use maps::CHashMap;
 

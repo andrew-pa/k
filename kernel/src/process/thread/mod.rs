@@ -1,13 +1,19 @@
 pub mod reg;
+use core::sync::atomic::{AtomicU8, Ordering};
+
+use alloc::sync::Arc;
 use reg::*;
+use spin::Mutex;
 pub mod scheduler;
 
 use super::*;
+use bytemuck::Contiguous;
 
 /// The system-wide unique ID of a thread.
 pub type ThreadId = u32;
 
 /// The priority of a thread in the scheduler.
+#[repr(u8)]
 #[derive(Copy, Clone, Debug)]
 pub enum ThreadPriority {
     High = 0,
@@ -15,13 +21,35 @@ pub enum ThreadPriority {
     Low = 2,
 }
 
+unsafe impl Contiguous for ThreadPriority {
+    type Int = u8;
+
+    const MIN_VALUE: u8 = 0;
+    const MAX_VALUE: u8 = 2;
+}
+
 /// The state of a thread for scheduling purposes.
+#[repr(u8)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum ThreadState {
     /// The thread can become current/is currently executing.
-    Running,
+    Running = 1,
     /// The thread is waiting for something to finish and cannot become current.
-    Waiting,
+    Waiting = 2,
+}
+
+unsafe impl Contiguous for ThreadState {
+    type Int = u8;
+
+    const MIN_VALUE: Self::Int = 1;
+    const MAX_VALUE: Self::Int = 2;
+}
+
+struct ExecutionState {
+    register_state: Registers,
+    program_status: SavedProgramStatus,
+    pc: VirtualAddress,
+    sp: VirtualAddress,
 }
 
 /// A thread is a single unit of user-space code execution, happening in the context of some
@@ -29,13 +57,12 @@ pub enum ThreadState {
 pub struct Thread {
     pub id: ThreadId,
     /// None => kernel thread
-    pub parent: Option<ProcessId>,
-    pub state: ThreadState,
-    pub priority: ThreadPriority,
-    register_state: Registers,
-    program_status: SavedProgramStatus,
-    pc: VirtualAddress,
-    sp: VirtualAddress,
+    pub parent: Option<Arc<Process>>,
+    /// An atomic [ThreadState].
+    state: AtomicU8,
+    /// An atomic [ThreadPriority].
+    priority: AtomicU8,
+    exec_state: Mutex<ExecutionState>,
 }
 
 /// The idle thread is dedicated to handling interrupts, i.e. it is the thread holding the EL1 stack.
@@ -43,39 +70,42 @@ pub const IDLE_THREAD: ThreadId = 0;
 /// The task thread runs the async task executor on its own stack at SP_EL0.
 pub const TASK_THREAD: ThreadId = 1;
 
-static mut THREADS: OnceCell<CHashMap<ThreadId, Thread>> = OnceCell::new();
+static mut THREADS: OnceCell<ConcurrentLinkedList<Arc<Thread>>> = OnceCell::new();
 
 /// The global tables of threads by ID.
-pub fn threads() -> &'static CHashMap<ThreadId, Thread> {
+pub fn threads() -> &'static ConcurrentLinkedList<Arc<Thread>> {
     unsafe {
         THREADS.get_or_init(|| {
-            let ths: CHashMap<ThreadId, Thread> = Default::default();
+            let ths: ConcurrentLinkedList<Arc<Thread>> = Default::default();
             // Create the idle thread, which will just wait for interrupts
             let mut program_status = SavedProgramStatus::initial_for_el1();
             program_status.set_sp(true); // the idle thread runs on the EL1 stack normally used by interrupts and kmain
-            ths.insert_blocking(
-                IDLE_THREAD,
-                Thread {
-                    id: IDLE_THREAD,
-                    parent: None,
-                    state: ThreadState::Running,
+            ths.push(Arc::new(Thread {
+                id: IDLE_THREAD,
+                parent: None,
+                state: ThreadState::Running.into_integer().into(),
+                priority: ThreadPriority::Low.into_integer().into(),
+                exec_state: Mutex::new(ExecutionState {
                     register_state: Registers::default(),
                     program_status,
                     pc: VirtualAddress(0),
                     sp: VirtualAddress(0),
-                    priority: ThreadPriority::Low,
-                },
-            );
+                }),
+            }));
             ths
         })
     }
+}
+
+/// Retrieve a thread by its id.
+pub fn thread_for_id(tid: ThreadId) -> Option<Arc<Thread>> {
+    threads().find(|t| t.id == tid)
 }
 
 static mut NEXT_TID: AtomicU32 = AtomicU32::new(TASK_THREAD + 1);
 
 /// Get the next free thread ID.
 pub fn next_thread_id() -> ThreadId {
-    use core::sync::atomic::Ordering;
     unsafe { NEXT_TID.fetch_add(1, Ordering::AcqRel) }
 }
 
@@ -83,13 +113,14 @@ pub fn next_thread_id() -> ThreadId {
 ///
 /// This inserts the thread in the global table and also adds it to the scheduler.
 pub fn spawn_thread(thread: Thread) {
-    let id = thread.id;
     // TODO: async version?
-    threads().insert_blocking(id, thread);
-    scheduler::scheduler().add_thread(id);
+    // TODO: check to make sure the thread ID is actually unique
+    let t = Arc::new(thread);
+    threads().push(t.clone());
+    scheduler::scheduler().add_thread(t);
 }
 
-impl Thread {
+impl ExecutionState {
     /// Save the current thread state into this thread, assuming an exception is being handled.
     pub fn save(&mut self, regs: &Registers) {
         self.register_state = *regs;
@@ -111,7 +142,9 @@ impl Thread {
         write_saved_program_status(&self.program_status);
         *regs = self.register_state;
     }
+}
 
+impl Thread {
     /// Create a new kernel space thread from a entry point function and stack buffer.
     ///
     /// # Safety
@@ -123,18 +156,20 @@ impl Thread {
         Thread {
             id,
             parent: None,
-            state: ThreadState::Running,
-            register_state: Registers::default(),
-            program_status: SavedProgramStatus::initial_for_el1(),
-            pc: (start as *const ()).into(),
-            sp: stack.virtual_address().add(stack.len() - 16),
-            priority: ThreadPriority::Normal,
+            state: ThreadState::Running.into_integer().into(),
+            priority: ThreadPriority::Normal.into_integer().into(),
+            exec_state: Mutex::new(ExecutionState {
+                register_state: Registers::default(),
+                program_status: SavedProgramStatus::initial_for_el1(),
+                pc: (start as *const ()).into(),
+                sp: stack.virtual_address().add(stack.len() - 16),
+            }),
         }
     }
 
     /// Create a new user space thread running in EL0.
     pub fn user_thread(
-        pid: ProcessId,
+        proc: Arc<Process>,
         tid: ThreadId,
         entry_point: VirtualAddress,
         initial_stack_pointer: VirtualAddress,
@@ -143,13 +178,38 @@ impl Thread {
     ) -> Self {
         Thread {
             id: tid,
-            parent: Some(pid),
-            state: ThreadState::Running,
-            register_state: start_registers,
-            program_status: SavedProgramStatus::initial_for_el0(),
-            pc: entry_point,
-            sp: initial_stack_pointer,
-            priority,
+            parent: Some(proc),
+            state: ThreadState::Running.into_integer().into(),
+            priority: priority.into_integer().into(),
+            exec_state: Mutex::new(ExecutionState {
+                register_state: start_registers,
+                program_status: SavedProgramStatus::initial_for_el0(),
+                pc: entry_point,
+                sp: initial_stack_pointer,
+            }),
         }
+    }
+
+    /// Get the state of this thread, atomically.
+    pub fn state(&self) -> ThreadState {
+        ThreadState::from_integer(self.state.load(Ordering::Acquire))
+            .expect("thread state is valid")
+    }
+
+    /// Atomically set the state of this thread.
+    pub fn set_state(&self, new: ThreadState) {
+        self.state.store(new.into_integer(), Ordering::Release)
+    }
+
+    /// Get the priority of this thread, atomically.
+    pub fn priority(&self) -> ThreadPriority {
+        ThreadPriority::from_integer(self.priority.load(Ordering::Acquire))
+            .expect("thread state is valid")
+    }
+
+    /// Atomically set the priority of this thread.
+    /// This only updates the field, and does not inform the scheduler.
+    fn set_priority(&self, new: ThreadPriority) {
+        self.priority.store(new.into_integer(), Ordering::Release)
     }
 }

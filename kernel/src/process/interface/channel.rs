@@ -72,9 +72,9 @@ impl<T> Queue<T> {
 
     /// Move the head forward one slot.
     #[inline]
-    fn move_head(&mut self) {
+    fn move_head(&self) {
         unsafe {
-            let head = self.head_ptr.as_mut();
+            let head = self.head_ptr.as_ref();
             if head.fetch_add(1, core::sync::atomic::Ordering::AcqRel) == self.queue_len - 1 {
                 head.store(0, core::sync::atomic::Ordering::Release);
             }
@@ -95,9 +95,9 @@ impl<T> Queue<T> {
 
     /// Move the tail forward one slot.
     #[inline]
-    fn move_tail(&mut self) {
+    fn move_tail(&self) {
         unsafe {
-            let tail = self.tail_ptr.as_mut();
+            let tail = self.tail_ptr.as_ref();
             if tail.fetch_add(1, core::sync::atomic::Ordering::AcqRel) == self.queue_len - 1 {
                 tail.store(0, core::sync::atomic::Ordering::Release);
             }
@@ -105,7 +105,7 @@ impl<T> Queue<T> {
     }
 
     /// Returns the first outstanding message in the queue if present.
-    pub fn poll(&mut self) -> Option<T> {
+    pub fn poll(&self) -> Option<T> {
         let head = self.head();
         (head != self.tail()).then(|| unsafe {
             log::trace!("head = {head}, tail = {}", self.tail());
@@ -116,7 +116,7 @@ impl<T> Queue<T> {
     }
 
     /// Post a message in the queue.
-    pub fn post(&mut self, msg: &T) -> Result<(), QueueError> {
+    pub fn post(&self, msg: &T) -> Result<(), QueueError> {
         let tail = self.tail();
         (self.head() != (tail + 1) % self.queue_len)
             .then(|| {
@@ -160,12 +160,12 @@ impl Channel {
     }
 
     /// Returns the first outstanding command message in the channel if present.
-    pub fn poll(&mut self) -> Option<Command> {
+    pub fn poll(&self) -> Option<Command> {
         self.submission.poll()
     }
 
     /// Post a completion message in the channel.
-    pub fn post(&mut self, msg: &Completion) -> Result<(), QueueError> {
+    pub fn post(&self, msg: &Completion) -> Result<(), QueueError> {
         self.completion.post(msg)
     }
 }

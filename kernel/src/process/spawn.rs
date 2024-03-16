@@ -130,8 +130,8 @@ pub fn attach_channel(
 /// Supports ELF binaries.
 pub async fn spawn_process(
     binary_path: impl AsRef<crate::registry::Path>,
-    before_launch: Option<impl FnOnce(&mut Process)>,
-) -> Result<ProcessId, SpawnError> {
+    before_launch: Option<impl FnOnce(Arc<Process>)>,
+) -> Result<Arc<Process>, SpawnError> {
     use crate::registry::registry;
 
     // load & parse binary
@@ -164,12 +164,12 @@ pub async fn spawn_process(
     // allocate a process ID
     let pid = unsafe {
         use core::sync::atomic::Ordering;
-        NEXT_PID.fetch_add(1, Ordering::AcqRel)
+        NonZeroU32::new_unchecked(NEXT_PID.fetch_add(1, Ordering::AcqRel))
     };
 
     // create page tables for the new process
     // TODO: ASID calculation is probably not ideal.
-    let mut pt = PageTable::empty(false, pid as u16).context(MemorySnafu {
+    let mut pt = PageTable::empty(false, pid.get() as u16).context(MemorySnafu {
         reason: "create process page tables",
     })?;
 
@@ -230,39 +230,39 @@ pub async fn spawn_process(
 
     log::debug!("process page table: {pt:?}");
 
-    let tid = next_thread_id();
-
     // create process structure
-    let mut proc = Process {
+    let proc = Arc::new(Process {
         id: pid,
         page_tables: pt,
-        threads: smallvec![tid],
-        mapped_files: HashMap::new(),
+        threads: Default::default(),
         channel,
         address_space_allocator,
-    };
+    });
+    processes().push(proc.clone());
 
-    // run any custom code before the process is eligible to be scheduled but after it has been created.
-    // this allows the caller to attach resources that requires .awaiting etc.
-    if let Some(b) = before_launch {
-        b(&mut proc);
-    }
-
-    let p = processes().insert_blocking(pid, proc);
-    assert!(p.is_none());
-
+    // create main thread
+    let tid = next_thread_id();
     let start_regs =
         Registers::from_args(&[channel_base_addr.0, channel_sub_size, channel_com_size]);
-
-    // create thread 0 for process
-    spawn_thread(Thread::user_thread(
-        pid,
+    let main_thread = Arc::new(Thread::user_thread(
+        proc.clone(),
         tid,
         VirtualAddress(bin.ehdr.e_entry as usize),
         stack_vaddr.add((stack_page_count * PAGE_SIZE) - 64),
         ThreadPriority::Normal,
         start_regs,
     ));
+    proc.threads.lock_blocking().push(main_thread.clone());
+    threads().push(main_thread.clone());
 
-    Ok(pid)
+    // run any custom code before the process is eligible to be scheduled but after it has been created.
+    // this allows the caller to attach resources that requires .awaiting etc.
+    if let Some(b) = before_launch {
+        b(proc.clone());
+    }
+
+    // schedule thread 0 for process
+    thread::scheduler::scheduler().add_thread(main_thread);
+
+    Ok(proc)
 }

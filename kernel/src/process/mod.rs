@@ -2,19 +2,19 @@
 //! Contains the thread scheduler and system message dispatch infrastructure.
 use crate::{
     exception::Registers,
+    lists::ConcurrentLinkedList,
     memory::{
         paging::{PageTable, PageTableEntryOptions},
-        physical_memory_allocator, MemoryError, PhysicalBuffer, VirtualAddress,
-        VirtualAddressAllocator, PAGE_SIZE,
+        physical_memory_allocator, PhysicalBuffer, VirtualAddress, VirtualAddressAllocator,
+        PAGE_SIZE,
     },
-    CHashMap,
+    tasks::locks::Mutex,
 };
-use alloc::boxed::Box;
+use alloc::sync::Arc;
 
 use bitfield::{bitfield, Bit};
-use core::{cell::OnceCell, sync::atomic::AtomicU32};
-use hashbrown::HashMap;
-use smallvec::{smallvec, SmallVec};
+use core::{cell::OnceCell, num::NonZeroU32, sync::atomic::AtomicU32};
+use smallvec::SmallVec;
 use snafu::{OptionExt, ResultExt, Snafu};
 
 pub mod thread;
@@ -25,12 +25,11 @@ pub mod interface;
 mod spawn;
 pub use spawn::{spawn_process, SpawnError};
 
-use interface::{channel::Channel, resource::MappedFile};
+use interface::channel::Channel;
 use thread::*;
 
 /// The unique ID of a process.
-// TODO: make type NonZeroU32 instead
-pub type ProcessId = u32;
+pub type ProcessId = NonZeroU32;
 
 /// A user-space process.
 ///
@@ -38,10 +37,9 @@ pub type ProcessId = u32;
 pub struct Process {
     /// The ID of this process.
     pub id: ProcessId,
-    /// The IDs of the threads running in this process.
-    pub threads: SmallVec<[ThreadId; 4]>,
+    /// The threads running in this process.
+    threads: Mutex<SmallVec<[Arc<Thread>; 2]>>,
     page_tables: PageTable,
-    mapped_files: HashMap<VirtualAddress, MappedFile>,
     channel: Channel,
     address_space_allocator: VirtualAddressAllocator,
 }
@@ -53,17 +51,20 @@ impl Process {
     }
 
     /// Process any new commands that have been recieved on this process's message channel.
-    pub fn dispatch_new_commands(&mut self, tid: ThreadId) {
+    pub fn dispatch_new_commands(self: &Arc<Process>) {
+        // downgrade the Arc so that pending tasks don't keep the process alive unnecessarily
+        let this = &Arc::downgrade(self);
         while let Some(cmd) = self.channel.poll() {
             log::trace!("recieved command: {cmd:?}");
-            let pid = self.id;
+            let this = this.clone();
             crate::tasks::spawn(async move {
-                let cmpl = interface::dispatch(pid, tid, cmd).await;
-                let mut proc = processes().get_mut_blocking(&pid).unwrap();
-                match proc.channel.post(&cmpl) {
-                    Ok(()) => {}
-                    Err(_) => {
-                        todo!("kill process on queue overflow")
+                if let Some(proc) = this.upgrade() {
+                    let cmpl = interface::dispatch(&proc, cmd).await;
+                    match proc.channel.post(&cmpl) {
+                        Ok(()) => {}
+                        Err(_) => {
+                            todo!("kill process on queue overflow")
+                        }
                     }
                 }
             });
@@ -71,117 +72,56 @@ impl Process {
     }
 
     /// Handle a page fault caused by a thread in this process.
-    pub async fn on_page_fault(&mut self, tid: ThreadId, address: VirtualAddress) {
+    pub async fn on_page_fault(&self, thread: Arc<Thread>, address: VirtualAddress) {
         log::trace!("on_page_fault {address}");
-        if let Some((base_address, res)) = self
-            .mapped_files
-            .iter_mut()
-            .find(|(ba, r)| interface::resource::resource_maps(ba, r, address))
-        {
-            match res
-                .on_page_fault(*base_address, address, &mut self.page_tables)
-                .await
-            {
-                Ok(()) => {
-                    // resume thread
-                    threads()
-                        .get_mut(&tid)
-                        .await
-                        .expect("thread ID valid")
-                        .state = ThreadState::Running;
-                }
-                Err(e) => {
-                    log::error!(
-                        "page fault handler failed for process {} at address {address}: {e}",
-                        self.id
-                    );
-                    // TODO: how do we inform the process it has an error?
-                }
-            }
-        } else {
-            log::error!(
-                "process {}, thread {}: unhandled page fault at {address}",
-                self.id,
-                tid
-            );
-            // TODO: the thread needs to go into some kind of dead/error state and/or the process
-            // needs to be notified that one of its threads just died. If this is the last thread
-            // in the process than the process itself is now dead
-        }
-    }
 
-    /// Make a file available to the process via mapped memory.
-    /// Physical memory will only be allocated when the process accesses the region for the first time.
-    /// Returns the base address and length in bytes of the mapped region.
-    pub fn attach_file(
-        &mut self,
-        resource: Box<dyn crate::fs::File>,
-    ) -> Result<(VirtualAddress, usize), MemoryError> {
-        let length_in_bytes = resource.len() as usize;
-        let num_pages = length_in_bytes.div_ceil(PAGE_SIZE);
-        let base_addr = self.address_space_allocator.alloc(num_pages)?;
-        self.mapped_files.insert(
-            base_addr,
-            MappedFile {
-                length_in_bytes,
-                resource,
-            },
+        log::error!(
+            "process {}, thread {}: unhandled page fault at {address}",
+            self.id,
+            thread.id
         );
-        Ok((base_addr, length_in_bytes))
+        // TODO: the thread needs to go into some kind of dead/error state and/or the process
+        // needs to be notified that one of its threads just died. If this is the last thread
+        // in the process than the process itself is now dead
     }
 }
 
-// TODO: what we really want here is a concurrent SlotMap
-static mut PROCESSES: OnceCell<CHashMap<ProcessId, Process>> = OnceCell::new();
+static mut PROCESSES: OnceCell<ConcurrentLinkedList<Arc<Process>>> = OnceCell::new();
 
 static mut NEXT_PID: AtomicU32 = AtomicU32::new(1);
 
 /// The global table of processes by ID.
-pub fn processes() -> &'static CHashMap<ProcessId, Process> {
+pub fn processes() -> &'static ConcurrentLinkedList<Arc<Process>> {
     unsafe { PROCESSES.get_or_init(Default::default) }
 }
 
-/// Cause a process to exit by ID.
+pub fn process_for_id(id: ProcessId) -> Option<Arc<Process>> {
+    processes().find(|p| p.id == id)
+}
+
+/// Cause a process to exit by ID, freeing its resources.
 // TODO: this should be somewhere else, perhaps with `spawn`.
-fn exit_process(pid: ProcessId) {
-    log::trace!("process {pid} exited");
-    let mut proc = processes()
-        .remove_blocking(&pid)
+fn exit_process(proc: Arc<Process>) {
+    log::trace!("process {} exited", proc.id);
+
+    processes()
+        .remove(|p| p.id == proc.id)
         .expect("processes only exit once and can only exit if they have already started running");
 
     // delete and unschedule all threads
-    for tid in proc.threads.into_iter() {
-        scheduler().remove_thread(tid);
+    // removing the current thread will automatically schedule a new thread to run
+    for thread in proc.threads.lock_blocking().drain(..) {
+        scheduler().remove_thread(&thread);
         threads()
-            .remove_blocking(&tid)
-            .expect("process only has valid tids");
+            .remove(|t| t.id == thread.id)
+            .expect("process only has valid threads");
         // drop thread
     }
 
     // deal with async resources, and then drop the process (by moving it into the task)
     crate::tasks::spawn(async move {
-        // free physical memory mapped in process page table, flushing resources as we go
+        // free physical memory mapped in process page table
         for mapped_region in proc.page_tables.iter() {
-            if let Some((map_base_addr, res)) = proc.mapped_files.iter_mut().find(|(ba, r)| {
-                interface::resource::resource_maps(ba, r, mapped_region.base_virt_addr)
-            }) {
-                // TODO: we need to check if the page is dirty
-                match res
-                    .resource
-                    .flush_pages(
-                        (mapped_region.base_virt_addr.0 - map_base_addr.0) as u64,
-                        mapped_region.base_phys_addr,
-                        mapped_region.page_count,
-                    )
-                    .await
-                {
-                    Ok(()) => {}
-                    Err(e) => {
-                        log::error!("failed to flush mapped resource @ {map_base_addr}/{} in exiting process {pid}: {e}", mapped_region.base_virt_addr);
-                    }
-                }
-            }
-
             physical_memory_allocator()
                 .free_pages(mapped_region.base_phys_addr, mapped_region.page_count);
         }
@@ -189,24 +129,26 @@ fn exit_process(pid: ProcessId) {
         // drop process, releasing its resources
         // TODO: make sure we don't double free the channel
     });
-
-    // removing this processes' threads will schedule a new thread from a different process to run next
 }
 
 /// Register system calls related to processes and thread scheduling.
 pub fn register_system_call_handlers() {
     use kapi::system_calls::SystemCallNumber;
     let h = crate::exception::system_call_handlers();
-    h.insert_blocking(SystemCallNumber::Exit as u16, |_id, pid, _tid, _regs| {
-        exit_process(pid);
-    });
-    h.insert_blocking(SystemCallNumber::Yield as u16, |_id, _pid, _tid, _regs| {
-        scheduler().schedule_next_thread();
-    });
-    h.insert_blocking(SystemCallNumber::WaitForMessage as u16, |_id, _pid, tid, _regs| {
-        threads().get_mut_blocking(&tid)
-            .expect("valid thread ID is currently running")
-            .state = ThreadState::Waiting;
+    h.insert_blocking(
+        SystemCallNumber::Exit as u16,
+        |_id, proc, _thread, _regs| {
+            exit_process(proc);
+        },
+    );
+    h.insert_blocking(
+        SystemCallNumber::Yield as u16,
+        |_id, _proc, _thread, _regs| {
+            scheduler().schedule_next_thread();
+        },
+    );
+    h.insert_blocking(SystemCallNumber::WaitForMessage as u16, |_id, _proc, thread, _regs| {
+        thread.set_state(ThreadState::Waiting);
         // TODO: where do we check for messages to resume execution?
         todo!("which thread will resume when the process recieves a message which could equally be for any thread?");
         // TODO: perhaps each thread should have its own channel, or we should otherwise do something about that?

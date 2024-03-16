@@ -1,4 +1,5 @@
 //! The actual raw exception handler entry points.
+
 use super::*;
 
 // assembly definition of the exception vector table and the low level code that installs the table
@@ -16,18 +17,14 @@ extern "C" {
     pub fn install_exception_vector_table();
 }
 
-fn handle_system_call(
-    pid: Option<ProcessId>,
-    tid: process::ThreadId,
-    regs: &mut Registers,
-    id: u16,
-) {
+fn handle_system_call(proc: Arc<Process>, thread: Arc<Thread>, regs: &mut Registers, id: u16) {
     match system_call_handlers().get_blocking(&id) {
-        Some(h) => (*h)(id, pid.unwrap_or(0), tid, regs),
+        Some(h) => (*h)(id, proc, thread, regs),
         None => {
             log::warn!(
-                "unknown system call: pid={:?}, id = 0x{:x}, registers = {:?}",
-                pid,
+                "unknown system call: pid={:?}, tid={}, id = 0x{:x}, registers = {:?}",
+                proc.id,
+                thread.id,
                 id,
                 regs
             )
@@ -53,35 +50,39 @@ unsafe extern "C" fn handle_synchronous_exception(regs: *mut Registers, esr: usi
         .as_mut()
         .expect("registers ptr should always be non-null");
 
-    let (pid, tid) = process::scheduler().pause_current_thread(regs);
+    let current_thread = process::scheduler().pause_current_thread(regs);
 
-    let previous_asid = pid
-        .and_then(|pid| process::processes().get_mut_blocking(&pid))
-        .map(|mut proc| {
-            proc.dispatch_new_commands(tid);
-            proc.asid()
-        });
+    let parent = current_thread.parent.clone();
+    let previous_asid = parent.as_ref().map(|p| p.asid());
+
+    if let Some(p) = parent.as_ref() {
+        p.dispatch_new_commands();
+    }
 
     if ec.is_system_call() {
         // system call
-        handle_system_call(pid, tid, regs, esr.iss() as u16);
+        handle_system_call(
+            parent.expect("only user space threads make system calls"),
+            current_thread.clone(),
+            regs,
+            esr.iss() as u16,
+        );
     } else if ec.is_user_space_page_fault() {
         // page fault in user space
-        let pid = pid.expect("this exception is only for page faults in a lower exception level and since the kernel runs at EL1, that means that we can only get here from a fault in EL0, therefore there must be a current process running (or something is very wrong)");
+        let proc = parent.expect("this exception is only for page faults in a lower exception level and since the kernel runs at EL1, that means that we can only get here from a fault in EL0, therefore there must be a current process running (or something is very wrong)");
 
         // pause the thread so it won't get scheduled before we fix up its address space
-        process::threads()
-            .get_mut_blocking(&tid)
-            .expect("valid thread id from scheduler")
-            .state = process::thread::ThreadState::Waiting;
+        current_thread.set_state(process::thread::ThreadState::Waiting);
 
-        log::trace!("user space page fault at {far:x}, pid={pid}, tid={tid}");
+        log::trace!(
+            "user space page fault at {far:x}, pid={}, tid={}",
+            proc.id,
+            current_thread.id
+        );
 
         crate::tasks::spawn(async move {
-            let mut proc = process::processes()
-                .get_mut_blocking(&pid)
-                .expect("valid process ID from scheduler");
-            proc.on_page_fault(tid, VirtualAddress(far)).await;
+            proc.on_page_fault(current_thread, VirtualAddress(far))
+                .await;
         });
 
         // schedule the task executor next to reduce latency between processing the page fault and
@@ -102,14 +103,8 @@ unsafe extern "C" fn handle_interrupt(regs: *mut Registers, _esr: usize, _far: u
         .as_mut()
         .expect("registers ptr should always be non-null");
 
-    let (pid, tid) = process::scheduler().pause_current_thread(regs);
-
-    let previous_asid = pid
-        .and_then(|pid| process::processes().get_mut_blocking(&pid))
-        .map(|mut proc| {
-            proc.dispatch_new_commands(tid);
-            proc.asid()
-        });
+    let current_thread = process::scheduler().pause_current_thread(regs);
+    let parent = current_thread.parent.as_ref();
 
     while let Some(id) = ic.ack_interrupt() {
         log::trace!("handling interrupt {id} ELR={}", read_exception_link_reg());
@@ -121,9 +116,11 @@ unsafe extern "C" fn handle_interrupt(regs: *mut Registers, _esr: usize, _far: u
         ic.finish_interrupt(id);
     }
 
-    // TODO: if we get another interrupt here, it might cause problems
+    if let Some(p) = parent.as_ref() {
+        p.dispatch_new_commands();
+    }
 
-    process::scheduler().resume_current_thread(regs, previous_asid);
+    process::scheduler().resume_current_thread(regs, parent.map(|p| p.asid()));
 }
 
 #[no_mangle]
