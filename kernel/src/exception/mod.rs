@@ -14,9 +14,9 @@ use bitfield::bitfield;
 use spin::{Mutex, MutexGuard};
 
 use crate::{
+    ds::maps::CHashMap,
     memory::{PhysicalAddress, VirtualAddress},
     process::{self, thread::reg::read_exception_link_reg, Process, Thread},
-    CHashMap,
 };
 
 /// An interrupt identifier.
@@ -134,7 +134,7 @@ static mut SYSTEM_CALL_HANDLERS: OnceCell<CHashMap<u16, SyscallHandler>> = OnceC
 
 /// Initialize the interrupt controller using information in the device tree.
 /// The type of the interrupt controller is automatically detected.
-pub fn init_interrupts(device_tree: &crate::dtb::DeviceTree) {
+pub fn init_interrupts(device_tree: &crate::ds::dtb::DeviceTree) {
     // for now this is our only implementation
     let gic = gic::GenericInterruptController::in_device_tree(device_tree).expect("find/init GIC");
 

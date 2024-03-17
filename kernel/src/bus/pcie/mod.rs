@@ -10,7 +10,7 @@ use hashbrown::HashMap;
 use snafu::{ResultExt, Snafu};
 
 use crate::{
-    dtb::DeviceTree,
+    ds::dtb::{DeviceTree, StandardProperty},
     memory::{self, PhysicalAddress, VirtualAddress, PAGE_SIZE},
 };
 
@@ -37,13 +37,13 @@ impl<'dt> HostCtrlDeviceTreeNode<'dt> {
         dt.process_properties_for_node("pcie", |name, data, std_interp| match name {
             "#size-cells" => {
                 size_cells = Some(match std_interp.unwrap() {
-                    crate::dtb::StandardProperty::SizeCells(s) => s,
+                    StandardProperty::SizeCells(s) => s,
                     _ => unreachable!(),
                 })
             }
             "#address-cells" => {
                 address_cells = Some(match std_interp.unwrap() {
-                    crate::dtb::StandardProperty::AddressCells(s) => s,
+                    StandardProperty::AddressCells(s) => s,
                     _ => unreachable!(),
                 })
             }

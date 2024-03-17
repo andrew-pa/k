@@ -1,4 +1,8 @@
-//! Device Tree blob parser.
+//! Device Tree blob.
+//!
+//! Parser/search routines for the
+//! [DeviceTree Specification](https://github.com/devicetree-org/devicetree-specification)
+//! to obtain hardware/boot parameters.
 //!
 //! This is designed to require no allocation/copying so that it can be used as soon as possible
 //! during the boot process.
@@ -6,7 +10,6 @@
 //! in their respective portion of the tree, but this module contains common structures and
 //! iterators to make that easier.
 //!
-//! [DeviceTree Specification](https://github.com/devicetree-org/devicetree-specification)
 use core::{ffi::CStr, fmt::Debug};
 
 use byteorder::{BigEndian, ByteOrder};

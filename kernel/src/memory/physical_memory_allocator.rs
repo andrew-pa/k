@@ -2,7 +2,7 @@
 use core::cell::OnceCell;
 
 use crate::{
-    dtb::{DeviceTree, StructureItem},
+    ds::dtb::{DeviceTree, StructureItem},
     memory::{__kernel_end, __kernel_start, PAGE_SIZE},
 };
 use bitvec::{index::BitIdx, prelude::*};

@@ -13,7 +13,7 @@ use bitvec::{
 use byteorder::{BigEndian, ByteOrder};
 
 use crate::{
-    dtb::{DeviceTree, MemRegionIter, StructureItem},
+    ds::dtb::{DeviceTree, MemRegionIter, StructureItem},
     memory::PhysicalAddress,
 };
 

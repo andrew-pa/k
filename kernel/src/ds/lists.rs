@@ -1,3 +1,4 @@
+//! Concurrent, lock free linked list.
 use core::{
     ptr::{addr_of, null_mut},
     sync::atomic::{AtomicPtr, Ordering},
@@ -19,7 +20,7 @@ impl<T> Node<T> {
     }
 }
 
-/// A linked list that supports safe concurrent operations without locks.
+/// A singly linked list that supports safe concurrent operations without locks.
 pub struct ConcurrentLinkedList<T> {
     head: AtomicPtr<Node<T>>,
 }

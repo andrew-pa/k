@@ -8,8 +8,8 @@ use alloc::{boxed::Box, sync::Arc};
 use smallvec::SmallVec;
 
 use crate::{
+    ds::maps::CHashMap,
     exception::{self, InterruptId},
-    CHashMap,
 };
 
 use super::queue::{Command, Completion, CompletionQueue};

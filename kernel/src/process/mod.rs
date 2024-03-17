@@ -1,8 +1,8 @@
 //! User-space, with scheduled [threads][Thread] grouped into [processes][Process].
 //! Contains the thread scheduler and system message dispatch infrastructure.
 use crate::{
+    ds::lists::ConcurrentLinkedList,
     exception::Registers,
-    lists::ConcurrentLinkedList,
     memory::{
         paging::{PageTable, PageTableEntryOptions},
         physical_memory_allocator, PhysicalBuffer, VirtualAddress, VirtualAddressAllocator,

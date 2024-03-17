@@ -8,7 +8,7 @@ use bitfield::bitfield;
 
 use core::arch::asm;
 
-use crate::{dtb::DeviceTree, exception};
+use crate::{ds::dtb::DeviceTree, exception};
 
 pub fn read_compare_value() -> u64 {
     let mut cv: u64;

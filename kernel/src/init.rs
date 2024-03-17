@@ -1,6 +1,6 @@
 //! Initialization routines that are called during the boot process by `kmain` to setup the system.
 use super::*;
-use crate::{dtb::DeviceTree, registry::Path};
+use crate::{ds::dtb::DeviceTree, registry::Path};
 use hashbrown::HashMap;
 
 /// Configure logging using [log] and the [uart::DebugUartLogger].

@@ -2,7 +2,7 @@
 //!
 //! The kernel has a modular, but monolithic design.
 //! Execution starts in `start.S`, which then calls [kmain].
-//! Devices are detected using the Device Tree blob provided by `u-boot` (see [dtb]).
+//! Devices are detected using the Device Tree blob provided by `u-boot` (see [ds::dtb]).
 //! The kernel uses `async`/`await` to handle asynchronous operations, and includes a kernel-level
 //! task executor to drive tasks to completion (see [tasks]). This runs in its own kernel thread.
 #![no_std]
@@ -25,7 +25,7 @@ use core::arch::global_asm;
 use memory::PhysicalAddress;
 use qemu_exit::QEMUExit as _;
 
-pub mod dtb;
+pub mod ds;
 pub mod registry;
 
 pub mod exception;
@@ -43,11 +43,6 @@ pub mod fs;
 pub mod init;
 
 pub mod intrinsics;
-
-// TODO: new module for all data structures
-pub mod lists;
-pub mod maps;
-pub use maps::CHashMap;
 
 global_asm!(include_str!("start.S"));
 
@@ -80,7 +75,7 @@ pub extern "C" fn kmain(dtb_addr: PhysicalAddress) -> ! {
     // Load the device tree blob at the address provided by u-boot as a parameter.
     // See u-boot/arch/arm/lib/bootm.c:boot_jump_linux(...).
     log::trace!("reading device tree blob at {dtb_addr}");
-    let dt = unsafe { dtb::DeviceTree::at_address(dtb_addr.to_virtual_canonical()) };
+    let dt = unsafe { ds::dtb::DeviceTree::at_address(dtb_addr.to_virtual_canonical()) };
 
     memory::init_physical_memory_allocator(&dt);
     memory::paging::init_kernel_page_table();
