@@ -14,6 +14,8 @@ pub enum QueueError {
 pub type QueueId = u32;
 
 /// A single synchronized queue. Works the same as an NVMe queue.
+///
+/// A queue is internally mutable and synchronized.
 struct Queue<T> {
     buffer: PhysicalBuffer,
     queue_len: usize,
@@ -25,6 +27,9 @@ struct Queue<T> {
     data_ptr: NonNull<T>, // TODO: we might need an additional lock to synchronize access to queues between
                           // different threads in the kernel?
 }
+
+unsafe impl<T: Send> Send for Queue<T> {}
+unsafe impl<T: Send> Sync for Queue<T> {}
 
 impl<T> Queue<T> {
     fn new(size_in_pages: usize) -> Result<Queue<T>, MemoryError> {

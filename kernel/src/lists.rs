@@ -17,13 +17,6 @@ impl<T> Node<T> {
             next: AtomicPtr::new(null_mut()),
         }
     }
-
-    fn new_with_next(data: T, next: *mut Node<T>) -> Self {
-        Self {
-            data,
-            next: AtomicPtr::new(next),
-        }
-    }
 }
 
 /// A linked list that supports safe concurrent operations without locks.

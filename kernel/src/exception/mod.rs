@@ -15,7 +15,7 @@ use spin::{Mutex, MutexGuard};
 
 use crate::{
     memory::{PhysicalAddress, VirtualAddress},
-    process::{self, thread::reg::read_exception_link_reg, Process, ProcessId, Thread},
+    process::{self, thread::reg::read_exception_link_reg, Process, Thread},
     CHashMap,
 };
 

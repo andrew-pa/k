@@ -175,3 +175,27 @@ pub fn test_runner(tests: &[&dyn Testable]) {
     }
     log::info!("all tests successful");
 }
+
+#[macro_export]
+/// Assert that some type `t` implements [Send], causing a compiler error if not.
+macro_rules! assert_send {
+    ($t:ty) => {
+        const _: fn() = || {
+            struct CheckSend<T: Send>(core::marker::PhantomData<T>);
+            let _ = CheckSend::<$t>(core::marker::PhantomData);
+            unreachable!();
+        };
+    };
+}
+
+#[macro_export]
+/// Assert that some type `t` implements [Sync], causing a compiler error if not.
+macro_rules! assert_sync {
+    ($t:ty) => {
+        const _: fn() = || {
+            struct CheckSync<T: Sync>(core::marker::PhantomData<T>);
+            let _ = CheckSync::<$t>(core::marker::PhantomData);
+            unreachable!();
+        };
+    };
+}

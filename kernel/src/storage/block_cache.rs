@@ -318,7 +318,7 @@ mod test {
             for (destination_addr, num_blocks) in destinations {
                 unsafe {
                     let p: *mut u8 = destination_addr.to_virtual_canonical().as_ptr();
-                    let mut s = core::slice::from_raw_parts_mut(p, self.block_size * num_blocks);
+                    let s = core::slice::from_raw_parts_mut(p, self.block_size * num_blocks);
                     for (i, d) in s.iter_mut().enumerate() {
                         *d = (i % 255) as u8;
                     }
@@ -342,7 +342,7 @@ mod test {
     fn cold_read_single_block() {
         let bs = MockReadOnlyBlockStore::new(8);
         let rc = bs.read_counter.clone();
-        let mut c = BlockCache::new(bs, 1).unwrap();
+        let c = BlockCache::new(bs, 1).unwrap();
         let mut buf = [0; 8];
         block_on(c.copy_bytes(BlockAddress(0), 0, &mut buf)).unwrap();
         assert_eq!(buf, [0, 1, 2, 3, 4, 5, 6, 7]);
@@ -353,7 +353,7 @@ mod test {
     fn cold_read_across_blocks_small() {
         let bs = MockReadOnlyBlockStore::new(8);
         let rc = bs.read_counter.clone();
-        let mut c = BlockCache::new(bs, 1).unwrap();
+        let c = BlockCache::new(bs, 1).unwrap();
         let mut buf = [0; 8];
         block_on(c.copy_bytes(BlockAddress(0), 4, &mut buf)).unwrap();
         assert_eq!(buf, [4, 5, 6, 7, 8, 9, 10, 11]);
@@ -364,7 +364,7 @@ mod test {
     fn warm_read_single_block() {
         let bs = MockReadOnlyBlockStore::new(8);
         let rc = bs.read_counter.clone();
-        let mut c = BlockCache::new(bs, 1).unwrap();
+        let c = BlockCache::new(bs, 1).unwrap();
         let mut buf = [0; 8];
         // first read cold
         block_on(c.copy_bytes(BlockAddress(0), 0, &mut buf)).unwrap();
@@ -409,7 +409,7 @@ mod test {
             for (destination_addr, num_blocks) in destinations {
                 unsafe {
                     let p: *mut u8 = destination_addr.to_virtual_canonical().as_ptr();
-                    let mut s = core::slice::from_raw_parts_mut(p, 8 * num_blocks);
+                    let s = core::slice::from_raw_parts_mut(p, 8 * num_blocks);
                     let start = (source_addr.0 * 8) as usize;
                     let end = start + num_blocks * 8;
                     if start > self.buffer.len() || end > self.buffer.len() {
@@ -433,7 +433,7 @@ mod test {
             for (source_addr, num_blocks) in sources {
                 unsafe {
                     let p: *mut u8 = source_addr.to_virtual_canonical().as_ptr();
-                    let mut s = core::slice::from_raw_parts_mut(p, 8 * num_blocks);
+                    let s = core::slice::from_raw_parts_mut(p, 8 * num_blocks);
                     let start = (destination_addr.0 * 8) as usize;
                     let end = start + num_blocks * 8;
                     self.buffer[start..end].copy_from_slice(s);
@@ -449,7 +449,7 @@ mod test {
     fn write_and_read_back() {
         let bs = MockRwBlockStore::new();
         let (rc, wc) = (bs.read_counter.clone(), bs.write_counter.clone());
-        let mut c = BlockCache::new(bs, 1).unwrap();
+        let c = BlockCache::new(bs, 1).unwrap();
         let mut buf = [0; 8];
         buf.copy_from_slice(b"testtest");
         block_on(c.write_bytes(BlockAddress(7), 0, &buf));
@@ -466,7 +466,7 @@ mod test {
     fn write_back() {
         let bs = MockRwBlockStore::new();
         let (rc, wc) = (bs.read_counter.clone(), bs.write_counter.clone());
-        let mut c = BlockCache::new(bs, 1).unwrap();
+        let c = BlockCache::new(bs, 1).unwrap();
         let mut buf = [0; 8];
         buf.copy_from_slice(b"testtest");
         block_on(c.write_bytes(BlockAddress(7), 0, &buf));

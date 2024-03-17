@@ -1,11 +1,13 @@
 //! Page table structure and MMU interface.
 #![allow(unused)]
-use core::{cell::OnceCell, ops::Range, ptr::NonNull};
+use core::{cell::OnceCell, ops::Range, ptr::NonNull, sync::atomic::AtomicBool};
 
 use bitfield::bitfield;
 use smallvec::SmallVec;
 use snafu::{ResultExt, Snafu};
 use spin::Mutex;
+
+use crate::exception::InterruptGuard;
 
 use super::{
     physical_memory_allocator, MemoryError, PhysicalAddress, PhysicalMemoryAllocator,
@@ -188,15 +190,25 @@ type LevelTable = [PageTableEntry; 512];
 ///
 /// This structure does not require heap allocation, but does expect that it can allocate the
 /// memory for the tables in the identity mapped region of main memory.
+///
+/// This structure is internally mutable and synchronized. The root table address however is fixed.
 // WARN: TODO: Currently assumes that physical memory is identity mapped in the 0x0000 prefix!
 pub struct PageTable {
     /// true => this page table is for virtual addresses of prefix 0xffff, false => prefix must be 0x0000
     high_addresses: bool,
+    modified: AtomicBool,
     /// The address space ID (ASID) for this page table, for use in caching.
     pub asid: u16,
-    level0_table: NonNull<LevelTable>,
+    level0_table: Mutex<NonNull<LevelTable>>,
     level0_phy_addr: PhysicalAddress,
 }
+
+/// # Safety
+/// [PageTable] is internally synchronized.
+unsafe impl Send for PageTable {}
+/// # Safety
+/// [PageTable] is internally synchronized.
+unsafe impl Sync for PageTable {}
 
 impl core::fmt::Debug for PageTable {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -243,7 +255,7 @@ impl core::fmt::Debug for PageTable {
             }
             Ok(())
         }
-        print_table(f, 0, self.level0_table, self.level0_phy_addr)?;
+        print_table(f, 0, *self.level0_table.lock(), self.level0_phy_addr)?;
         write!(f, "]")
     }
 }
@@ -263,9 +275,11 @@ impl PageTable {
         PageTable {
             high_addresses: true,
             asid: 0,
-            level0_table: NonNull::new(level0_table)
-                .expect("kernel page table pointer is non-null"),
+            level0_table: Mutex::new(
+                NonNull::new(level0_table).expect("kernel page table pointer is non-null"),
+            ),
             level0_phy_addr: VirtualAddress::from(level0_table).to_physical_canonical(),
+            modified: AtomicBool::new(false),
         }
     }
 
@@ -279,10 +293,13 @@ impl PageTable {
             high_addresses,
             asid,
             level0_table: unsafe {
-                NonNull::new(level0_phy_addr.to_virtual_canonical().as_ptr())
-                    .expect("allocator returns non-null pointer")
+                Mutex::new(
+                    NonNull::new(level0_phy_addr.to_virtual_canonical().as_ptr())
+                        .expect("allocator returns non-null pointer"),
+                )
             },
             level0_phy_addr,
+            modified: AtomicBool::new(false),
         })
     }
 
@@ -356,7 +373,7 @@ impl PageTable {
     /// Map a range of virtual addresses starting at `virt_start` to the physical memory starting
     /// at `phy_start`. The `options` will be applied to all the pages in the region.
     pub fn map_range(
-        &mut self,
+        &self,
         phy_start: PhysicalAddress,
         virt_start: VirtualAddress,
         page_count: usize,
@@ -388,38 +405,20 @@ impl PageTable {
         }
 
         if !overwrite {
-            todo!("this appears to simply not work at all, but it is of dubious importance");
-            // TODO: this always takes linear time in the number of pages although the actual allocation
-            // doesn't. They could probably both have the same runtime though with some cleverness.
-            let mut page_index = 0;
-            'top: while page_index < page_count {
-                let page_start = VirtualAddress(virt_start.0 + page_index * PAGE_SIZE);
-                let (tag, i0, i1, i2, i3, po) = page_start.to_parts();
-                let mut table = self.level0_table;
-                for (lvl, i) in [i0, i1, i2, i3].into_iter().enumerate() {
-                    let tr = unsafe { table.as_ref() };
-                    if let Some(existing_table) = tr[i].table_ref(lvl as u8) {
-                        table = existing_table;
-                    } else if tr[i].valid() {
-                        log::error!("table: {:?}", self);
-                        return Err(MapError::RangeAlreadyMapped {
-                            virt_start,
-                            page_count,
-                            collision: page_start,
-                        });
-                    }
-                }
-                page_index += 1;
-            }
+            todo!();
         }
 
         // allocate new page tables and add required entries
         let mut page_index = 0;
+        // prevent deadlocks with interrupt handlers
+        let _interrupt_guard = InterruptGuard::disable_interrupts_until_drop();
+        // lock the table until we're finished manipulating it
+        let level0_table = self.level0_table.lock();
         'top: while page_index < page_count {
             let page_start = VirtualAddress(virt_start.0 + page_index * PAGE_SIZE);
             let (tag, i0, i1, i2, i3, po) = page_start.to_parts();
             // log::trace!("mapping page {page_start}=[{tag:x}:{i0:x}:{i1:x}:{i2:x}:{i3:x}:{po:x}], {} pages left", page_count - page_index);
-            let mut table = self.level0_table;
+            let mut table = *level0_table;
             // TODO: surely there is a clean way to generate this slice with iterators?
             for (lvl, i, can_allocate_large_block, large_block_size) in [
                 (0, i0, false, 0),
@@ -456,18 +455,25 @@ impl PageTable {
             page_index += 1;
         }
 
+        self.modified
+            .store(true, core::sync::atomic::Ordering::Relaxed);
+
         Ok(())
     }
 
     /// Clear the page table of a mapping starting at `virt_start`.
     ///
     /// TODO: This does not yet free the memory used up by now empty page tables.
-    pub fn unmap_range(&mut self, virt_start: VirtualAddress, page_count: usize) {
+    pub fn unmap_range(&self, virt_start: VirtualAddress, page_count: usize) {
+        // prevent deadlocks with interrupt handlers
+        let _interrupt_guard = InterruptGuard::disable_interrupts_until_drop();
+        // lock the table until we're finished manipulating it
+        let level0_table = self.level0_table.lock();
         let mut page_index = 0;
         'top: while page_index < page_count {
             let page_addr = VirtualAddress(virt_start.0 + page_index * PAGE_SIZE);
             let (tag, i0, i1, i2, i3, po) = page_addr.to_parts();
-            let mut table = self.level0_table;
+            let mut table = *level0_table;
             // TODO: surely there is a clean way to generate this slice with iterators?
             for (lvl, i, block_size) in [
                 (0, i0, 0),
@@ -486,8 +492,8 @@ impl PageTable {
                 }
             }
         }
-        // TODO: there was a todo!() here but it is unclear why. Perhaps because this doesn't free
-        // the actual page table memory itself?
+        self.modified
+            .store(true, core::sync::atomic::Ordering::Relaxed);
     }
 
     /// Compute the physical address of a virtual address the same way the MMU would. If accessing
@@ -500,7 +506,13 @@ impl PageTable {
             (true, 0xffff) | (false, 0x0) => {}
             _ => return None,
         }
-        let mut table = self.level0_table;
+
+        // prevent deadlocks with interrupt handlers
+        let _interrupt_guard = InterruptGuard::disable_interrupts_until_drop();
+        // lock the table until we're finished reading it
+        let level0_table = self.level0_table.lock();
+
+        let mut table = *level0_table;
         // TODO: surely there is a clean way to generate this slice with iterators?
         for (lvl, i, block_size) in [
             (0, i0, 0),
@@ -544,7 +556,9 @@ impl Drop for PageTable {
             }
             physical_memory_allocator().free(table_phy_addr)
         }
-        drop_table(0, self.level0_table, self.level0_phy_addr);
+        // prevent deadlock
+        let _interrupt_guard = InterruptGuard::disable_interrupts_until_drop();
+        drop_table(0, *self.level0_table.lock(), self.level0_phy_addr);
     }
 }
 
@@ -561,14 +575,20 @@ pub struct MappedRegion {
 
 /// An iterator over [MappedRegion]s of a [PageTable].
 pub struct PageTableIter<'a> {
+    table_lock_guard: spin::MutexGuard<'a, NonNull<LevelTable>>,
+    interrupt_guard: InterruptGuard,
     stack: SmallVec<[(&'a LevelTable, usize); 4]>,
     tag: usize,
 }
 
-impl PageTableIter<'_> {
-    fn new(pt: &PageTable) -> Self {
+impl<'a> PageTableIter<'a> {
+    fn new(pt: &'a PageTable) -> Self {
+        let interrupt_guard = InterruptGuard::disable_interrupts_until_drop();
+        let table_lock_guard = pt.level0_table.lock();
         let mut s = PageTableIter {
-            stack: smallvec::smallvec![(unsafe { pt.level0_table.as_ref() }, 0)],
+            stack: smallvec::smallvec![(unsafe { table_lock_guard.as_ref() }, 0)],
+            table_lock_guard,
+            interrupt_guard,
             tag: if pt.high_addresses { 0xffff } else { 0x0000 },
         };
         s.follow_tree();
@@ -800,52 +820,38 @@ pub unsafe fn flush_tlb_for_asid(asid: u16) {
     )
 }
 
-static mut KERNEL_TABLE: OnceCell<Mutex<PageTable>> = OnceCell::new();
+static mut KERNEL_TABLE: OnceCell<PageTable> = OnceCell::new();
 
 /// Initialize the kernel page table.
 pub fn init_kernel_page_table() {
     unsafe {
         KERNEL_TABLE
-            .set(Mutex::new(PageTable::kernel_table()))
+            .set(PageTable::kernel_table())
             .expect("init kernel page table once");
     }
 }
 
-/// A special guard type that wraps a [spin::MutexGuard] on a [PageTable].
-/// If mutated, then when the guard is dropped the TLB is automatically flushed.
+/// A special guard type that wraps a reference [PageTable].
+/// When the guard is dropped the TLB is automatically flushed if the modified flag is set.
 pub struct KernelTableGuard {
-    table: spin::MutexGuard<'static, PageTable>,
-    mutated: bool,
-}
-
-impl From<spin::MutexGuard<'static, PageTable>> for KernelTableGuard {
-    fn from(table: spin::MutexGuard<'static, PageTable>) -> Self {
-        Self {
-            table,
-            mutated: false,
-        }
-    }
+    table: &'static PageTable,
 }
 
 impl core::ops::Deref for KernelTableGuard {
     type Target = PageTable;
 
     fn deref(&self) -> &Self::Target {
-        self.table.deref()
-    }
-}
-
-impl core::ops::DerefMut for KernelTableGuard {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        // of course, you could deref_mut and not mutate
-        self.mutated = true;
-        self.table.deref_mut()
+        self.table
     }
 }
 
 impl Drop for KernelTableGuard {
     fn drop(&mut self) {
-        if self.mutated {
+        if self
+            .table
+            .modified
+            .load(core::sync::atomic::Ordering::Acquire)
+        {
             unsafe {
                 flush_tlb_total_el1();
             }
@@ -853,14 +859,11 @@ impl Drop for KernelTableGuard {
     }
 }
 
-/// Lock and gain access to the kernel page table.
+/// Gain access to the kernel page table.
 pub fn kernel_table() -> KernelTableGuard {
     unsafe {
-        KERNEL_TABLE
-            .get()
-            .as_ref()
-            .expect("kernel page table initialized")
-            .lock()
-            .into()
+        KernelTableGuard {
+            table: KERNEL_TABLE.get().expect("kernel page table initialized"),
+        }
     }
 }

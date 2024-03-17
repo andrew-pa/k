@@ -302,7 +302,7 @@ impl KernelGlobalAlloc {
             .swap(true, core::sync::atomic::Ordering::SeqCst);
         assert!(!was_init, "heap initialization should only occur once");
         log::info!("initializing kernel heap");
-        let mut pt = super::paging::kernel_table();
+        let pt = super::paging::kernel_table();
         let pages = {
             // drop this early to make sure that the page table can also allocate physical memory
             let mut pma = super::physical_memory_allocator();
@@ -403,7 +403,7 @@ impl KernelGlobalAlloc {
         };
         let old_heap_end = VirtualAddress(KERNEL_HEAP_START.0 + free_list.heap_size_in_bytes);
         {
-            let mut pt = super::paging::kernel_table();
+            let pt = super::paging::kernel_table();
             pt.map_range(
                 pages,
                 old_heap_end,

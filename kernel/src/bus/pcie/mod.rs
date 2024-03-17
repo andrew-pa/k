@@ -135,7 +135,7 @@ impl BaseAddresses {
 
         // map registers into kernel virtual address space
         {
-            let mut pt = memory::paging::kernel_table();
+            let pt = memory::paging::kernel_table();
             pt.map_range(
                 ecam_base,
                 ecam_vrt,

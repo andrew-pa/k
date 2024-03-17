@@ -2,7 +2,6 @@
 use super::*;
 use core::ops::Deref;
 
-use alloc::string::String;
 use bitflags::bitflags;
 use bytemuck::{Pod, Zeroable};
 
@@ -162,11 +161,6 @@ pub enum FatError {
         #[snafu(source(false))]
         source: widestring::error::Utf16Error,
         entry: DirEntry,
-    },
-
-    InvalidShortName {
-        reason: &'static str,
-        name: String,
     },
 }
 

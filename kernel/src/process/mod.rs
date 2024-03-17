@@ -39,10 +39,14 @@ pub struct Process {
     pub id: ProcessId,
     /// The threads running in this process.
     threads: Mutex<SmallVec<[Arc<Thread>; 2]>>,
+    /// Page tables for this process.
     page_tables: PageTable,
     channel: Channel,
+    #[allow(dead_code)]
     address_space_allocator: VirtualAddressAllocator,
 }
+
+crate::assert_sync!(Process);
 
 impl Process {
     /// Get the address space ID (ASID) for this process's page tables.
@@ -118,6 +122,7 @@ fn exit_process(proc: Arc<Process>) {
         // drop thread
     }
 
+    // TODO: move this to drop
     // deal with async resources, and then drop the process (by moving it into the task)
     crate::tasks::spawn(async move {
         // free physical memory mapped in process page table

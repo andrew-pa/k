@@ -19,8 +19,6 @@
 //! | `0xffff_ff00_0000_0000..0xffff_ffff_ffff_ffff` | Dynamic, 256GiB maximum | Kernel Rust heap, allocated and mapped on demand |
 //!
 
-use core::cell::OnceCell;
-
 use bytemuck::{Pod, Zeroable};
 use derive_more::Display;
 use snafu::Snafu;

@@ -65,6 +65,8 @@ pub struct Thread {
     exec_state: Mutex<ExecutionState>,
 }
 
+crate::assert_sync!(Thread);
+
 /// The idle thread is dedicated to handling interrupts, i.e. it is the thread holding the EL1 stack.
 pub const IDLE_THREAD: ThreadId = 0;
 /// The task thread runs the async task executor on its own stack at SP_EL0.
@@ -205,11 +207,5 @@ impl Thread {
     pub fn priority(&self) -> ThreadPriority {
         ThreadPriority::from_integer(self.priority.load(Ordering::Acquire))
             .expect("thread state is valid")
-    }
-
-    /// Atomically set the priority of this thread.
-    /// This only updates the field, and does not inform the scheduler.
-    fn set_priority(&self, new: ThreadPriority) {
-        self.priority.store(new.into_integer(), Ordering::Release)
     }
 }
