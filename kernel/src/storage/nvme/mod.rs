@@ -5,13 +5,7 @@ use crate::{
         self, path::Component, registry_mut, Path, PathBuf, RegistryError, RegistryHandler,
     },
 };
-use alloc::{
-    boxed::Box,
-    format,
-    string::{String, ToString},
-    sync::Arc,
-    vec::Vec,
-};
+use alloc::{boxed::Box, string::ToString, sync::Arc, vec::Vec};
 use async_trait::async_trait;
 use bitfield::{bitfield, Bit};
 use smallvec::SmallVec;
@@ -88,7 +82,8 @@ fn busy_wait_for_ready_bit(csts: *mut u8, value: bool) {
             let csts_v = csts.read_volatile();
             if csts_v.bit(0) == value {
                 break;
-            } else if csts_v.bit(1) {
+            }
+            if csts_v.bit(1) {
                 panic!("NVMe fatal error");
             }
         }
@@ -128,7 +123,7 @@ impl RegistryHandler for NvmeDeviceRegistryHandler {
 
         // create IO queues
         // allocate MSI for IO completion queue
-        let mut msi = {
+        let msi = {
             let mut ic = crate::exception::interrupt_controller();
             ic.alloc_msi().expect("MSI support for NVMe")
         };
@@ -153,7 +148,7 @@ impl RegistryHandler for NvmeDeviceRegistryHandler {
         .expect("create IO completion queue");
 
         log::trace!("creating IO submission queue");
-        let mut io_sq = SubmissionQueue::new_io(
+        let io_sq = SubmissionQueue::new_io(
             1,
             (2 * PAGE_SIZE / SUBMISSION_ENTRY_SIZE) as u16,
             self.doorbell_base(),
@@ -175,7 +170,7 @@ impl RegistryHandler for NvmeDeviceRegistryHandler {
                 reason: "failed to allocate memory to recieve NVMe device properties",
             })?;
 
-        let cmp = {
+        let _cmp = {
             log::trace!("sending identify command to namespace {namespace_id}");
             self.admin_sq
                 .lock()
@@ -224,7 +219,7 @@ impl RegistryHandler for NvmeDeviceRegistryHandler {
         }))
     }
 
-    async fn open_file(&self, subpath: &Path) -> Result<Box<dyn crate::fs::File>, RegistryError> {
+    async fn open_file(&self, _subpath: &Path) -> Result<Box<dyn crate::fs::File>, RegistryError> {
         Err(RegistryError::Unsupported)
     }
 }

@@ -1,10 +1,7 @@
 //! Initialization routines that are called during the boot process by `kmain` to setup the system.
-use alloc::boxed::Box;
-use hashbrown::HashMap;
-
-use crate::{dtb::DeviceTree, registry::Path};
-
 use super::*;
+use crate::{ds::dtb::DeviceTree, registry::Path};
+use hashbrown::HashMap;
 
 /// Configure logging using [log] and the [uart::DebugUartLogger].
 pub fn logging(log_level: log::LevelFilter) {
@@ -71,9 +68,9 @@ pub fn configure_time_slicing(dt: &DeviceTree) {
     timer::set_enabled(true);
     timer::set_interrupts_enabled(true);
 
-    exception::interrupt_handlers().insert(
+    exception::interrupt_handlers().insert_blocking(
         timer_irq,
-        Box::new(|id, regs| {
+        Box::new(|_id, _regs| {
             //log::trace!("{id} timer interrupt! {}", timer::counter());
             process::scheduler().schedule_next_thread();
             timer::write_timer_value(timer::frequency() >> 5);
@@ -90,9 +87,9 @@ pub fn register_system_call_handlers() {
 
     // TODO: ideally this is a whole system with a ring buffer, listening, etc and also records
     // which process made the log, but for now this will do.
-    exception::system_call_handlers().insert(
+    exception::system_call_handlers().insert_blocking(
         SystemCallNumber::WriteLog as u16,
-        |id, pid, tid, regs| unsafe {
+        |_id, _pid, _tid, regs| unsafe {
             let record = &*(regs.x[0] as *const log::Record);
             log::logger().log(record);
         },
@@ -135,7 +132,7 @@ pub fn spawn_task_executor_thread() {
 /// This finishes the boot process, executing the asynchronous tasks required to mount the root filesystem and spawn the `init` process.
 pub async fn finish_boot(opts: BootOptions<'_>) {
     log::info!("open /dev/nvme/pci@0:2:0/1");
-    let mut bs = {
+    let bs = {
         registry::registry()
             .open_block_store(Path::new("/dev/nvme/pci@0:2:0/1"))
             .await
@@ -144,20 +141,10 @@ pub async fn finish_boot(opts: BootOptions<'_>) {
     log::info!("mount FAT filesystem");
     fs::fat::mount(Path::new("/fat"), bs).await.unwrap();
 
-    let test_file = registry::registry()
-        .open_file(Path::new("/fat/abcdefghij/test.txt"))
-        .await
-        .expect("open file");
-
     log::info!("spawning init process");
-    let init_pid = process::spawn_process(
-        opts.init_process_path,
-        Some(|proc: &mut process::Process| {
-            proc.attach_file(test_file).unwrap();
-        }),
-    )
-    .await
-    .expect("spawn init process");
+    let init_proc = process::spawn_process(opts.init_process_path, None::<fn(_)>)
+        .await
+        .expect("spawn init process");
 
-    log::info!("init pid = {init_pid}");
+    log::info!("init pid = {}", init_proc.id);
 }

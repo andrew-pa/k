@@ -1,10 +1,7 @@
 //! Thread scheduling.
-use alloc::{collections::VecDeque, vec::Vec};
-use spin::{Mutex, MutexGuard};
-
-use crate::exception;
-
 use super::*;
+use alloc::vec::Vec;
+use spin::MutexGuard;
 
 /// The thread scheduler.
 ///
@@ -16,9 +13,11 @@ use super::*;
 /// This should be the [IDLE_THREAD].
 // TODO: make sure that all threads get a chance to run at least occasionally.
 pub struct ThreadScheduler {
-    /// Threads to run at each priority level, forming a queue with (<threads in queue>, <index of queue head>)
-    queues: [(Vec<ThreadId>, usize); 3],
-    current_thread: ThreadId,
+    /// Threads to run at each priority level, forming a queue with (<threads in queue>, <index of queue head>).
+    /// This is only synchronized to appease the compiler, the scheduler should only ever run on its own core.
+    queues: [(Vec<Arc<Thread>>, usize); 3],
+    /// Reference to current thread.
+    current_thread: Arc<Thread>,
 }
 
 impl ThreadScheduler {
@@ -27,19 +26,15 @@ impl ThreadScheduler {
     /// The first call to [Self::pause_current_thread] will assign whatever execution state it
     /// finds to the idle thread. The idle thread runs at lowest priority.
     fn new() -> ThreadScheduler {
+        let idle = thread_for_id(IDLE_THREAD).expect("idle thread exists");
         ThreadScheduler {
             queues: [
                 (Vec::new(), 0),
                 (Vec::new(), 0),
-                (alloc::vec![IDLE_THREAD], 0),
+                (alloc::vec![idle.clone()], 0),
             ],
-            current_thread: IDLE_THREAD,
+            current_thread: idle,
         }
-    }
-
-    /// Get the ID of the thread that is currrently running.
-    pub fn currently_running(&self) -> ThreadId {
-        self.current_thread
     }
 
     /// Find the next ready thread and make it current.
@@ -50,12 +45,7 @@ impl ThreadScheduler {
             }
             // skip any threads that are waiting in this queue
             let mut skips = queue.len();
-            while threads()
-                .get(&queue[*next])
-                .expect("valid thread ids in queue")
-                .state
-                == ThreadState::Waiting
-            {
+            while queue[*next].state() != ThreadState::Running {
                 skips -= 1;
                 *next = (*next + 1) % queue.len();
             }
@@ -63,7 +53,7 @@ impl ThreadScheduler {
                 // every thread in the queue is waiting
                 continue;
             }
-            self.current_thread = queue[*next];
+            self.current_thread = queue[*next].clone();
             *next = (*next + 1) % queue.len();
             return;
         }
@@ -73,25 +63,23 @@ impl ThreadScheduler {
 
     /// Force the task executor thread to become current.
     pub fn make_task_executor_current(&mut self) {
-        self.current_thread = TASK_THREAD;
+        self.current_thread = thread_for_id(TASK_THREAD).expect("task thread exists");
     }
 
     /// Add a thread to the scheduler so that it can run.
-    pub fn add_thread(&mut self, thread: ThreadId) {
-        let t = threads().get(&thread).unwrap();
-        self.queues[t.priority as usize].0.push(thread);
+    pub fn add_thread(&mut self, thread: Arc<Thread>) {
+        self.queues[thread.priority() as usize].0.push(thread);
     }
 
     /// Remove a thread from the scheduler.
     ///
     /// If the thread was current, a new ready thread will be scheduled.
-    pub fn remove_thread(&mut self, thread: ThreadId) {
-        let t = threads().get(&thread).unwrap();
-        self.queues[t.priority as usize]
+    pub fn remove_thread(&mut self, thread: &Arc<Thread>) {
+        self.queues[thread.priority() as usize]
             .0
-            .retain(|id| *id != thread);
+            .retain(|t| t.id != thread.id);
 
-        if thread == self.current_thread {
+        if thread.id == self.current_thread.id {
             self.schedule_next_thread();
         }
     }
@@ -102,39 +90,18 @@ impl ThreadScheduler {
     /// # Safety
     /// It is assumed that the currently running thread is the thread the scheduler believes is
     /// currently running.
-    pub unsafe fn pause_current_thread(
-        &mut self,
-        current_regs: &mut Registers,
-    ) -> (Option<ProcessId>, ThreadId) {
-        let current = self.currently_running();
-        if let Some(mut t) = threads().get_mut(&current) {
-            t.save(current_regs);
-            log::trace!("paused thread {current} @ {}, sp={}", t.pc, t.sp);
-            (t.parent, current)
-        } else {
-            log::warn!("pausing thread {current} that has no thread info");
-            (None, current)
+    pub unsafe fn pause_current_thread(&mut self, current_regs: &mut Registers) -> Arc<Thread> {
+        {
+            let mut exec_state = self.current_thread.exec_state.lock();
+            exec_state.save(current_regs);
+            log::trace!(
+                "paused thread {} @ {}, sp={}",
+                self.current_thread.id,
+                exec_state.pc,
+                exec_state.sp
+            );
         }
-    }
-
-    unsafe fn resume_thread(
-        &mut self,
-        id: ThreadId,
-        current_regs: &mut Registers,
-        previous_asid: Option<u16>,
-    ) {
-        let thread = threads()
-            .get_mut(&id)
-            .expect("scheduler has valid thread IDs");
-        log::trace!("resuming thread {id} @ {}, sp={}", thread.pc, thread.sp);
-
-        if let Some(proc) = thread.parent.and_then(|id| processes().get(&id)) {
-            proc.page_tables.activate();
-        }
-
-        crate::memory::paging::flush_tlb_for_asid(previous_asid.unwrap_or(0));
-
-        thread.restore(current_regs);
+        self.current_thread.clone()
     }
 
     /// Resume the execution state of the thread that the scheduler considers current.
@@ -147,11 +114,24 @@ impl ThreadScheduler {
         current_regs: &mut Registers,
         previous_asid: Option<u16>,
     ) {
-        self.resume_thread(self.currently_running(), current_regs, previous_asid)
+        let exec_state = self.current_thread.exec_state.lock();
+        log::trace!(
+            "resuming thread {} @ {}, sp={}",
+            self.current_thread.id,
+            exec_state.pc,
+            exec_state.sp
+        );
+
+        if let Some(proc) = self.current_thread.parent.as_ref() {
+            proc.page_tables.activate();
+        }
+
+        crate::memory::paging::flush_tlb_for_asid(previous_asid.unwrap_or(0));
+
+        exec_state.restore(current_regs);
     }
 }
 
-// TODO: we will eventually need one of these per-CPU
 static mut SCHD: OnceCell<Mutex<ThreadScheduler>> = OnceCell::new();
 
 /// Initialize the global thread scheduler. The first thread to run must be the idle thread.
@@ -175,6 +155,6 @@ pub fn try_current_thread_id() -> Option<ThreadId> {
     unsafe {
         SCHD.get()
             .and_then(|s| s.try_lock())
-            .map(|s| s.currently_running())
+            .map(|s| s.current_thread.id)
     }
 }

@@ -40,6 +40,11 @@ jobs:
       - name: Run linter
         run: cargo clippy -- -D warnings
 
+      - name: Set up C/C++ toolchain for building dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu ninja-build libfdt-dev zlib1g-dev
+
       - name: Hash submodule status for cache key
         id: submodules-cache-key
         run: |
@@ -60,12 +65,6 @@ jobs:
         with:
           path: ./u-boot/.build
           key: ${{runner.os}}-bindep-${{ steps.submodules-cache-key.outputs.gcc_version_hash }}-${{ steps.submodules-cache-key.outputs.uboot_commit }}
-
-      - name: Set up C/C++ toolchain for building dependencies
-        if: steps.cache-bindep.outputs.cache-hit != 'true'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu ninja-build libfdt-dev zlib1g-dev
 
       - name: Build everything and run tests
         run: make test

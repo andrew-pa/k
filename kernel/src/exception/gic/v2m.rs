@@ -2,10 +2,7 @@
 //!
 //! This driver is a translation of the driver found in the Linux kernel. There appears to be no
 //! other publicly available information about GICv2m.
-use crate::{
-    exception::{InterruptId, MsiDescriptor},
-    memory::PhysicalAddress,
-};
+use crate::{exception::MsiDescriptor, memory::PhysicalAddress};
 
 use super::MsiController;
 
@@ -34,8 +31,7 @@ impl V2mMsiController {
         // TODO: SAFETY: assume that this is in low memory that has already been mapped
         let basep: *mut u32 = unsafe { base.to_virtual_canonical().as_ptr() };
         let iidr = unsafe { basep.offset(V2M_MSI_IIDR >> 2).read_volatile() };
-        let mut typer =
-            V2mMsiTypeRegister(unsafe { basep.offset(V2M_MSI_TYPER >> 2).read_volatile() });
+        let typer = V2mMsiTypeRegister(unsafe { basep.offset(V2M_MSI_TYPER >> 2).read_volatile() });
         // TODO: why is this value not what it says in the QEMU headers?
         // perhaps there is a fixed offset for SPIs
         log::info!("v2m IIDR = 0x{iidr:x}, TYPER={typer:?}");

@@ -31,7 +31,6 @@ spin = "0.9"
 lock_api = "0.4"
 crossbeam = { version = "0.8", features = ["alloc"], default-features = false }
 futures = { version = "0.3", features = ["alloc"], default-features = false }
-chashmap = { path = "../chashmap" }
 
 # hardware interface
 qemu-exit = "3.0.1"

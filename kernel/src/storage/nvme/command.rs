@@ -10,6 +10,7 @@ pub enum IdentifyStructure {
 }
 
 #[repr(u8)]
+#[allow(unused)]
 pub enum QueuePriority {
     Urgent = 0b00,
     High = 0b01,
@@ -17,6 +18,7 @@ pub enum QueuePriority {
     Low = 0b11,
 }
 
+#[allow(unused)]
 impl<'sq> Command<'sq> {
     // Admin commands //
     pub fn identify(self, controller_id: u16, structure_id: IdentifyStructure) -> Self {

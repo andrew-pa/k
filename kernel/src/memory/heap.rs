@@ -6,6 +6,7 @@ use core::{
     alloc::{GlobalAlloc, Layout},
     mem::size_of,
     ptr::null_mut,
+    sync::atomic::AtomicBool,
 };
 
 use bitfield::bitfield;
@@ -95,10 +96,6 @@ impl FreeList {
             tail: null_mut(),
             heap_size_in_bytes: 0,
         }
-    }
-
-    fn is_uninit(&self) -> bool {
-        self.head.is_null()
     }
 
     // SAFETY: assumes that at least the page at KERNEL_HEAP_START has already been allocated and mapped
@@ -287,7 +284,7 @@ impl<'a> FreeListCursor<'a> {
 
 struct KernelGlobalAlloc {
     free_list: Mutex<FreeList>,
-    // TODO: original heap_size was in units of pages
+    initialized: AtomicBool, // TODO: original heap_size was in units of pages
 }
 
 unsafe impl Sync for KernelGlobalAlloc {}
@@ -295,12 +292,17 @@ unsafe impl Sync for KernelGlobalAlloc {}
 #[global_allocator]
 static GLOBAL_HEAP: KernelGlobalAlloc = KernelGlobalAlloc {
     free_list: Mutex::new(FreeList::new_uninit()),
+    initialized: AtomicBool::new(false),
 };
 
 impl KernelGlobalAlloc {
     fn init(&self) {
+        let was_init = self
+            .initialized
+            .swap(true, core::sync::atomic::Ordering::SeqCst);
+        assert!(!was_init, "heap initialization should only occur once");
         log::info!("initializing kernel heap");
-        let mut pt = super::paging::kernel_table();
+        let pt = super::paging::kernel_table();
         let pages = {
             // drop this early to make sure that the page table can also allocate physical memory
             let mut pma = super::physical_memory_allocator();
@@ -322,15 +324,18 @@ impl KernelGlobalAlloc {
         }
     }
 
+    fn ensure_init(&self) {
+        if !self.initialized.load(core::sync::atomic::Ordering::SeqCst) {
+            self.init();
+        }
+    }
+
     fn find_suitable_free_block(&self, layout: &Layout) -> Option<FreeBlock> {
-        let mut free_list = self.free_list.lock();
         // this code is only in this function because we assume that we always allocate
         // first before free() is ever called
-        if free_list.is_uninit() {
-            drop(free_list);
-            self.init();
-            free_list = self.free_list.lock();
-        }
+        self.ensure_init();
+
+        let mut free_list = self.free_list.lock();
 
         let mut cursor = free_list.cursor();
         while let Some(block) = cursor.current() {
@@ -398,7 +403,7 @@ impl KernelGlobalAlloc {
         };
         let old_heap_end = VirtualAddress(KERNEL_HEAP_START.0 + free_list.heap_size_in_bytes);
         {
-            let mut pt = super::paging::kernel_table();
+            let pt = super::paging::kernel_table();
             pt.map_range(
                 pages,
                 old_heap_end,

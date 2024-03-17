@@ -2,7 +2,7 @@
 use core::cell::OnceCell;
 
 use crate::{
-    dtb::{DeviceTree, StructureItem},
+    ds::dtb::{DeviceTree, StructureItem},
     memory::{__kernel_end, __kernel_start, PAGE_SIZE},
 };
 use bitvec::{index::BitIdx, prelude::*};
@@ -144,10 +144,9 @@ impl PhysicalMemoryAllocator {
                     Some((i, allocated)) => {
                         if *allocated {
                             continue;
-                        } else {
-                            start_index = Some(i);
-                            break;
                         }
+                        start_index = Some(i);
+                        break;
                     }
                     None => return Err(MemoryError::OutOfMemory),
                 }
@@ -156,7 +155,7 @@ impl PhysicalMemoryAllocator {
             // check to see if there are enough pages here
             for _ in 0..(page_count - 1) {
                 match pi.next() {
-                    Some((i, allocated)) => {
+                    Some((_, allocated)) => {
                         if *allocated {
                             // go find the next range of unallocated pages, this one is too small
                             continue 'top;

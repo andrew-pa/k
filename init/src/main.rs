@@ -73,9 +73,11 @@ pub extern "C" fn _start(
         }
     }
 
-    let sus_addr = 0x5000 as *mut u8;
-    let x = unsafe { sus_addr.read_volatile() };
-    log::info!("got {x}");
+    exit();
+
+    // let sus_addr = 0x5000 as *mut u8;
+    // let x = unsafe { sus_addr.read_volatile() };
+    // log::info!("got {x}");
 
     // let path = "/fat/abcdefghij/test.txt";
     let path = "/fat/init";

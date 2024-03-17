@@ -1,4 +1,8 @@
-//! Device Tree blob parser.
+//! Device Tree blob.
+//!
+//! Parser/search routines for the
+//! [DeviceTree Specification](https://github.com/devicetree-org/devicetree-specification)
+//! to obtain hardware/boot parameters.
 //!
 //! This is designed to require no allocation/copying so that it can be used as soon as possible
 //! during the boot process.
@@ -6,7 +10,6 @@
 //! in their respective portion of the tree, but this module contains common structures and
 //! iterators to make that easier.
 //!
-//! [DeviceTree Specification](https://github.com/devicetree-org/devicetree-specification)
 use core::{ffi::CStr, fmt::Debug};
 
 use byteorder::{BigEndian, ByteOrder};
@@ -16,11 +19,29 @@ use crate::memory::VirtualAddress;
 /// The magic value expected in the device tree header.
 pub const EXPECTED_MAGIC: u32 = 0xd00d_feed;
 
-const FDT_BEGIN_NODE: u8 = 0x01;
-const FDT_END_NODE: u8 = 0x02;
-const FDT_PROP: u8 = 0x03;
-const FDT_NOP: u8 = 0x04;
-const FDT_END: u8 = 0x09;
+/// Values used to delimit structure in the flattened device tree.
+#[repr(u32)]
+enum FdtToken {
+    BeginNode = 0x01,
+    EndNode = 0x02,
+    Prop = 0x03,
+    Nop = 0x04,
+    End = 0x09,
+    Unknown(u32),
+}
+
+impl From<u32> for FdtToken {
+    fn from(value: u32) -> Self {
+        match value {
+            0x01 => FdtToken::BeginNode,
+            0x02 => FdtToken::EndNode,
+            0x03 => FdtToken::Prop,
+            0x04 => FdtToken::Nop,
+            0x09 => FdtToken::End,
+            _ => FdtToken::Unknown(value),
+        }
+    }
+}
 
 /// Device tree blob header.
 struct BlobHeader<'a> {
@@ -264,8 +285,10 @@ impl<'dt> Iterator for Cursor<'dt> {
     fn next(&mut self) -> Option<Self::Item> {
         loop {
             self.current_offset += 4;
-            match BigEndian::read_u32(&self.dt.structure[(self.current_offset - 4)..]) {
-                1 => {
+            match FdtToken::from(BigEndian::read_u32(
+                &self.dt.structure[(self.current_offset - 4)..],
+            )) {
+                FdtToken::BeginNode => {
                     let mut name_end = self.current_offset;
                     while self.dt.structure.get(name_end).map_or(false, |b| *b != 0) {
                         name_end += 1;
@@ -276,8 +299,8 @@ impl<'dt> Iterator for Cursor<'dt> {
                     self.current_offset = pad_end_4b(name_end + 1);
                     return Some(StructureItem::StartNode(name));
                 }
-                2 => return Some(StructureItem::EndNode),
-                3 => {
+                FdtToken::EndNode => return Some(StructureItem::EndNode),
+                FdtToken::Prop => {
                     let length =
                         BigEndian::read_u32(&self.dt.structure[self.current_offset..]) as usize;
                     self.current_offset += 4;
@@ -312,9 +335,9 @@ impl<'dt> Iterator for Cursor<'dt> {
                         std_interp,
                     });
                 }
-                4 => continue,
-                9 => return None,
-                x => panic!("unknown device tree token: {x}"),
+                FdtToken::Nop => continue,
+                FdtToken::End => return None,
+                FdtToken::Unknown(x) => panic!("unknown device tree token: {x}"),
             }
         }
     }
@@ -358,7 +381,7 @@ impl<'dt> Iterator for StringList<'dt> {
                     self.current_offset += s.to_bytes_with_nul().len();
                     Some(s)
                 }
-                Err(e) => None,
+                Err(_) => None,
             }
         }
     }

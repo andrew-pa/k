@@ -9,18 +9,14 @@
 //! time, accessable by calling [interrupt_controller].
 use core::{arch::global_asm, cell::OnceCell, fmt::Display};
 
-use alloc::boxed::Box;
+use alloc::{boxed::Box, sync::Arc};
 use bitfield::bitfield;
 use spin::{Mutex, MutexGuard};
 
 use crate::{
+    ds::maps::CHashMap,
     memory::{PhysicalAddress, VirtualAddress},
-    process::{
-        self,
-        thread::reg::{read_exception_link_reg, read_stack_pointer},
-        ProcessId,
-    },
-    timer, CHashMapG,
+    process::{self, thread::reg::read_exception_link_reg, Process, Thread},
 };
 
 /// An interrupt identifier.
@@ -128,17 +124,17 @@ pub type InterruptHandler = Box<dyn FnMut(InterruptId, &mut Registers)>;
 /// A callback that can be registered to handle a system call.
 ///
 /// The function is given the number of the system call it is handling,
-/// the process and thread ID that invoked the system call,
+/// the process and thread that invoked the system call,
 /// and a mutable reference to the current [Registers] of the running thread.
-pub type SyscallHandler = fn(u16, process::ProcessId, process::ThreadId, &mut Registers);
+pub type SyscallHandler = fn(u16, Arc<Process>, Arc<Thread>, &mut Registers);
 
 static mut IC: OnceCell<Mutex<Box<dyn InterruptController>>> = OnceCell::new();
-static mut INTERRUPT_HANDLERS: OnceCell<CHashMapG<InterruptId, InterruptHandler>> = OnceCell::new();
-static mut SYSTEM_CALL_HANDLERS: OnceCell<CHashMapG<u16, SyscallHandler>> = OnceCell::new();
+static mut INTERRUPT_HANDLERS: OnceCell<CHashMap<InterruptId, InterruptHandler>> = OnceCell::new();
+static mut SYSTEM_CALL_HANDLERS: OnceCell<CHashMap<u16, SyscallHandler>> = OnceCell::new();
 
 /// Initialize the interrupt controller using information in the device tree.
 /// The type of the interrupt controller is automatically detected.
-pub fn init_interrupts(device_tree: &crate::dtb::DeviceTree) {
+pub fn init_interrupts(device_tree: &crate::ds::dtb::DeviceTree) {
     // for now this is our only implementation
     let gic = gic::GenericInterruptController::in_device_tree(device_tree).expect("find/init GIC");
 
@@ -152,6 +148,7 @@ pub fn init_interrupts(device_tree: &crate::dtb::DeviceTree) {
             .expect("init interrupts once");
         SYSTEM_CALL_HANDLERS
             .set(Default::default())
+            .ok()
             .expect("init syscall table once");
     }
 }
@@ -162,12 +159,12 @@ pub fn interrupt_controller() -> MutexGuard<'static, Box<dyn InterruptController
 }
 
 /// Get the interrupt handler table.
-pub fn interrupt_handlers() -> &'static CHashMapG<InterruptId, InterruptHandler> {
+pub fn interrupt_handlers() -> &'static CHashMap<InterruptId, InterruptHandler> {
     unsafe { INTERRUPT_HANDLERS.get().expect("init interrupts") }
 }
 
 /// Get the system call handler table.
-pub fn system_call_handlers() -> &'static CHashMapG<u16, SyscallHandler> {
+pub fn system_call_handlers() -> &'static CHashMap<u16, SyscallHandler> {
     unsafe { SYSTEM_CALL_HANDLERS.get().expect("init syscall table") }
 }
 
@@ -217,6 +214,31 @@ pub fn read_interrupt_mask() -> InterruptMask {
 #[inline]
 pub unsafe fn write_interrupt_mask(m: InterruptMask) {
     core::arch::asm!("msr DAIF, {v}", v = in(reg) m.0);
+}
+
+/// A guard that disables interrupts until it is dropped, then reenables them.
+pub struct InterruptGuard {
+    previous_mask: InterruptMask,
+}
+
+impl InterruptGuard {
+    /// Disable interrupts until the guard is dropped, when the previous interrupt mask will be
+    /// restored.
+    pub fn disable_interrupts_until_drop() -> Self {
+        let previous_mask = read_interrupt_mask();
+        unsafe {
+            write_interrupt_mask(InterruptMask::all_disabled());
+        }
+        InterruptGuard { previous_mask }
+    }
+}
+
+impl Drop for InterruptGuard {
+    fn drop(&mut self) {
+        unsafe {
+            write_interrupt_mask(InterruptMask(self.previous_mask.0));
+        }
+    }
 }
 
 /// A stored version of the system registers x0..x31.
@@ -319,7 +341,7 @@ impl core::fmt::Debug for ExceptionClass {
             0b100100 => write!(f, "[Data Abort exception from a lower Exception level]"),
             0b100101 => write!(f, "[Data Abort exception taken without a change in Exception level]"),
             0b100110 => write!(f, "[SP alignment fault exception]"),
-            c => write!(f, "[Unknown]")
+            _ => write!(f, "[Unknown]")
         }
     }
 }

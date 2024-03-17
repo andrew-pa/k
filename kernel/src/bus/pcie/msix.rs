@@ -2,7 +2,7 @@
 //!
 //! This module provides a nice interface for configuring a device to use message signaled
 //! interrupts, independent of the interrupt controller.
-use bitfield::{bitfield, Bit, BitMut};
+use bitfield::BitMut;
 
 use super::Type0ConfigHeader;
 

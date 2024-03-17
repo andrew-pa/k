@@ -1,17 +1,12 @@
 //! Data structures for FAT filesystems
+use super::*;
 use core::ops::Deref;
 
-use alloc::string::String;
 use bitflags::bitflags;
-use bytemuck::{bytes_of, bytes_of_mut, from_bytes, Pod, Zeroable};
-use futures::Stream;
-use smallvec::SmallVec;
+use bytemuck::{Pod, Zeroable};
+
 use snafu::Snafu;
 use widestring::Utf16Str;
-
-use crate::fs::StorageSnafu;
-
-use super::*;
 
 /// A entry in the partition table found in the MBR.
 #[repr(C, packed)]
@@ -167,11 +162,6 @@ pub enum FatError {
         source: widestring::error::Utf16Error,
         entry: DirEntry,
     },
-
-    InvalidShortName {
-        reason: &'static str,
-        name: String,
-    },
 }
 
 impl LongDirEntry {
@@ -185,7 +175,7 @@ impl LongDirEntry {
         if self.name.is_empty() {
             if name.len() <= 11 {
                 let (name, ext) = name.split_once('.').unwrap_or_else(|| (&name[0..], ""));
-                let ename = (&self.short_name[0..8]);
+                let ename = &self.short_name[0..8];
                 let eext = &self.short_name[8..11];
                 // compare by bytes b/c if the name isn't ASCII then it can't match
                 // regardless

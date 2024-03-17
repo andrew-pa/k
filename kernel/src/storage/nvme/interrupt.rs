@@ -8,16 +8,17 @@ use alloc::{boxed::Box, sync::Arc};
 use smallvec::SmallVec;
 
 use crate::{
+    ds::maps::CHashMap,
     exception::{self, InterruptId},
-    CHashMapG,
 };
 
-use super::queue::{Command, Completion, CompletionQueue, QueueId};
+use super::queue::{Command, Completion, CompletionQueue};
 
 pub struct CompletionFuture {
     cmd_id: u16,
+    #[allow(unused)] // we're only holding these to drop them when the future is dropped
     extra_data_ptr_pages_to_drop: SmallVec<[crate::memory::PhysicalBuffer; 1]>,
-    pending_completions: Arc<CHashMapG<u16, PendingCompletion>>,
+    pending_completions: Arc<CHashMap<u16, PendingCompletion>>,
 }
 
 impl Future for CompletionFuture {
@@ -26,20 +27,20 @@ impl Future for CompletionFuture {
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         use PendingCompletion::*;
         log::debug!("polling NVMe completion future for {}", self.cmd_id);
-        let pc = self.pending_completions.remove(&self.cmd_id);
+        let pc = self.pending_completions.remove_blocking(&self.cmd_id);
         // TODO: if we recieve an interrupt here and pc == None, will we ever get the
         // completion? probably not
         match pc {
             None => {
                 log::debug!("pending");
                 self.pending_completions
-                    .insert(self.cmd_id, Waiting(cx.waker().clone()));
+                    .insert_blocking(self.cmd_id, Waiting(cx.waker().clone()));
                 Poll::Pending
             }
             Some(Waiting(_)) => {
                 log::warn!("future repolled while waiting");
                 self.pending_completions
-                    .insert(self.cmd_id, Waiting(cx.waker().clone()));
+                    .insert_blocking(self.cmd_id, Waiting(cx.waker().clone()));
                 Poll::Pending
             }
             Some(Ready(cmp)) => Poll::Ready(cmp),
@@ -54,7 +55,7 @@ enum PendingCompletion {
 
 pub struct CompletionQueueHandle {
     next_cmd_id: u16,
-    pending_completions: Arc<CHashMapG<u16, PendingCompletion>>,
+    pending_completions: Arc<CHashMap<u16, PendingCompletion>>,
     int_id: InterruptId,
 }
 
@@ -80,14 +81,14 @@ impl Drop for CompletionQueueHandle {
         // make sure the underlying completion queue gets dropped and that interrupts won't
         // happen that will go unhandled
         // TODO: disable interrupts
-        exception::interrupt_handlers().remove(&self.int_id);
+        exception::interrupt_handlers().remove_blocking(&self.int_id);
     }
 }
 
 fn handle_interrupt(
     int_id: InterruptId,
     qu: &mut CompletionQueue,
-    pending_completions: &Arc<CHashMapG<u16, PendingCompletion>>,
+    pending_completions: &Arc<CHashMap<u16, PendingCompletion>>,
 ) {
     use PendingCompletion::*;
     log::debug!("handling NVMe interrupt {int_id}, {}", qu.queue_id());
@@ -97,7 +98,7 @@ fn handle_interrupt(
             Arc::as_ptr(pending_completions) as *const _ as usize
         );
         log::debug!("got completion {cmp:x?}");
-        if let Some(mut pc) = pending_completions.get_mut(&cmp.id) {
+        if let Some(mut pc) = pending_completions.get_mut_blocking(&cmp.id) {
             log::debug!("pending completion?");
             *pc = match &*pc {
                 Waiting(w) => {
@@ -109,7 +110,7 @@ fn handle_interrupt(
             }
         } else {
             log::debug!("inserting pending ready completion");
-            pending_completions.insert(cmp.id, Ready(cmp));
+            pending_completions.insert_blocking(cmp.id, Ready(cmp));
         }
     } else {
         // panic here?
@@ -130,10 +131,10 @@ pub fn register_completion_queue(
     int_id: InterruptId,
     mut qu: CompletionQueue,
 ) -> CompletionQueueHandle {
-    let pending_completions: Arc<CHashMapG<u16, PendingCompletion>> = Arc::new(Default::default());
+    let pending_completions: Arc<CHashMap<u16, PendingCompletion>> = Arc::new(Default::default());
     {
         let pending_completions = pending_completions.clone();
-        exception::interrupt_handlers().insert(
+        exception::interrupt_handlers().insert_blocking(
             int_id,
             Box::new(move |int_id, _| handle_interrupt(int_id, &mut qu, &pending_completions)),
         );

@@ -5,13 +5,10 @@
 // TODO: physical vs virtual timers?
 
 use bitfield::bitfield;
-use byteorder::{BigEndian, ByteOrder};
-use core::{arch::asm, ffi::CStr};
 
-use crate::{
-    dtb::{DeviceTree, StructureItem},
-    exception,
-};
+use core::arch::asm;
+
+use crate::{ds::dtb::DeviceTree, exception};
 
 pub fn read_compare_value() -> u64 {
     let mut cv: u64;

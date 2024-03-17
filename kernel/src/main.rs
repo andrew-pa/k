@@ -2,7 +2,7 @@
 //!
 //! The kernel has a modular, but monolithic design.
 //! Execution starts in `start.S`, which then calls [kmain].
-//! Devices are detected using the Device Tree blob provided by `u-boot` (see [dtb]).
+//! Devices are detected using the Device Tree blob provided by `u-boot` (see [ds::dtb]).
 //! The kernel uses `async`/`await` to handle asynchronous operations, and includes a kernel-level
 //! task executor to drive tasks to completion (see [tasks]). This runs in its own kernel thread.
 #![no_std]
@@ -17,17 +17,15 @@
 #![feature(error_in_core)]
 #![test_runner(crate::test_runner)]
 #![reexport_test_harness_main = "test_main"]
-#![allow(unused)]
 
 extern crate alloc;
 
 use alloc::boxed::Box;
-use core::{arch::global_asm, panic::PanicInfo};
+use core::arch::global_asm;
 use memory::PhysicalAddress;
 use qemu_exit::QEMUExit as _;
-use smallvec::SmallVec;
 
-pub mod dtb;
+pub mod ds;
 pub mod registry;
 
 pub mod exception;
@@ -45,16 +43,6 @@ pub mod fs;
 pub mod init;
 
 pub mod intrinsics;
-
-/// A concurrent hash map using spinlocks.
-pub type CHashMapG<K, V> =
-    chashmap::CHashMap<K, V, hashbrown::hash_map::DefaultHashBuilder, spin::RwLock<()>>;
-/// The read guard for [CHashMapG].
-pub type CHashMapGReadGuard<'a, K, V> =
-    chashmap::ReadGuard<'a, K, V, hashbrown::hash_map::DefaultHashBuilder, spin::RwLock<()>>;
-/// The write guard for [CHashMapG].
-pub type CHashMapGWriteGuard<'a, K, V> =
-    chashmap::WriteGuard<'a, K, V, hashbrown::hash_map::DefaultHashBuilder, spin::RwLock<()>>;
 
 global_asm!(include_str!("start.S"));
 
@@ -87,7 +75,7 @@ pub extern "C" fn kmain(dtb_addr: PhysicalAddress) -> ! {
     // Load the device tree blob at the address provided by u-boot as a parameter.
     // See u-boot/arch/arm/lib/bootm.c:boot_jump_linux(...).
     log::trace!("reading device tree blob at {dtb_addr}");
-    let dt = unsafe { dtb::DeviceTree::at_address(dtb_addr.to_virtual_canonical()) };
+    let dt = unsafe { ds::dtb::DeviceTree::at_address(dtb_addr.to_virtual_canonical()) };
 
     memory::init_physical_memory_allocator(&dt);
     memory::paging::init_kernel_page_table();
@@ -111,6 +99,7 @@ pub extern "C" fn kmain(dtb_addr: PhysicalAddress) -> ! {
     let opts = init::find_boot_options(dt);
 
     #[cfg(test)]
+    #[allow(unreachable_code)]
     {
         log::info!("boot succesful, running unit tests!");
         test_main();
@@ -139,6 +128,7 @@ pub extern "C" fn kmain(dtb_addr: PhysicalAddress) -> ! {
 
 /// Handle panics in the kernel by writing them to the debug UART.
 #[panic_handler]
+#[allow(unreachable_code)]
 pub fn panic_handler(info: &core::panic::PanicInfo) -> ! {
     use core::fmt::Write;
     let mut uart = uart::DebugUart {
@@ -166,9 +156,9 @@ where
         let mut uart = uart::DebugUart {
             base: 0xffff_0000_0900_0000 as *mut u8,
         };
-        write!(&mut uart, "{}...\t", core::any::type_name::<T>());
+        write!(&mut uart, "{}...\t", core::any::type_name::<T>()).unwrap();
         self();
-        writeln!(&mut uart, "ok");
+        writeln!(&mut uart, "ok").unwrap();
     }
 }
 
@@ -179,4 +169,28 @@ pub fn test_runner(tests: &[&dyn Testable]) {
         test.run();
     }
     log::info!("all tests successful");
+}
+
+#[macro_export]
+/// Assert that some type `t` implements [Send], causing a compiler error if not.
+macro_rules! assert_send {
+    ($t:ty) => {
+        const _: fn() = || {
+            struct CheckSend<T: Send>(core::marker::PhantomData<T>);
+            let _ = CheckSend::<$t>(core::marker::PhantomData);
+            unreachable!();
+        };
+    };
+}
+
+#[macro_export]
+/// Assert that some type `t` implements [Sync], causing a compiler error if not.
+macro_rules! assert_sync {
+    ($t:ty) => {
+        const _: fn() = || {
+            struct CheckSync<T: Sync>(core::marker::PhantomData<T>);
+            let _ = CheckSync::<$t>(core::marker::PhantomData);
+            unreachable!();
+        };
+    };
 }
