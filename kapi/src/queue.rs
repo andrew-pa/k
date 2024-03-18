@@ -1,23 +1,23 @@
-use core::{ptr::NonNull, sync::atomic::AtomicUsize};
+use core::{num::NonZeroU16, ptr::NonNull, sync::atomic::AtomicUsize};
 
-use crate::memory::{paging::PageTableEntryOptions, MemoryError, PhysicalBuffer};
-
-use kapi::{Command, Completion};
 use snafu::Snafu;
 
 #[derive(Debug, Snafu)]
-pub enum QueueError {
+pub enum Error {
     #[snafu(display("queue is too full to receive message"))]
     Full,
 }
 
-pub type QueueId = u32;
+pub type QueueId = NonZeroU16;
 
-/// A single synchronized queue. Works the same as an NVMe queue.
+/// A single synchronized queue reference.
+///
+/// This queue does *not* own the memory that backs it.
+/// Works the same as an NVMe queue.
 ///
 /// A queue is internally mutable and synchronized.
-struct Queue<T> {
-    buffer: PhysicalBuffer,
+pub struct Queue<T> {
+    pub id: QueueId,
     queue_len: usize,
     /// A pointer into the buffer to the value of the head index.
     head_ptr: NonNull<AtomicUsize>,
@@ -32,35 +32,29 @@ unsafe impl<T: Send> Send for Queue<T> {}
 unsafe impl<T: Send> Sync for Queue<T> {}
 
 impl<T> Queue<T> {
-    fn new(size_in_pages: usize) -> Result<Queue<T>, MemoryError> {
-        let buffer = PhysicalBuffer::alloc_zeroed(
-            size_in_pages,
-            &PageTableEntryOptions {
-                read_only: false,
-                el0_access: true,
-            },
-        )?;
-
+    /// Create a new queue backed by a region of memory.
+    ///
+    /// # Safety
+    /// `backing_memory` must point to a valid region of memory that is at least `size_in_bytes` bytes long.
+    /// `backing_memory` must also be correctly aligned for atomic load/store operations of `usize`.
+    pub unsafe fn new(id: QueueId, size_in_bytes: usize, backing_memory: NonNull<()>) -> Queue<T> {
         // compute the number of slots in the queue
         let queue_len =
-            (buffer.len() - (core::mem::size_of::<AtomicUsize>() * 2)) / core::mem::size_of::<T>();
+            (size_in_bytes - (core::mem::size_of::<AtomicUsize>() * 2)) / core::mem::size_of::<T>();
 
         // place the head/tail pointers at the start of the buffer
-        let p: *mut AtomicUsize = buffer.virtual_address().as_ptr();
+        let p: NonNull<AtomicUsize> = backing_memory.cast();
 
         // put the messages after the head and tail pointers in the buffer
-        let data_ptr: *mut T = buffer
-            .virtual_address()
-            .add(core::mem::size_of::<AtomicUsize>() * 2)
-            .as_ptr();
+        let data_ptr: NonNull<T> = p.add(2).cast();
 
-        Ok(Queue {
+        Queue {
+            id,
             queue_len,
-            head_ptr: NonNull::new(p).unwrap(),
-            tail_ptr: NonNull::new(unsafe { p.offset(1) }).unwrap(),
-            data_ptr: NonNull::new(data_ptr).unwrap(),
-            buffer,
-        })
+            head_ptr: p,
+            tail_ptr: p.add(1),
+            data_ptr,
+        }
     }
 
     /// Gets the head index (the index of the next free slot).
@@ -113,7 +107,6 @@ impl<T> Queue<T> {
     pub fn poll(&self) -> Option<T> {
         let head = self.head();
         (head != self.tail()).then(|| unsafe {
-            log::trace!("head = {head}, tail = {}", self.tail());
             let cmd = self.data_ptr.offset(head as isize).read();
             self.move_head();
             cmd
@@ -121,7 +114,7 @@ impl<T> Queue<T> {
     }
 
     /// Post a message in the queue.
-    pub fn post(&self, msg: &T) -> Result<(), QueueError> {
+    pub fn post(&self, msg: &T) -> Result<(), Error> {
         let tail = self.tail();
         (self.head() != (tail + 1) % self.queue_len)
             .then(|| {
@@ -131,46 +124,6 @@ impl<T> Queue<T> {
                 }
                 self.move_tail();
             })
-            .ok_or(QueueError::Full)
-    }
-}
-
-/// A bi-directional communication channel between the kernel and a user-space process using shared memory.
-pub struct Channel {
-    /// The submission queue queues messages from a process to the kernel. The user-space process is the "submitter".
-    submission: Queue<Command>,
-
-    /// A completion queue queues messages from the kernel to the a user-space process. These messages represent the completion of actions requested by previous messages submitted by the process.
-    completion: Queue<Completion>,
-}
-
-impl Channel {
-    /// Allocate a new channel.
-    pub fn new(
-        submission_size_in_pages: usize,
-        completion_size_in_pages: usize,
-    ) -> Result<Channel, MemoryError> {
-        Ok(Channel {
-            submission: Queue::new(submission_size_in_pages)?,
-            completion: Queue::new(completion_size_in_pages)?,
-        })
-    }
-
-    pub fn submission_queue_buffer(&self) -> &PhysicalBuffer {
-        &self.submission.buffer
-    }
-
-    pub fn completion_queue_buffer(&self) -> &PhysicalBuffer {
-        &self.completion.buffer
-    }
-
-    /// Returns the first outstanding command message in the channel if present.
-    pub fn poll(&self) -> Option<Command> {
-        self.submission.poll()
-    }
-
-    /// Post a completion message in the channel.
-    pub fn post(&self, msg: &Completion) -> Result<(), QueueError> {
-        self.completion.post(msg)
+            .ok_or(Error::Full)
     }
 }

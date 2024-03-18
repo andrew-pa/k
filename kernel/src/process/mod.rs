@@ -13,7 +13,12 @@ use crate::{
 use alloc::sync::Arc;
 
 use bitfield::{bitfield, Bit};
-use core::{cell::OnceCell, num::NonZeroU32, sync::atomic::AtomicU32};
+use core::{
+    cell::OnceCell,
+    num::NonZeroU32,
+    sync::atomic::{AtomicU16, AtomicU32},
+};
+use kapi::{Command, Completion};
 use smallvec::SmallVec;
 use snafu::{OptionExt, ResultExt, Snafu};
 
@@ -25,8 +30,9 @@ pub mod interface;
 mod spawn;
 pub use spawn::{spawn_process, SpawnError};
 
-use interface::channel::Channel;
 use thread::*;
+
+use interface::OwnedQueue;
 
 /// The unique ID of a process.
 pub type ProcessId = NonZeroU32;
@@ -41,9 +47,12 @@ pub struct Process {
     threads: Mutex<SmallVec<[Arc<Thread>; 2]>>,
     /// Page tables for this process.
     page_tables: PageTable,
-    channel: Channel,
     #[allow(dead_code)]
     address_space_allocator: VirtualAddressAllocator,
+
+    next_queue_id: AtomicU16,
+    send_queues: ConcurrentLinkedList<Arc<OwnedQueue<Command>>>,
+    receive_queues: ConcurrentLinkedList<Arc<OwnedQueue<Completion>>>,
 }
 
 crate::assert_sync!(Process);
