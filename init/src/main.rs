@@ -7,11 +7,12 @@
 #![feature(iter_array_chunks)]
 #![feature(non_null_convenience)]
 
-use core::arch::asm;
+use core::{arch::asm, ptr::NonNull};
 
-use kapi::Command;
-
-mod channel;
+use kapi::{
+    queue::{Queue, FIRST_RECV_QUEUE_ID, FIRST_SEND_QUEUE_ID},
+    Command, Completion,
+};
 
 #[inline]
 fn log_record(r: &log::Record) {
@@ -45,29 +46,42 @@ impl log::Log for KernelLogger {
 
 #[no_mangle]
 pub extern "C" fn _start(
-    channel_base_addr: usize,
-    channel_sub_size: usize,
-    channel_com_size: usize,
+    send_qu_addr: usize,
+    send_qu_len: usize,
+    recv_qu_addr: usize,
+    recv_qu_len: usize,
 ) {
     log::set_logger(&KernelLogger).expect("set logger");
     log::set_max_level(log::LevelFilter::Trace);
-    log::info!("starting init process. kernel channel @ 0x{channel_base_addr:x}:{channel_sub_size:x}/{channel_com_size:x}");
-    let mut ch = unsafe {
-        channel::Channel::from_kernel(channel_base_addr, channel_sub_size, channel_com_size)
+    log::info!("starting init process. kernel queues @ Send[0x{send_qu_addr:x}:{send_qu_len:x}] Recv[0x{recv_qu_addr:x}:{recv_qu_len:x}]");
+    let (send_qu, recv_qu) = unsafe {
+        (
+            Queue::new(
+                FIRST_SEND_QUEUE_ID,
+                send_qu_len,
+                NonNull::new(send_qu_addr as *mut _).expect("send queue ptr is non-null"),
+            ),
+            Queue::<Completion>::new(
+                FIRST_RECV_QUEUE_ID,
+                recv_qu_len,
+                NonNull::new(recv_qu_addr as *mut _).expect("recv queue ptr is non-null"),
+            ),
+        )
     };
 
-    ch.post(&Command {
-        kind: kapi::CommandKind::Test,
-        id: 0,
-        completion_semaphore: None,
-        args: [1, 2, 3, 4],
-    })
-    .expect("post message to channel");
+    send_qu
+        .post(&Command {
+            kind: kapi::CommandKind::Test,
+            id: 0,
+            completion_semaphore: None,
+            args: [1, 2, 3, 4],
+        })
+        .expect("post message to channel");
 
     log::info!("waiting for kernel response");
 
     loop {
-        if let Some(c) = ch.poll() {
+        if let Some(c) = recv_qu.poll() {
             log::info!("got kernel response: {c:?}");
             break;
         }
@@ -82,16 +96,17 @@ pub extern "C" fn _start(
     // let path = "/fat/abcdefghij/test.txt";
     let path = "/fat/init";
     log::info!("spawning process {path}");
-    ch.post(&Command {
-        kind: kapi::CommandKind::SpawnProcess,
-        id: 1,
-        completion_semaphore: None,
-        args: [path.as_ptr() as u64, path.len() as u64, 0, 0],
-    })
-    .expect("post message to channel");
+    send_qu
+        .post(&Command {
+            kind: kapi::CommandKind::SpawnProcess,
+            id: 1,
+            completion_semaphore: None,
+            args: [path.as_ptr() as u64, path.len() as u64, 0, 0],
+        })
+        .expect("post message to channel");
 
     loop {
-        if let Some(c) = ch.poll() {
+        if let Some(c) = recv_qu.poll() {
             log::info!("got kernel response: {c:?}");
             break;
         }

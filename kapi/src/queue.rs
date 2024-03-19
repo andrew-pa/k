@@ -9,6 +9,8 @@ pub enum Error {
 }
 
 pub type QueueId = NonZeroU16;
+pub const FIRST_SEND_QUEUE_ID: QueueId = unsafe { NonZeroU16::new_unchecked(1) };
+pub const FIRST_RECV_QUEUE_ID: QueueId = unsafe { NonZeroU16::new_unchecked(2) };
 
 /// A single synchronized queue reference.
 ///

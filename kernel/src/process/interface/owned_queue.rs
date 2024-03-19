@@ -9,7 +9,7 @@ use crate::memory::{paging::PageTableEntryOptions, MemoryError, PhysicalBuffer};
 /// Works the same as an NVMe queue.
 /// A queue is internally mutable and synchronized.
 pub struct OwnedQueue<T> {
-    buffer: PhysicalBuffer,
+    pub buffer: PhysicalBuffer,
     queue: Queue<T>,
 }
 
