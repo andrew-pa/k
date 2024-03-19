@@ -101,7 +101,7 @@ pub fn threads() -> &'static ConcurrentLinkedList<Arc<Thread>> {
 
 /// Retrieve a thread by its id.
 pub fn thread_for_id(tid: ThreadId) -> Option<Arc<Thread>> {
-    threads().find(|t| t.id == tid)
+    threads().iter().find(|t| t.id == tid).cloned()
 }
 
 static mut NEXT_TID: AtomicU32 = AtomicU32::new(TASK_THREAD + 1);

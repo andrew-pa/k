@@ -13,7 +13,12 @@ use crate::{
 use alloc::sync::Arc;
 
 use bitfield::{bitfield, Bit};
-use core::{cell::OnceCell, num::NonZeroU32, sync::atomic::AtomicU32};
+use core::{
+    cell::OnceCell,
+    num::NonZeroU32,
+    sync::atomic::{AtomicU16, AtomicU32},
+};
+use kapi::{Command, Completion};
 use smallvec::SmallVec;
 use snafu::{OptionExt, ResultExt, Snafu};
 
@@ -25,8 +30,9 @@ pub mod interface;
 mod spawn;
 pub use spawn::{spawn_process, SpawnError};
 
-use interface::channel::Channel;
 use thread::*;
+
+use interface::OwnedQueue;
 
 /// The unique ID of a process.
 pub type ProcessId = NonZeroU32;
@@ -41,9 +47,12 @@ pub struct Process {
     threads: Mutex<SmallVec<[Arc<Thread>; 2]>>,
     /// Page tables for this process.
     page_tables: PageTable,
-    channel: Channel,
     #[allow(dead_code)]
     address_space_allocator: VirtualAddressAllocator,
+    #[allow(dead_code)]
+    next_queue_id: AtomicU16,
+    #[allow(clippy::type_complexity)]
+    queues: ConcurrentLinkedList<(Arc<OwnedQueue<Command>>, Arc<OwnedQueue<Completion>>)>,
 }
 
 crate::assert_sync!(Process);
@@ -58,20 +67,23 @@ impl Process {
     pub fn dispatch_new_commands(self: &Arc<Process>) {
         // downgrade the Arc so that pending tasks don't keep the process alive unnecessarily
         let this = &Arc::downgrade(self);
-        while let Some(cmd) = self.channel.poll() {
-            log::trace!("recieved command: {cmd:?}");
-            let this = this.clone();
-            crate::tasks::spawn(async move {
-                if let Some(proc) = this.upgrade() {
-                    let cmpl = interface::dispatch(&proc, cmd).await;
-                    match proc.channel.post(&cmpl) {
-                        Ok(()) => {}
-                        Err(_) => {
-                            todo!("kill process on queue overflow")
+        for (send_qu, assoc_recv_qu) in self.queues.iter() {
+            while let Some(cmd) = send_qu.poll() {
+                log::trace!("recieved command: {cmd:?}");
+                let this = this.clone();
+                let assoc_recv_qu = assoc_recv_qu.clone();
+                crate::tasks::spawn(async move {
+                    if let Some(proc) = this.upgrade() {
+                        let cmpl = interface::dispatch(&proc, cmd).await;
+                        match assoc_recv_qu.post(&cmpl) {
+                            Ok(()) => {}
+                            Err(_) => {
+                                todo!("kill process on queue overflow")
+                            }
                         }
                     }
-                }
-            });
+                });
+            }
         }
     }
 
@@ -100,7 +112,7 @@ pub fn processes() -> &'static ConcurrentLinkedList<Arc<Process>> {
 }
 
 pub fn process_for_id(id: ProcessId) -> Option<Arc<Process>> {
-    processes().find(|p| p.id == id)
+    processes().iter().find(|p| p.id == id).cloned()
 }
 
 /// Cause a process to exit by ID, freeing its resources.
@@ -108,21 +120,17 @@ pub fn process_for_id(id: ProcessId) -> Option<Arc<Process>> {
 fn exit_process(proc: Arc<Process>) {
     log::trace!("process {} exited", proc.id);
 
-    processes()
-        .remove(|p| p.id == proc.id)
-        .expect("processes only exit once and can only exit if they have already started running");
+    processes().remove(|p| p.id == proc.id);
 
     // delete and unschedule all threads
     // removing the current thread will automatically schedule a new thread to run
     for thread in proc.threads.lock_blocking().drain(..) {
         scheduler().remove_thread(&thread);
-        threads()
-            .remove(|t| t.id == thread.id)
-            .expect("process only has valid threads");
+        threads().remove(|t| t.id == thread.id);
         // drop thread
     }
 
-    // TODO: move this to drop
+    // TODO: move this to drop since it is not async anymore
     // deal with async resources, and then drop the process (by moving it into the task)
     crate::tasks::spawn(async move {
         // free physical memory mapped in process page table

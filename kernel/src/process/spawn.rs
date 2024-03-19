@@ -1,4 +1,5 @@
 use elf::segment::ProgramHeader;
+use kapi::queue::{FIRST_RECV_QUEUE_ID, FIRST_SEND_QUEUE_ID};
 
 use super::*;
 
@@ -87,43 +88,48 @@ fn load_segment(
 /// Make a channel available to the process via mapped memory.
 /// The submission and completion queues will be layed out consecutively in memory, and mapping will be created immediately.
 /// Returns the base address and the total length in bytes of the mapped region for the submission and completion queues, respectively.
-pub fn attach_channel(
-    channel: &Channel,
+pub fn attach_queues(
+    send_qu: &OwnedQueue<Command>,
+    recv_qu: &OwnedQueue<Completion>,
     page_tables: &mut PageTable,
     address_space_allocator: &mut VirtualAddressAllocator,
-) -> Result<(VirtualAddress, usize, usize), SpawnError> {
-    let sub_buf = channel.submission_queue_buffer();
-    let com_buf = channel.completion_queue_buffer();
-    let total_len = sub_buf.len() + com_buf.len();
+) -> Result<(VirtualAddress, usize, VirtualAddress, usize), SpawnError> {
+    let total_len = send_qu.buffer.len() + recv_qu.buffer.len();
     let num_pages = total_len.div_ceil(PAGE_SIZE);
-    let base_addr = address_space_allocator
+    let send_base_addr = address_space_allocator
         .alloc(num_pages)
         .context(MemorySnafu {
             reason: "allocate in process address space for channel",
         })?;
+    let recv_base_addr = send_base_addr.add(send_qu.buffer.len());
     let map_opts = PageTableEntryOptions {
         read_only: false,
         el0_access: true,
     };
     page_tables
         .map_range(
-            sub_buf.physical_address(),
-            base_addr,
-            sub_buf.page_count(),
+            send_qu.buffer.physical_address(),
+            send_base_addr,
+            send_qu.buffer.page_count(),
             true,
             &map_opts,
         )
         .context(MemoryMapSnafu)?;
     page_tables
         .map_range(
-            com_buf.physical_address(),
-            base_addr.add(sub_buf.len()),
-            com_buf.page_count(),
+            recv_qu.buffer.physical_address(),
+            recv_base_addr,
+            recv_qu.buffer.page_count(),
             true,
             &map_opts,
         )
         .context(MemoryMapSnafu)?;
-    Ok((base_addr, sub_buf.len(), com_buf.len()))
+    Ok((
+        send_base_addr,
+        send_qu.buffer.len(),
+        recv_base_addr,
+        recv_qu.buffer.len(),
+    ))
 }
 
 /// Creates a new process from a binary loaded from a path in the registry.
@@ -221,12 +227,17 @@ pub async fn spawn_process(
         .reserve(stack_vaddr, stack_page_count)
         .expect("user process VA allocations should not overlap, and the page table should check");
 
-    // create process communication channel
-    let channel = Channel::new(2, 2).context(MemorySnafu {
-        reason: "allocate channel",
+    // create process communication queues
+    let send_qu = OwnedQueue::new(FIRST_SEND_QUEUE_ID, 2).context(MemorySnafu {
+        reason: "allocate first send queue",
     })?;
-    let (channel_base_addr, channel_sub_size, channel_com_size) =
-        attach_channel(&channel, &mut pt, &mut address_space_allocator)?;
+    let recv_qu = OwnedQueue::new(FIRST_RECV_QUEUE_ID, 2).context(MemorySnafu {
+        reason: "allocate first receive queue",
+    })?;
+    let (send_qu_addr, send_qu_size, recv_qu_addr, recv_qu_size) =
+        attach_queues(&send_qu, &recv_qu, &mut pt, &mut address_space_allocator)?;
+    let queues = ConcurrentLinkedList::default();
+    queues.push((Arc::new(send_qu), Arc::new(recv_qu)));
 
     log::debug!("process page table: {pt:?}");
 
@@ -235,7 +246,8 @@ pub async fn spawn_process(
         id: pid,
         page_tables: pt,
         threads: Default::default(),
-        channel,
+        next_queue_id: AtomicU16::new((FIRST_RECV_QUEUE_ID.saturating_add(1)).into()),
+        queues,
         address_space_allocator,
     });
     processes().push(proc.clone());
@@ -243,7 +255,7 @@ pub async fn spawn_process(
     // create main thread
     let tid = next_thread_id();
     let start_regs =
-        Registers::from_args(&[channel_base_addr.0, channel_sub_size, channel_com_size]);
+        Registers::from_args(&[send_qu_addr.0, send_qu_size, recv_qu_addr.0, recv_qu_size]);
     let main_thread = Arc::new(Thread::user_thread(
         proc.clone(),
         tid,
