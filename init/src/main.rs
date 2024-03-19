@@ -1,3 +1,4 @@
+//! The init process runs as process 1 and is responsible for setting up and managing user space.
 #![no_std]
 #![no_main]
 #![recursion_limit = "256"]
@@ -7,42 +8,13 @@
 #![feature(iter_array_chunks)]
 #![feature(non_null_convenience)]
 
-use core::{arch::asm, ptr::NonNull};
+use core::ptr::NonNull;
 
 use kapi::{
     queue::{Queue, FIRST_RECV_QUEUE_ID, FIRST_SEND_QUEUE_ID},
+    system_calls::{exit, KernelLogger},
     Command, Completion,
 };
-
-#[inline]
-fn log_record(r: &log::Record) {
-    unsafe {
-        asm!(
-            "mov x0, {p}",
-            "svc #4",
-            p = in(reg) r as *const log::Record
-        )
-    }
-}
-
-#[inline]
-fn exit() {
-    unsafe { asm!("svc #1") }
-}
-
-pub struct KernelLogger;
-
-impl log::Log for KernelLogger {
-    fn enabled(&self, _metadata: &log::Metadata) -> bool {
-        true
-    }
-
-    fn log(&self, record: &log::Record) {
-        log_record(record);
-    }
-
-    fn flush(&self) {}
-}
 
 #[no_mangle]
 pub extern "C" fn _start(

@@ -1,3 +1,4 @@
+//! API definitions and helpers for interacting with the kernel from user space.
 #![no_std]
 #![feature(non_null_convenience)]
 

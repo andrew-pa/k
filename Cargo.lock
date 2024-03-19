@@ -300,6 +300,7 @@ name = "kapi"
 version = "0.1.0"
 dependencies = [
  "bytemuck",
+ "log",
  "serde",
  "snafu",
 ]
