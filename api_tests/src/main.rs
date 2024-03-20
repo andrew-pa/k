@@ -1,4 +1,5 @@
-//! The init process is the first user space process spawned after boot and is responsible for setting up and managing user space.
+//! This program runs as a replacement for `init` and runs API/integration tests against the kernel
+//! from user space.
 #![no_std]
 #![no_main]
 #![recursion_limit = "256"]
@@ -25,7 +26,7 @@ pub extern "C" fn _start(
 ) {
     log::set_logger(&KernelLogger).expect("set logger");
     log::set_max_level(log::LevelFilter::Trace);
-    log::info!("starting init process. kernel queues @ Send[0x{send_qu_addr:x}:{send_qu_len:x}] Recv[0x{recv_qu_addr:x}:{recv_qu_len:x}]");
+    log::info!("starting API test process. kernel queues @ Send[0x{send_qu_addr:x}:{send_qu_len:x}] Recv[0x{recv_qu_addr:x}:{recv_qu_len:x}]");
     let (send_qu, recv_qu) = unsafe {
         (
             Queue::new(
@@ -51,31 +52,6 @@ pub extern "C" fn _start(
         .expect("post message to channel");
 
     log::info!("waiting for kernel response");
-
-    loop {
-        if let Some(c) = recv_qu.poll() {
-            log::info!("got kernel response: {c:?}");
-            break;
-        }
-    }
-
-    exit();
-
-    // let sus_addr = 0x5000 as *mut u8;
-    // let x = unsafe { sus_addr.read_volatile() };
-    // log::info!("got {x}");
-
-    // let path = "/fat/abcdefghij/test.txt";
-    let path = "/fat/init";
-    log::info!("spawning process {path}");
-    send_qu
-        .post(&Command {
-            kind: kapi::CommandKind::SpawnProcess,
-            id: 1,
-            completion_semaphore: None,
-            args: [path.as_ptr() as u64, path.len() as u64, 0, 0],
-        })
-        .expect("post message to channel");
 
     loop {
         if let Some(c) = recv_qu.poll() {
