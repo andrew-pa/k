@@ -17,6 +17,49 @@ use kapi::{
     Command, Completion,
 };
 
+pub trait Testable {
+    /// Execute the test.
+    fn run(&self, send_qu: &Queue<Command>, recv_qu: &Queue<Completion>);
+}
+
+impl<T> Testable for T
+where
+    T: Fn(&Queue<Command>, &Queue<Completion>),
+{
+    fn run(&self, send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
+        log::debug!("running {}...", core::any::type_name::<T>());
+        self(send_qu, recv_qu);
+        log::info!("{} ok", core::any::type_name::<T>());
+    }
+}
+
+pub fn test_runner(tests: &[&dyn Testable], send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
+    log::info!("running {} tests...", tests.len());
+    for test in tests {
+        test.run(send_qu, recv_qu);
+    }
+    log::info!("all tests successful");
+}
+
+fn cmd_test(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
+    send_qu
+        .post(&Command {
+            kind: kapi::CommandKind::Test,
+            id: 0,
+            completion_semaphore: None,
+            args: [42, 2, 3, 4],
+        })
+        .expect("post message to channel");
+
+    loop {
+        if let Some(c) = recv_qu.poll() {
+            assert_eq!(c.result0, 1);
+            assert_eq!(c.result1, 42);
+            return;
+        }
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn _start(
     send_qu_addr: usize,
@@ -42,23 +85,7 @@ pub extern "C" fn _start(
         )
     };
 
-    send_qu
-        .post(&Command {
-            kind: kapi::CommandKind::Test,
-            id: 0,
-            completion_semaphore: None,
-            args: [1, 2, 3, 4],
-        })
-        .expect("post message to channel");
-
-    log::info!("waiting for kernel response");
-
-    loop {
-        if let Some(c) = recv_qu.poll() {
-            log::info!("got kernel response: {c:?}");
-            break;
-        }
-    }
+    test_runner(&[&cmd_test], &send_qu, &recv_qu);
 
     exit();
 }
@@ -66,6 +93,5 @@ pub extern "C" fn _start(
 #[panic_handler]
 pub fn panic_handler(info: &core::panic::PanicInfo) -> ! {
     log::error!("panic! {info}");
-    exit();
-    loop {}
+    exit()
 }

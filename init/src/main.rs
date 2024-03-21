@@ -90,6 +90,5 @@ pub extern "C" fn _start(
 #[panic_handler]
 pub fn panic_handler(info: &core::panic::PanicInfo) -> ! {
     log::error!("panic! {info}");
-    exit();
-    loop {}
+    exit()
 }

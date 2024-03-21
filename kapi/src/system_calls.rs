@@ -15,8 +15,9 @@ mod wrappers {
 
     /// Exit the current process.
     #[inline]
-    pub fn exit() {
+    pub fn exit() -> ! {
         unsafe { asm!("svc #1") }
+        unreachable!()
     }
 
     /// Write a log record into the system log.

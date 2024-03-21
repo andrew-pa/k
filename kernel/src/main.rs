@@ -135,7 +135,6 @@ pub fn panic_handler(info: &core::panic::PanicInfo) -> ! {
         base: 0xffff_0000_0900_0000 as *mut u8,
     };
     let _ = uart.write_fmt(format_args!("\npanic! {info}\n"));
-    // TODO: why can't we get this to only happen during cfg(test)?
     qemu_exit::aarch64::AArch64::new().exit_failure();
     // prevent anything from getting scheduled after a kernel panic
     intrinsics::halt();
@@ -162,7 +161,7 @@ where
     }
 }
 
-/// Run provided tests, then exit QEMU or halt.
+/// Run tests as gathered by the test runner.
 pub fn test_runner(tests: &[&dyn Testable]) {
     log::info!("running {} tests...", tests.len());
     for test in tests {
@@ -172,7 +171,7 @@ pub fn test_runner(tests: &[&dyn Testable]) {
 }
 
 #[macro_export]
-/// Assert that some type `t` implements [Send], causing a compiler error if not.
+/// Assert that some type `T` implements [Send], causing a compiler error if not.
 macro_rules! assert_send {
     ($t:ty) => {
         const _: fn() = || {
@@ -184,7 +183,7 @@ macro_rules! assert_send {
 }
 
 #[macro_export]
-/// Assert that some type `t` implements [Sync], causing a compiler error if not.
+/// Assert that some type `T` implements [Sync], causing a compiler error if not.
 macro_rules! assert_sync {
     ($t:ty) => {
         const _: fn() = || {

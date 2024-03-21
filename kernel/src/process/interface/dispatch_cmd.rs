@@ -10,7 +10,7 @@ pub async fn dispatch(proc: &Arc<Process>, cmd: Command) -> Completion {
             kind: CompletionKind::Success,
             response_to_id: cmd.id,
             result0: proc.id.into(),
-            result1: 0,
+            result1: cmd.args[0],
         },
         CommandKind::SpawnProcess => {
             let path_bytes = unsafe {
