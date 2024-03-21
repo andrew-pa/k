@@ -14,7 +14,7 @@ use core::ptr::NonNull;
 use kapi::{
     queue::{Queue, FIRST_RECV_QUEUE_ID, FIRST_SEND_QUEUE_ID},
     system_calls::{exit, KernelLogger},
-    Command, Completion,
+    Command, Completion, SuccessCode,
 };
 
 pub trait Testable {
@@ -46,13 +46,14 @@ fn cmd_test(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
         .post(&Command {
             kind: kapi::CommandKind::Test,
             id: 0,
-            completion_semaphore: None,
             args: [42, 2, 3, 4],
         })
         .expect("post message to channel");
 
     loop {
         if let Some(c) = recv_qu.poll() {
+            assert_eq!(c.status.into_result(), Ok(SuccessCode::Success));
+            assert_eq!(c.response_to_id, 0);
             assert_eq!(c.result0, 1);
             assert_eq!(c.result1, 42);
             return;

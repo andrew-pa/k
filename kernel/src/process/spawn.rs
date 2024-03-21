@@ -239,7 +239,7 @@ pub async fn spawn_process(
     let queues = ConcurrentLinkedList::default();
     queues.push((Arc::new(send_qu), Arc::new(recv_qu)));
 
-    log::debug!("process page table: {pt:?}");
+    // log::debug!("process page table: {pt:?}");
 
     // create process structure
     let proc = Arc::new(Process {

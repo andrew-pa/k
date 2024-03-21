@@ -36,7 +36,7 @@ futures = { version = "0.3", features = ["alloc"], default-features = false }
 qemu-exit = "3.0.1"
 
 # software interface
-kapi = { path = "../kapi", features = ["kernel"] }
+kapi = { path = "../kapi" }
 elf = { version = "0.7.2", default-features = false }
 serde-json-core = "0.5"
 

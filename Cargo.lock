@@ -307,6 +307,7 @@ dependencies = [
 name = "kapi"
 version = "0.1.0"
 dependencies = [
+ "bitfield",
  "bytemuck",
  "log",
  "serde",

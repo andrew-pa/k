@@ -69,7 +69,6 @@ impl Process {
         let this = &Arc::downgrade(self);
         for (send_qu, assoc_recv_qu) in self.queues.iter() {
             while let Some(cmd) = send_qu.poll() {
-                log::trace!("recieved command: {cmd:?}");
                 let this = this.clone();
                 let assoc_recv_qu = assoc_recv_qu.clone();
                 crate::tasks::spawn(async move {

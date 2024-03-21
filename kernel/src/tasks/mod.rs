@@ -84,7 +84,7 @@ impl Executor {
         loop {
             // log::trace!("top of loop");
             while let Some((task_id, task)) = self.new_task_queue.pop() {
-                log::trace!("adding new task {task_id}");
+                // log::trace!("adding new task {task_id}");
                 tasks.insert(task_id, task);
                 // make sure tasks are only in the ready queue after they have been added to the tasks map
                 self.ready_queue
@@ -103,7 +103,7 @@ impl Executor {
                     .entry(task_id)
                     .or_insert_with(|| TaskWaker::new_waker(task_id, self.ready_queue.clone()));
                 let mut context = Context::from_waker(waker);
-                log::debug!("polling task {task_id}");
+                // log::trace!("polling task {task_id}");
                 match task.as_mut().poll(&mut context) {
                     Poll::Ready(()) => {
                         log::trace!("task {task_id} finished");
