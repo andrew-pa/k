@@ -10,17 +10,19 @@ use crate::{
     },
     tasks::locks::Mutex,
 };
-use alloc::sync::Arc;
+use alloc::{sync::Arc, vec::Vec};
 
-use bitfield::{bitfield, Bit};
+use bitfield::Bit;
 use core::{
-    cell::OnceCell,
     num::NonZeroU32,
     sync::atomic::{AtomicU16, AtomicU32},
+    task::Waker,
 };
+use futures::Future;
 use kapi::{Command, Completion};
 use smallvec::SmallVec;
 use snafu::{OptionExt, ResultExt, Snafu};
+use spin::{Mutex as SpinMutex, Once};
 
 pub mod thread;
 pub use thread::{scheduler::scheduler, threads, Thread, ThreadId};
@@ -47,12 +49,19 @@ pub struct Process {
     threads: Mutex<SmallVec<[Arc<Thread>; 2]>>,
     /// Page tables for this process.
     page_tables: PageTable,
+    /// Allocator for the virtual address space of the process.
     #[allow(dead_code)]
     address_space_allocator: VirtualAddressAllocator,
+    /// The next free queue ID.
     #[allow(dead_code)]
     next_queue_id: AtomicU16,
+    /// The queues associated with this process.
     #[allow(clippy::type_complexity)]
     queues: ConcurrentLinkedList<(Arc<OwnedQueue<Command>>, Arc<OwnedQueue<Completion>>)>,
+    /// The exit code this process exited with (if it has exited).
+    exit_code: Once<Option<u32>>,
+    /// Future wakers for futures waiting on exit code.
+    exit_waker: SpinMutex<Vec<Waker>>,
 }
 
 crate::assert_sync!(Process);
@@ -69,7 +78,6 @@ impl Process {
         let this = &Arc::downgrade(self);
         for (send_qu, assoc_recv_qu) in self.queues.iter() {
             while let Some(cmd) = send_qu.poll() {
-                log::trace!("recieved command: {cmd:?}");
                 let this = this.clone();
                 let assoc_recv_qu = assoc_recv_qu.clone();
                 crate::tasks::spawn(async move {
@@ -100,25 +108,55 @@ impl Process {
         // needs to be notified that one of its threads just died. If this is the last thread
         // in the process than the process itself is now dead
     }
+
+    /// Create a future that will resolve with the value of the exit code when this process exits.
+    /// If the process is killed or aborted, then [None] will be returned.
+    pub fn exit_code(self: &Arc<Process>) -> impl Future<Output = Option<u32>> {
+        ProcessExitFuture { proc: self.clone() }
+    }
 }
 
-static mut PROCESSES: OnceCell<ConcurrentLinkedList<Arc<Process>>> = OnceCell::new();
+static PROCESSES: Once<ConcurrentLinkedList<Arc<Process>>> = Once::new();
 
-static mut NEXT_PID: AtomicU32 = AtomicU32::new(1);
+static NEXT_PID: AtomicU32 = AtomicU32::new(1);
 
 /// The global table of processes by ID.
 pub fn processes() -> &'static ConcurrentLinkedList<Arc<Process>> {
-    unsafe { PROCESSES.get_or_init(Default::default) }
+    PROCESSES.call_once(Default::default)
 }
 
 pub fn process_for_id(id: ProcessId) -> Option<Arc<Process>> {
     processes().iter().find(|p| p.id == id).cloned()
 }
 
-/// Cause a process to exit by ID, freeing its resources.
+struct ProcessExitFuture {
+    proc: Arc<Process>,
+}
+
+impl Future for ProcessExitFuture {
+    type Output = Option<u32>;
+
+    fn poll(
+        self: core::pin::Pin<&mut Self>,
+        cx: &mut core::task::Context<'_>,
+    ) -> core::task::Poll<Self::Output> {
+        match self.proc.exit_code.poll() {
+            Some(c) => core::task::Poll::Ready(*c),
+            None => {
+                self.proc.exit_waker.lock().push(cx.waker().clone());
+                core::task::Poll::Pending
+            }
+        }
+    }
+}
+
+/// Cause a process to exit, freeing its resources.
+///
+/// Because threads have strong references to their parent process, process resources will not be
+/// freed unless this function is called.
 // TODO: this should be somewhere else, perhaps with `spawn`.
-fn exit_process(proc: Arc<Process>) {
-    log::trace!("process {} exited", proc.id);
+fn exit_process(proc: Arc<Process>, exit_code: Option<u32>) {
+    log::trace!("process {} exited with code {exit_code:?}", proc.id);
 
     processes().remove(|p| p.id == proc.id);
 
@@ -130,30 +168,24 @@ fn exit_process(proc: Arc<Process>) {
         // drop thread
     }
 
-    // TODO: move this to drop since it is not async anymore
-    // deal with async resources, and then drop the process (by moving it into the task)
-    crate::tasks::spawn(async move {
-        // free physical memory mapped in process page table
-        for mapped_region in proc.page_tables.iter() {
-            physical_memory_allocator()
-                .free_pages(mapped_region.base_phys_addr, mapped_region.page_count);
-        }
+    proc.exit_code.call_once(|| exit_code);
+    for w in proc.exit_waker.lock().drain(..) {
+        w.wake();
+    }
 
-        // drop process, releasing its resources
-        // TODO: make sure we don't double free the channel
-    });
+    for mapped_region in proc.page_tables.iter() {
+        physical_memory_allocator()
+            .free_pages(mapped_region.base_phys_addr, mapped_region.page_count);
+    }
 }
 
 /// Register system calls related to processes and thread scheduling.
 pub fn register_system_call_handlers() {
     use kapi::system_calls::SystemCallNumber;
     let h = crate::exception::system_call_handlers();
-    h.insert_blocking(
-        SystemCallNumber::Exit as u16,
-        |_id, proc, _thread, _regs| {
-            exit_process(proc);
-        },
-    );
+    h.insert_blocking(SystemCallNumber::Exit as u16, |_id, proc, _thread, regs| {
+        exit_process(proc, Some(regs.x[0] as u32));
+    });
     h.insert_blocking(
         SystemCallNumber::Yield as u16,
         |_id, _proc, _thread, _regs| {

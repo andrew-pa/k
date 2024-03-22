@@ -25,7 +25,7 @@ $(QEMU):
 all-bindep: $(QEMU) $(UBOOT_BIN)/u-boot.bin $(UBOOT_BIN)/tools/mkimage
 
 # Building/Packaging the Kernel
-build-all: $(BUILD_DIR)/kernel.img $(BUILD_DIR)/init #? Build and package everything.
+build-all: $(BUILD_DIR)/kernel.img $(BUILD_DIR)/init $(BUILD_DIR)/api_tests #? Build and package everything.
 
 build-rust: #? Build all Rust source.
 	export CC_aarch64_unknown_none=aarch64-linux-gnu-gcc
@@ -39,6 +39,10 @@ $(BUILD_DIR)/init: build-rust $(TARGET_DIR)/init
 	mkdir -p $(BUILD_DIR)
 	cp $(TARGET_DIR)/init $(BUILD_DIR)/init
 
+$(BUILD_DIR)/api_tests: build-rust $(TARGET_DIR)/api_tests
+	mkdir -p $(BUILD_DIR)
+	cp $(TARGET_DIR)/api_tests $(BUILD_DIR)/api_tests
+
 
 # QEMU Run/Test/Debug
 run: build-all $(QEMU) $(UBOOT_BIN)/u-boot.bin #? Boots the system inside QEMU.
@@ -51,6 +55,8 @@ test: build-all $(QEMU) $(UBOOT_BIN)/u-boot.bin $(UBOOT_BIN)/tools/mkimage #? Ru
 	mkdir -p $(BUILD_DIR)
 	cargo test -p kernel
 
+api-test: build-all $(QEMU) $(UBOOT_BIN)/u-boot.bin #? Boots system inside QEMU and runs API tests.
+	./scripts/qemu-exec.sh $(BUILD_DIR) '{"init_process_path":"/fat/api_tests"}'
 
 # Rule to extract documentation comments for each rule in the Makefile
 # Comments are `#?` after the rule head.

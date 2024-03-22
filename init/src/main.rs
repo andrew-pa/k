@@ -1,3 +1,4 @@
+//! The init process is the first user space process spawned after boot and is responsible for setting up and managing user space.
 #![no_std]
 #![no_main]
 #![recursion_limit = "256"]
@@ -7,42 +8,13 @@
 #![feature(iter_array_chunks)]
 #![feature(non_null_convenience)]
 
-use core::{arch::asm, ptr::NonNull};
+use core::ptr::NonNull;
 
 use kapi::{
     queue::{Queue, FIRST_RECV_QUEUE_ID, FIRST_SEND_QUEUE_ID},
+    system_calls::{exit, KernelLogger},
     Command, Completion,
 };
-
-#[inline]
-fn log_record(r: &log::Record) {
-    unsafe {
-        asm!(
-            "mov x0, {p}",
-            "svc #4",
-            p = in(reg) r as *const log::Record
-        )
-    }
-}
-
-#[inline]
-fn exit() {
-    unsafe { asm!("svc #1") }
-}
-
-pub struct KernelLogger;
-
-impl log::Log for KernelLogger {
-    fn enabled(&self, _metadata: &log::Metadata) -> bool {
-        true
-    }
-
-    fn log(&self, record: &log::Record) {
-        log_record(record);
-    }
-
-    fn flush(&self) {}
-}
 
 #[no_mangle]
 pub extern "C" fn _start(
@@ -73,7 +45,6 @@ pub extern "C" fn _start(
         .post(&Command {
             kind: kapi::CommandKind::Test,
             id: 0,
-            completion_semaphore: None,
             args: [1, 2, 3, 4],
         })
         .expect("post message to channel");
@@ -87,37 +58,11 @@ pub extern "C" fn _start(
         }
     }
 
-    exit();
-
-    // let sus_addr = 0x5000 as *mut u8;
-    // let x = unsafe { sus_addr.read_volatile() };
-    // log::info!("got {x}");
-
-    // let path = "/fat/abcdefghij/test.txt";
-    let path = "/fat/init";
-    log::info!("spawning process {path}");
-    send_qu
-        .post(&Command {
-            kind: kapi::CommandKind::SpawnProcess,
-            id: 1,
-            completion_semaphore: None,
-            args: [path.as_ptr() as u64, path.len() as u64, 0, 0],
-        })
-        .expect("post message to channel");
-
-    loop {
-        if let Some(c) = recv_qu.poll() {
-            log::info!("got kernel response: {c:?}");
-            break;
-        }
-    }
-
-    exit();
+    exit(0)
 }
 
 #[panic_handler]
 pub fn panic_handler(info: &core::panic::PanicInfo) -> ! {
     log::error!("panic! {info}");
-    exit();
-    loop {}
+    exit(1)
 }

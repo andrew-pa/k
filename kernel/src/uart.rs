@@ -25,6 +25,7 @@ pub struct DebugUartLogger;
 const DISABLED_MODULES: &[&str] = &[
     "kernel::memory::paging",
     "kernel::memory::heap",
+    "kernel::memory::physical_memory_allocator",
     "kernel::process::thread::scheduler",
     "kernel::exception",
 ];

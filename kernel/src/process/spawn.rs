@@ -1,5 +1,6 @@
 use elf::segment::ProgramHeader;
 use kapi::queue::{FIRST_RECV_QUEUE_ID, FIRST_SEND_QUEUE_ID};
+use spin::once::Once;
 
 use super::*;
 
@@ -239,7 +240,7 @@ pub async fn spawn_process(
     let queues = ConcurrentLinkedList::default();
     queues.push((Arc::new(send_qu), Arc::new(recv_qu)));
 
-    log::debug!("process page table: {pt:?}");
+    // log::debug!("process page table: {pt:?}");
 
     // create process structure
     let proc = Arc::new(Process {
@@ -249,6 +250,8 @@ pub async fn spawn_process(
         next_queue_id: AtomicU16::new((FIRST_RECV_QUEUE_ID.saturating_add(1)).into()),
         queues,
         address_space_allocator,
+        exit_code: Once::new(),
+        exit_waker: spin::Mutex::new(Vec::new()),
     });
     processes().push(proc.clone());
 

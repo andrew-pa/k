@@ -147,4 +147,11 @@ pub async fn finish_boot(opts: BootOptions<'_>) {
         .expect("spawn init process");
 
     log::info!("init pid = {}", init_proc.id);
+
+    let ec = init_proc
+        .exit_code()
+        .await
+        .expect("init process killed unexpectedly");
+    log::warn!("init process exited with code {ec}");
+    qemu_exit::AArch64::new().exit(ec);
 }

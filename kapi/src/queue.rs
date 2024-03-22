@@ -1,15 +1,21 @@
+//! Asynchronous queues for kernel/user-space communication.
 use core::{num::NonZeroU16, ptr::NonNull, sync::atomic::AtomicUsize};
 
 use snafu::Snafu;
 
+/// Errors that could occur interacting with a queue.
 #[derive(Debug, Snafu)]
 pub enum Error {
+    /// The queue is full.
     #[snafu(display("queue is too full to receive message"))]
     Full,
 }
 
+/// An ID that uniquely identifies a queue relative to the process it is in.
 pub type QueueId = NonZeroU16;
+/// The ID of the first send queue (created by the kernel) for each process.
 pub const FIRST_SEND_QUEUE_ID: QueueId = unsafe { NonZeroU16::new_unchecked(1) };
+/// The ID of the first receve queue (created by the kernel) for each process.
 pub const FIRST_RECV_QUEUE_ID: QueueId = unsafe { NonZeroU16::new_unchecked(2) };
 
 /// A single synchronized queue reference.
@@ -19,6 +25,7 @@ pub const FIRST_RECV_QUEUE_ID: QueueId = unsafe { NonZeroU16::new_unchecked(2) }
 ///
 /// A queue is internally mutable and synchronized.
 pub struct Queue<T> {
+    /// The process-unique ID of this queue.
     pub id: QueueId,
     queue_len: usize,
     /// A pointer into the buffer to the value of the head index.

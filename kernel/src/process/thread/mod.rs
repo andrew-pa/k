@@ -1,16 +1,24 @@
-pub mod reg;
-use core::sync::atomic::{AtomicU8, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicU8, Ordering};
 
 use alloc::sync::Arc;
-use reg::*;
-use spin::Mutex;
-pub mod scheduler;
+use spin::{once::Once, Mutex};
 
-use super::*;
 use bytemuck::Contiguous;
+
+use crate::{
+    ds::lists::ConcurrentLinkedList,
+    exception::Registers,
+    memory::{PhysicalBuffer, VirtualAddress},
+};
+
+use super::Process;
 
 /// The system-wide unique ID of a thread.
 pub type ThreadId = u32;
+
+pub mod reg;
+pub mod scheduler;
+use reg::*;
 
 /// The priority of a thread in the scheduler.
 #[repr(u8)]
@@ -72,31 +80,29 @@ pub const IDLE_THREAD: ThreadId = 0;
 /// The task thread runs the async task executor on its own stack at SP_EL0.
 pub const TASK_THREAD: ThreadId = 1;
 
-static mut THREADS: OnceCell<ConcurrentLinkedList<Arc<Thread>>> = OnceCell::new();
+static THREADS: Once<ConcurrentLinkedList<Arc<Thread>>> = Once::new();
 
 /// The global tables of threads by ID.
 pub fn threads() -> &'static ConcurrentLinkedList<Arc<Thread>> {
-    unsafe {
-        THREADS.get_or_init(|| {
-            let ths: ConcurrentLinkedList<Arc<Thread>> = Default::default();
-            // Create the idle thread, which will just wait for interrupts
-            let mut program_status = SavedProgramStatus::initial_for_el1();
-            program_status.set_sp(true); // the idle thread runs on the EL1 stack normally used by interrupts and kmain
-            ths.push(Arc::new(Thread {
-                id: IDLE_THREAD,
-                parent: None,
-                state: ThreadState::Running.into_integer().into(),
-                priority: ThreadPriority::Low.into_integer().into(),
-                exec_state: Mutex::new(ExecutionState {
-                    register_state: Registers::default(),
-                    program_status,
-                    pc: VirtualAddress(0),
-                    sp: VirtualAddress(0),
-                }),
-            }));
-            ths
-        })
-    }
+    THREADS.call_once(|| {
+        let ths: ConcurrentLinkedList<Arc<Thread>> = Default::default();
+        // Create the idle thread, which will just wait for interrupts
+        let mut program_status = SavedProgramStatus::initial_for_el1();
+        program_status.set_sp(true); // the idle thread runs on the EL1 stack normally used by interrupts and kmain
+        ths.push(Arc::new(Thread {
+            id: IDLE_THREAD,
+            parent: None,
+            state: ThreadState::Running.into_integer().into(),
+            priority: ThreadPriority::Low.into_integer().into(),
+            exec_state: Mutex::new(ExecutionState {
+                register_state: Registers::default(),
+                program_status,
+                pc: VirtualAddress(0),
+                sp: VirtualAddress(0),
+            }),
+        }));
+        ths
+    })
 }
 
 /// Retrieve a thread by its id.
@@ -104,11 +110,11 @@ pub fn thread_for_id(tid: ThreadId) -> Option<Arc<Thread>> {
     threads().iter().find(|t| t.id == tid).cloned()
 }
 
-static mut NEXT_TID: AtomicU32 = AtomicU32::new(TASK_THREAD + 1);
+static NEXT_TID: AtomicU32 = AtomicU32::new(TASK_THREAD + 1);
 
 /// Get the next free thread ID.
 pub fn next_thread_id() -> ThreadId {
-    unsafe { NEXT_TID.fetch_add(1, Ordering::AcqRel) }
+    NEXT_TID.fetch_add(1, Ordering::AcqRel)
 }
 
 /// Spawn a thread. It is up to the caller to ensure that this thread is valid.
