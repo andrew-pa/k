@@ -19,7 +19,7 @@ use core::{
     task::Waker,
 };
 use futures::Future;
-use kapi::{Command, Completion};
+use kapi::{commands::Command, completions::Completion};
 use smallvec::SmallVec;
 use snafu::{OptionExt, ResultExt};
 use spin::{Mutex as SpinMutex, Once};

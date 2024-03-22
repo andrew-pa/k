@@ -1,5 +1,9 @@
+use kapi::{
+    commands::CommandKind,
+    completions::{ErrorCode, SuccessCode},
+};
+
 use crate::{process::*, registry::Path};
-use kapi::*;
 
 // TODO: refactor into a function that returns Result<Completion, Error> and change this function
 // so that it calls that function and then on errors calls some Error -> Completion function

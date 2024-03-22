@@ -11,9 +11,10 @@
 use core::ptr::NonNull;
 
 use kapi::{
+    commands::{Command, CommandKind},
+    completions::Completion,
     queue::{Queue, FIRST_RECV_QUEUE_ID, FIRST_SEND_QUEUE_ID},
     system_calls::{exit, KernelLogger},
-    Command, Completion,
 };
 
 #[no_mangle]
@@ -43,7 +44,7 @@ pub extern "C" fn _start(
 
     send_qu
         .post(&Command {
-            kind: kapi::CommandKind::Test,
+            kind: CommandKind::Test,
             id: 0,
             args: [1, 2, 3, 4],
         })

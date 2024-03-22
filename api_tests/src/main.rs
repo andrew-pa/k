@@ -12,9 +12,10 @@
 use core::ptr::NonNull;
 
 use kapi::{
+    commands::{Command, CommandKind},
+    completions::{Completion, SuccessCode},
     queue::{Queue, FIRST_RECV_QUEUE_ID, FIRST_SEND_QUEUE_ID},
     system_calls::{exit, yield_now, KernelLogger},
-    Command, Completion, SuccessCode,
 };
 
 pub trait Testable {
@@ -44,7 +45,7 @@ pub fn test_runner(tests: &[&dyn Testable], send_qu: &Queue<Command>, recv_qu: &
 fn cmd_test(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
     send_qu
         .post(&Command {
-            kind: kapi::CommandKind::Test,
+            kind: CommandKind::Test,
             id: 0,
             args: [42, 2, 3, 4],
         })
