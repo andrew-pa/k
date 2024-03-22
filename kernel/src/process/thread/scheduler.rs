@@ -1,7 +1,10 @@
 //! Thread scheduling.
-use super::*;
-use alloc::vec::Vec;
-use spin::MutexGuard;
+use alloc::{sync::Arc, vec::Vec};
+use spin::{once::Once, Mutex, MutexGuard};
+
+use crate::process::ThreadState;
+
+use super::{thread_for_id, Registers, Thread, ThreadId, IDLE_THREAD, TASK_THREAD};
 
 /// The thread scheduler.
 ///
@@ -132,29 +135,23 @@ impl ThreadScheduler {
     }
 }
 
-static mut SCHD: OnceCell<Mutex<ThreadScheduler>> = OnceCell::new();
+static SCHD: Once<Mutex<ThreadScheduler>> = Once::new();
 
 /// Initialize the global thread scheduler. The first thread to run must be the idle thread.
 pub fn init_scheduler() {
-    unsafe {
-        SCHD.set(Mutex::new(ThreadScheduler::new()))
-            .ok()
-            .expect("init scheduler");
-    }
+    SCHD.call_once(|| Mutex::new(ThreadScheduler::new()));
 }
 
 // TODO: also will eventually need to be per-CPU?
 /// Lock and gain access to the global thread scheduler.
 pub fn scheduler() -> MutexGuard<'static, ThreadScheduler> {
-    unsafe { SCHD.get().unwrap().lock() }
+    SCHD.get().expect("thread scheduler initialized").lock()
 }
 
 /// Try to read the ID of the current thread running from the global scheduler.
 /// If the lock cannot be locked or the scheduler is not yet initialized, then None is returned.
 pub fn try_current_thread_id() -> Option<ThreadId> {
-    unsafe {
-        SCHD.get()
-            .and_then(|s| s.try_lock())
-            .map(|s| s.current_thread.id)
-    }
+    SCHD.get()
+        .and_then(|s| s.try_lock())
+        .map(|s| s.current_thread.id)
 }

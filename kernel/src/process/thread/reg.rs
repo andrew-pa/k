@@ -1,5 +1,7 @@
 //! Registers related to threads/execution state.
-use super::*;
+use bitfield::bitfield;
+
+use crate::memory::VirtualAddress;
 
 bitfield! {
     /// The value of the SPSR (Saved Program Status) register.
