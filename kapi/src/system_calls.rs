@@ -12,8 +12,14 @@ pub enum SystemCallNumber {
 
 /// Exit the current process.
 #[inline]
-pub fn exit() -> ! {
-    unsafe { asm!("svc #1") }
+pub fn exit(code: u32) -> ! {
+    unsafe {
+        asm!(
+            "mov w0, {p:w}",
+            "svc #1",
+            p = in(reg) code
+        )
+    }
     unreachable!()
 }
 

@@ -147,4 +147,8 @@ pub async fn finish_boot(opts: BootOptions<'_>) {
         .expect("spawn init process");
 
     log::info!("init pid = {}", init_proc.id);
+
+    let ec = init_proc.exit_code().await;
+
+    log::info!("init process exited with code {ec:?}");
 }

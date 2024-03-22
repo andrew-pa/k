@@ -88,11 +88,11 @@ pub extern "C" fn _start(
 
     test_runner(&[&cmd_test], &send_qu, &recv_qu);
 
-    exit();
+    exit(0);
 }
 
 #[panic_handler]
 pub fn panic_handler(info: &core::panic::PanicInfo) -> ! {
     log::error!("panic! {info}");
-    exit()
+    exit(1)
 }
