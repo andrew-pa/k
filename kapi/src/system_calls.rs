@@ -23,6 +23,12 @@ pub fn exit(code: u32) -> ! {
     unreachable!()
 }
 
+/// Yield execution, causing a new thread to be scheduled.
+#[inline]
+pub fn yield_now() {
+    unsafe { asm!("svc #10",) }
+}
+
 /// Write a log record into the system log.
 #[inline]
 pub fn log_record(r: &log::Record) {

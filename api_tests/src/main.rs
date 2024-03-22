@@ -13,7 +13,7 @@ use core::ptr::NonNull;
 
 use kapi::{
     queue::{Queue, FIRST_RECV_QUEUE_ID, FIRST_SEND_QUEUE_ID},
-    system_calls::{exit, KernelLogger},
+    system_calls::{exit, yield_now, KernelLogger},
     Command, Completion, SuccessCode,
 };
 
@@ -58,6 +58,7 @@ fn cmd_test(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
             assert_eq!(c.result1, 42);
             return;
         }
+        yield_now();
     }
 }
 
