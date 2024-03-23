@@ -1,76 +1,62 @@
 //! Asynchronous commands that can be submitted to the kernel from user-space via a [crate::queue::Queue].
 
-use bytemuck::{Contiguous, Pod, Zeroable};
+use bytemuck::Zeroable;
 
-use crate::queue::QueueId;
+macro_rules! impl_into_kind {
+    ($t:ident) => {
+        impl From<$t> for Kind {
+            fn from(value: $t) -> Self {
+                Kind::$t(value)
+            }
+        }
+    };
+}
 
-/// Type of command.
+/// Send a test command. The `arg` value will be echoed back, along with the current pid.
+/// Completion type: [crate::completions::Test].
+#[repr(C)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Test {
+    /// Value to return back.
+    pub arg: u64,
+}
+impl_into_kind!(Test);
+
+/// Type of command and any required parameters.
 ///
-/// Each command is further documented by the constructor in [Command].
+/// Each command is further documented on the inner parameter struct.
+///
+/// See [this RFC](https://github.com/rust-lang/rfcs/blob/master/text/2195-really-tagged-unions.md) for information about how this is layed out in memory.
 #[repr(u16)]
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Contiguous)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 #[allow(missing_docs)]
 pub enum Kind {
     Invalid = 0,
-    Test,
-    SpawnProcess,
+    Test(Test),
 
     CreateQueue,
-    DestroyQueue
+    DestroyQueue,
 }
 
 unsafe impl Zeroable for Kind {}
-unsafe impl Pod for Kind {}
+
+impl Kind {
+    /// Get the enum discriminant value that identifies this command.
+    pub fn discriminant(&self) -> u16 {
+        // SAFETY: Because `Self` is marked `repr(u16)`, its layout is a `repr(C)` `union`
+        // between `repr(C)` structs, each of which has the `u16` discriminant as its first
+        // field, so we can read the discriminant without offsetting the pointer.
+        unsafe { *<*const _>::from(self).cast::<u16>() }
+    }
+}
 
 /// A command that can be sent to the kernel.
 #[repr(C)]
-#[derive(Debug, Copy, Clone, Zeroable, Pod)]
+#[derive(Debug, Clone, Zeroable)]
 pub struct Command {
+    /// The ID number for this command that will be repeated in completions that are associated with it.
+    pub id: u16,
     /// The type of the command.
     pub kind: Kind,
-    /// The ID number for this command that will be repeated in completions that are associated with
-    /// it.
-    pub id: u16,
-    ///
-    pub reserved: u32,
-    /// Argument values for the command, depending on the type.
-    pub args: [u64; 4],
-}
-
-impl Command {
-    /// Start a new command builder.
-    pub fn builder() -> CommandBuilder {
-        CommandBuilder {
-            cmd: Command::zeroed()
-        }
-    }
-}
-
-/// Builder helper for creating commands.
-pub struct CommandBuilder {
-    cmd: Command
-}
-
-impl CommandBuilder {
-    /// Finish building the command.
-    #[inline]
-    pub fn build(self) -> Command {
-        self.cmd
-    }
-
-    /// Set the command ID.
-    #[inline]
-    pub fn id(mut self, id: u16) -> Self {
-        self.cmd.id = id;
-        self
-    }
-
-    /// Create a [Kind::Test] command.
-    #[inline]
-    pub fn test(mut self) -> Self {
-        self.cmd.kind = Kind::Test;
-        self.cmd.args[0] = 42;
-        self
-    }
 }

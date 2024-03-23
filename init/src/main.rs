@@ -11,7 +11,7 @@
 use core::ptr::NonNull;
 
 use kapi::{
-    commands::{Command, CommandKind},
+    commands::{Command, Test},
     completions::Completion,
     queue::{Queue, FIRST_RECV_QUEUE_ID, FIRST_SEND_QUEUE_ID},
     system_calls::{exit, KernelLogger},
@@ -44,9 +44,8 @@ pub extern "C" fn _start(
 
     send_qu
         .post(&Command {
-            kind: CommandKind::Test,
             id: 0,
-            args: [1, 2, 3, 4],
+            kind: Test { arg: 42 }.into(),
         })
         .expect("post message to channel");
 

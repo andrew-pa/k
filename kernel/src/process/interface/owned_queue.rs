@@ -1,5 +1,6 @@
 use core::ptr::NonNull;
 
+use bytemuck::Zeroable;
 use kapi::queue::{Queue, QueueId};
 
 use crate::memory::{paging::PageTableEntryOptions, MemoryError, PhysicalBuffer};
@@ -13,7 +14,11 @@ pub struct OwnedQueue<T> {
     queue: Queue<T>,
 }
 
-impl<T> OwnedQueue<T> {
+impl<T: Zeroable> OwnedQueue<T> {
+    /// Allocate a new queue backed by memory.
+    ///
+    /// `T` must be [Zeroable] for this operation to be safe, since the queue memory is
+    /// initially zeroed.
     pub fn new(id: QueueId, size_in_pages: usize) -> Result<OwnedQueue<T>, MemoryError> {
         let buffer = PhysicalBuffer::alloc_zeroed(
             size_in_pages,

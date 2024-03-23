@@ -36,8 +36,7 @@ use thread::*;
 
 use interface::OwnedQueue;
 
-/// The unique ID of a process.
-pub type ProcessId = NonZeroU32;
+pub use kapi::ProcessId;
 
 /// A user-space process.
 ///
@@ -83,6 +82,7 @@ impl Process {
                 crate::tasks::spawn(async move {
                     if let Some(proc) = this.upgrade() {
                         let cmpl = interface::dispatch(&proc, cmd).await;
+                        log::trace!("sending completion {cmpl:?} to queue #{}", assoc_recv_qu.id);
                         match assoc_recv_qu.post(&cmpl) {
                             Ok(()) => {}
                             Err(_) => {

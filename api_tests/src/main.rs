@@ -12,10 +12,11 @@
 use core::ptr::NonNull;
 
 use kapi::{
-    commands::{Command, CommandKind},
-    completions::{Completion, SuccessCode},
+    commands::{Command, Kind as CmdKind, Test},
+    completions::{self, Completion, ErrorCode, Kind as CplKind},
     queue::{Queue, FIRST_RECV_QUEUE_ID, FIRST_SEND_QUEUE_ID},
     system_calls::{exit, yield_now, KernelLogger},
+    ProcessId,
 };
 
 pub trait Testable {
@@ -42,21 +43,43 @@ pub fn test_runner(tests: &[&dyn Testable], send_qu: &Queue<Command>, recv_qu: &
     log::info!("all tests successful");
 }
 
-fn cmd_test(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
+fn cmd_invalid(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
     send_qu
         .post(&Command {
-            kind: CommandKind::Test,
             id: 0,
-            args: [42, 2, 3, 4],
+            kind: CmdKind::Invalid,
         })
         .expect("post message to channel");
 
     loop {
         if let Some(c) = recv_qu.poll() {
-            assert_eq!(c.status.into_result(), Ok(SuccessCode::Success));
             assert_eq!(c.response_to_id, 0);
-            assert_eq!(c.result0, 1);
-            assert_eq!(c.result1, 42);
+            assert_eq!(c.kind, CplKind::Err(ErrorCode::UnknownCommand));
+            return;
+        }
+        yield_now();
+    }
+}
+
+fn cmd_test(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
+    send_qu
+        .post(&Command {
+            id: 0,
+            kind: Test { arg: 42 }.into(),
+        })
+        .expect("post message to channel");
+
+    loop {
+        if let Some(c) = recv_qu.poll() {
+            assert_eq!(c.response_to_id, 0);
+            assert_eq!(
+                c.kind,
+                completions::Test {
+                    pid: ProcessId::new(1).unwrap(),
+                    arg: 42,
+                }
+                .into()
+            );
             return;
         }
         yield_now();
@@ -88,7 +111,7 @@ pub extern "C" fn _start(
         )
     };
 
-    test_runner(&[&cmd_test], &send_qu, &recv_qu);
+    test_runner(&[&cmd_invalid, &cmd_test], &send_qu, &recv_qu);
 
     exit(0);
 }
