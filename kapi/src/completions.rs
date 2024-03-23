@@ -18,8 +18,6 @@ macro_rules! impl_into_kind {
 #[non_exhaustive]
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Contiguous)]
 pub enum ErrorCode {
-    /// The status code found in the completion was invalid.
-    InvalidStatusCode = 0,
     /// The command kind was unknown by the kernel.
     UnknownCommand,
 
@@ -38,6 +36,11 @@ pub enum ErrorCode {
 
     /// The underlying device returned an error.
     Device,
+
+    /// An ID was provided that was not known to the kernel.
+    InvalidId,
+    /// A size was provided that is invalid for the operation.
+    InvalidSize,
 
     /// An internal kernel error occurred, check the system log for details.
     Internal,

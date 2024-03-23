@@ -31,7 +31,7 @@ impl_into_kind!(Test);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreateSubmissionQueue {
     /// Number of commands this queue will be able to hold.
-    /// This may be rounded up to the next page.
+    /// This may be rounded up to the next page, but must be at least 1.
     pub size: usize,
     /// ID of the completion queue that completions for commands from this queue will be sent to.
     pub associated_completion_queue: QueueId,
@@ -44,7 +44,7 @@ impl_into_kind!(CreateSubmissionQueue);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreateCompletionQueue {
     /// Number of completions this queue will be able to hold.
-    /// This may be rounded up to the next page.
+    /// This may be rounded up to the next page, but must be at least 1.
     pub size: usize,
 }
 impl_into_kind!(CreateCompletionQueue);
@@ -53,6 +53,7 @@ impl_into_kind!(CreateCompletionQueue);
 ///
 /// Any pending messages will be ignored. If there were in-flight messages, they may still complete
 /// but (TODO: where should they go?).
+/// Submission queues must be destroyed before their associated completion queue.
 /// [Completion Type][crate::completions::Kind::Success].
 #[repr(C)]
 #[derive(Debug, Clone, PartialEq, Eq)]
