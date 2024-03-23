@@ -66,6 +66,24 @@ impl<T> Queue<T> {
         }
     }
 
+    /// Create a new queue backed by a region of memory from the completion of a queue creation
+    /// command. If for some reason the pointer in the completion is null, this function will
+    /// panic.
+    ///
+    /// # Safety
+    /// `cmpl.start` must point to a valid region of memory that is at least `cmpl.size_in_bytes` bytes long.
+    /// `cmpl.start` must also be correctly aligned for atomic load/store operations of `usize`.
+    /// If this completion came from the kernel, it will satisfy these requirements.
+    // TODO: it would be excellent if we could check to make sure we really have a queue of T and
+    // not something else.
+    pub unsafe fn from_completion(cmpl: &crate::completions::NewQueue) -> Queue<T> {
+        Self::new(
+            cmpl.id,
+            cmpl.size_in_bytes,
+            NonNull::new(cmpl.start as *mut ()).expect("queue start pointer is non-null"),
+        )
+    }
+
     /// Gets the head index (the index of the next free slot).
     #[inline]
     fn head(&self) -> usize {

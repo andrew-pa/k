@@ -1,7 +1,7 @@
 //! Asynchronous results that can be received in user-space from the kernel via a [crate::queue::Queue].
 use bytemuck::{Contiguous, Zeroable};
 
-use crate::ProcessId;
+use crate::{queue::QueueId, ProcessId};
 
 macro_rules! impl_into_kind {
     ($t:ident) => {
@@ -59,15 +59,32 @@ pub struct Test {
 }
 impl_into_kind!(Test);
 
+/// Response to a [crate::commands::CreateSubmissionQueue] or [crate::commands::CreateCompletionQueue] command.
+#[repr(C)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewQueue {
+    /// The ID of the new queue.
+    pub id: QueueId,
+    /// The address of the start of the queue.
+    pub start: usize,
+    /// The size of the queue in bytes.
+    pub size_in_bytes: usize,
+}
+impl_into_kind!(NewQueue);
+
 /// Type of completion and any resulting values returned by the command.
 #[repr(u16)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 #[allow(missing_docs)]
 pub enum Kind {
+    /// The completion is actually invalid.
     Invalid = 0,
+    /// General success result for commands that don't return any values.
     Success = 1,
     Test(Test),
+    NewQueue(NewQueue),
+    /// The command failed to complete successfully.
     Err(ErrorCode),
 }
 

@@ -35,10 +35,17 @@ where
     }
 }
 
-pub fn test_runner(tests: &[&dyn Testable], send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
-    log::info!("running {} tests...", tests.len());
-    for test in tests {
-        test.run(send_qu, recv_qu);
+pub fn test_runner(
+    tests: &[&[&dyn Testable]],
+    send_qu: &Queue<Command>,
+    recv_qu: &Queue<Completion>,
+) {
+    log::info!("running {} test groups...", tests.len());
+    for test_group in tests {
+        log::info!("running {} tests...", test_group.len());
+        for test in test_group.iter() {
+            test.run(send_qu, recv_qu);
+        }
     }
     log::info!("all tests successful");
 }
@@ -86,6 +93,8 @@ fn cmd_test(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
     }
 }
 
+mod queues;
+
 #[no_mangle]
 pub extern "C" fn _start(
     send_qu_addr: usize,
@@ -111,7 +120,11 @@ pub extern "C" fn _start(
         )
     };
 
-    test_runner(&[&cmd_invalid, &cmd_test], &send_qu, &recv_qu);
+    test_runner(
+        &[&[&cmd_invalid, &cmd_test], queues::TESTS],
+        &send_qu,
+        &recv_qu,
+    );
 
     exit(0);
 }

@@ -2,6 +2,8 @@
 
 use bytemuck::Zeroable;
 
+use crate::queue::QueueId;
+
 macro_rules! impl_into_kind {
     ($t:ident) => {
         impl From<$t> for Kind {
@@ -13,7 +15,7 @@ macro_rules! impl_into_kind {
 }
 
 /// Send a test command. The `arg` value will be echoed back, along with the current pid.
-/// Completion type: [crate::completions::Test].
+/// [Completion Type][crate::completions::Test].
 #[repr(C)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Test {
@@ -21,6 +23,44 @@ pub struct Test {
     pub arg: u64,
 }
 impl_into_kind!(Test);
+
+/// Create a new submission queue for the process, which will be associated with a completion queue.
+/// The completion queue must exist before the submission queue is created.
+/// [Completion Type][crate::completions::NewQueue].
+#[repr(C)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreateSubmissionQueue {
+    /// Number of commands this queue will be able to hold.
+    /// This may be rounded up to the next page.
+    pub size: usize,
+    /// ID of the completion queue that completions for commands from this queue will be sent to.
+    pub associated_completion_queue: QueueId,
+}
+impl_into_kind!(CreateSubmissionQueue);
+
+/// Create a new completion queue for the process.
+/// [Completion Type][crate::completions::NewQueue].
+#[repr(C)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreateCompletionQueue {
+    /// Number of completions this queue will be able to hold.
+    /// This may be rounded up to the next page.
+    pub size: usize,
+}
+impl_into_kind!(CreateCompletionQueue);
+
+/// Destroy a queue.
+///
+/// Any pending messages will be ignored. If there were in-flight messages, they may still complete
+/// but (TODO: where should they go?).
+/// [Completion Type][crate::completions::Kind::Success].
+#[repr(C)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DestroyQueue {
+    /// ID of the queue to destroy.
+    pub id: QueueId,
+}
+impl_into_kind!(DestroyQueue);
 
 /// Type of command and any required parameters.
 ///
@@ -32,11 +72,13 @@ impl_into_kind!(Test);
 #[non_exhaustive]
 #[allow(missing_docs)]
 pub enum Kind {
+    /// The command is actually invalid.
     Invalid = 0,
     Test(Test),
 
-    CreateQueue,
-    DestroyQueue,
+    CreateCompletionQueue(CreateCompletionQueue),
+    CreateSubmissionQueue(CreateSubmissionQueue),
+    DestroyQueue(DestroyQueue),
 }
 
 unsafe impl Zeroable for Kind {}
