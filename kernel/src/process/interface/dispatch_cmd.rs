@@ -1,19 +1,36 @@
 use kapi::{
-    commands::{Kind as CmdKind, Test},
-    completions::{self, ErrorCode},
+    commands::{self as cmds, Kind as CmdKind},
+    completions::{self as cmpl, ErrorCode, Kind as CmplKind},
+    queue::QueueId,
 };
 
 use crate::process::*;
 
-// TODO: refactor into a function that returns Result<Completion, Error> and change this function
-// so that it calls that function and then on errors calls some Error -> Completion function
-pub async fn dispatch(proc: &Arc<Process>, cmd: Command) -> Completion {
-    log::debug!("received from pid {}: {cmd:?}", proc.id);
+impl Process {
+    fn create_completion_queue(
+        &self,
+        info: &cmds::CreateCompletionQueue,
+    ) -> Result<cmpl::NewQueue, ErrorCode> {
+        let cmds::CreateCompletionQueue { size } = info;
+        let id = QueueId::new(
+            self.next_queue_id
+                .fetch_add(1, core::sync::atomic::Ordering::Acquire),
+        )
+        .unwrap();
+        // TODO: error handling moment
+        let qu = OwnedQueue::<Completion>::new(id, *size).expect("TODO");
+        Ok(cmpl::NewQueue {
+            id,
+            start: todo!(),
+            size_in_bytes: todo!(),
+        })
+    }
+}
+
+async fn dispatch_inner(proc: &Arc<Process>, cmd: Command) -> Result<CmplKind, ErrorCode> {
     match cmd.kind {
-        CmdKind::Test(Test { arg }) => Completion {
-            response_to_id: cmd.id,
-            kind: completions::Test { arg, pid: proc.id }.into(),
-        },
+        CmdKind::Test(cmds::Test { arg }) => Ok(cmpl::Test { arg, pid: proc.id }.into()),
+        CmdKind::CreateCompletionQueue(info) => proc.create_completion_queue(&info).map(Into::into),
         /*Kind::SpawnProcess => {
             let path_bytes = unsafe {
                 core::slice::from_raw_parts(cmd.args[0] as *const u8, cmd.args[1] as usize)
@@ -37,10 +54,21 @@ pub async fn dispatch(proc: &Arc<Process>, cmd: Command) -> Completion {
         }*/
         kind => {
             log::error!("received unknown command: {}", kind.discriminant());
-            Completion {
-                response_to_id: cmd.id,
-                kind: ErrorCode::UnknownCommand.into(),
-            }
+            Err(ErrorCode::UnknownCommand)
         }
+    }
+}
+
+pub async fn dispatch(proc: &Arc<Process>, cmd: Command) -> Completion {
+    log::trace!("received from pid {}: {cmd:?}", proc.id);
+    let response_to_id = cmd.id;
+    let kind = match dispatch_inner(proc, cmd).await {
+        Ok(c) => c,
+        Err(e) => e.into(),
+    };
+    log::trace!("sending completion for cmd #{response_to_id}: {kind:?}");
+    Completion {
+        response_to_id,
+        kind,
     }
 }

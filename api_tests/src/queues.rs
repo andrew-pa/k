@@ -10,7 +10,7 @@ use crate::Testable;
 pub const TESTS: &[&dyn Testable] = &[
     &basic_create_destroy,
     &fail_to_create_submission_queue_with_bad_completion_id,
-    &fail_to_create_queue_with_zero_size
+    &fail_to_create_queue_with_zero_size,
 ];
 
 fn basic_create_destroy(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
@@ -73,19 +73,13 @@ fn basic_create_destroy(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
     send_qu
         .post(&Command {
             id: 2,
-            kind: DestroyQueue {
-                id: sub_qu.id
-            }
-            .into(),
+            kind: DestroyQueue { id: sub_qu.id }.into(),
         })
         .expect("post destroy subm queue msg");
     send_qu
         .post(&Command {
             id: 3,
-            kind: DestroyQueue {
-                id: cmpl_qu.id
-            }
-            .into(),
+            kind: DestroyQueue { id: cmpl_qu.id }.into(),
         })
         .expect("post destroy cmpl queue msg");
 
@@ -95,7 +89,9 @@ fn basic_create_destroy(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
         if let Some(c) = recv_qu.poll() {
             assert!(c.response_to_id == 2 || c.response_to_id == 3);
             match c.kind {
-                CmplKind::Success => { outstanding -= 1; },
+                CmplKind::Success => {
+                    outstanding -= 1;
+                }
                 _ => panic!("unexpected completion: {c:?}"),
             }
         }
@@ -103,7 +99,10 @@ fn basic_create_destroy(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
     }
 }
 
-fn fail_to_create_submission_queue_with_bad_completion_id(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
+fn fail_to_create_submission_queue_with_bad_completion_id(
+    send_qu: &Queue<Command>,
+    recv_qu: &Queue<Completion>,
+) {
     // create a submission queue and try to associate it with an invalid completion queue ID
     send_qu
         .post(&Command {
@@ -134,10 +133,7 @@ fn fail_to_create_queue_with_zero_size(send_qu: &Queue<Command>, recv_qu: &Queue
     send_qu
         .post(&Command {
             id: 1,
-            kind: CreateCompletionQueue {
-                size: 0,
-            }
-            .into(),
+            kind: CreateCompletionQueue { size: 0 }.into(),
         })
         .expect("post create queue msg");
 

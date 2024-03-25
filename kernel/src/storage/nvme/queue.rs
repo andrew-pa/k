@@ -71,7 +71,7 @@ impl<'sq> Command<'sq> {
 
     #[inline]
     pub fn set_command_id(self, id: u16) -> Command<'sq> {
-        log::trace!("setting command id to {id}");
+        // log::trace!("setting command id to {id}");
         self.cmd[0].set_bit_range(31, 16, id);
         self
     }
@@ -134,7 +134,7 @@ impl<'sq> Command<'sq> {
                     );
                 }
 
-                log::trace!("region = {region:?}, current_offset = {current_offset}, num_blocks={num_blocks}, prp_page.len() = {}", prp_page.len());
+                // log::trace!("region = {region:?}, current_offset = {current_offset}, num_blocks={num_blocks}, prp_page.len() = {}", prp_page.len());
                 prp_page[current_offset] = next_page_addr;
                 next_page_addr = next_page_addr.add(PAGE_SIZE);
                 current_offset += 1;
@@ -505,7 +505,7 @@ impl CompletionQueue {
 
             ptr.as_ref().unwrap()
         };
-        log::trace!("read cmp: {cmp:?}, head = {}", self.head);
+        // log::trace!("read cmp: {cmp:?}, head = {}", self.head);
         if cmp.status.phase_tag() == self.current_phase {
             self.head += 1;
             if self.head > self.entry_count {

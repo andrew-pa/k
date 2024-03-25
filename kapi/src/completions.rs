@@ -45,6 +45,7 @@ pub enum ErrorCode {
     /// An internal kernel error occurred, check the system log for details.
     Internal,
 }
+
 impl From<ErrorCode> for Kind {
     fn from(value: ErrorCode) -> Self {
         Kind::Err(value)
