@@ -11,13 +11,14 @@ use smallvec::SmallVec;
 use snafu::{ensure, OptionExt, ResultExt};
 
 use crate::{
+    error::{self, Error},
     fs::{BadMetadataSnafu, OtherSnafu, OutOfBoundsSnafu},
     memory::{PhysicalAddress, PAGE_SIZE},
     registry::{registry_mut, Path, RegistryHandler},
     storage::{block_cache::BlockCache, BlockAddress, BlockStore},
 };
 
-use super::{Error, File, StorageSnafu};
+use super::{File, FsError, StorageSnafu};
 
 mod data;
 use data::*;
@@ -42,7 +43,7 @@ impl File for FatFile {
         src_offset: u64,
         dest_address: PhysicalAddress,
         num_pages: usize,
-    ) -> Result<(), Error> {
+    ) -> Result<(), FsError> {
         // assume: src_offset is page aligned and chunks go evenly into pages, so we never start in the middle of a chunk
         ensure!(
             src_offset <= self.file_size as u64,
@@ -109,7 +110,7 @@ impl File for FatFile {
         _dest_offset: u64,
         _src_address: PhysicalAddress,
         _num_pages: usize,
-    ) -> Result<(), Error> {
+    ) -> Result<(), FsError> {
         todo!();
     }
 }
@@ -159,20 +160,23 @@ struct Handler {
 
 impl Handler {
     async fn new(block_store: Box<dyn BlockStore>) -> Result<Handler, Error> {
-        let cache = BlockCache::new(block_store, CACHE_SIZE).context(super::StorageSnafu)?;
+        let cache = BlockCache::new(block_store, CACHE_SIZE)?;
 
         // read the relevant part of the MBR, starting at byte 446
         let mut mbr_data = [0u8; 66];
         cache
             .copy_bytes(BlockAddress(0), 446, &mut mbr_data)
             .await
-            .context(super::StorageSnafu)?;
+            .context(error::StorageSnafu { reason: "load MBR" })?;
 
         // check MBR magic bytes
         if mbr_data[64] != 0x55 && mbr_data[65] != 0xaa {
-            return Err(Error::BadMetadata {
+            return Err(FsError::BadMetadata {
                 message: "bad MBR magic bytes",
                 value: ((mbr_data[64] as usize) << 8) | mbr_data[65] as usize,
+            })
+            .context(error::FileSystemSnafu {
+                reason: "check MBR magic",
             });
         }
 
@@ -193,20 +197,28 @@ impl Handler {
         cache
             .copy_bytes(partition_addr, 0, &mut bootsector_data)
             .await
-            .context(super::StorageSnafu)?;
+            .context(error::StorageSnafu {
+                reason: "read boot sector",
+            })?;
         log::debug!("{bootsector_data:x?}");
 
         // check boot sector magic bytes
-        ensure!(
-            bootsector_data[510] == 0x55 && bootsector_data[511] == 0xaa,
-            BadMetadataSnafu {
+        if !(bootsector_data[510] == 0x55 && bootsector_data[511] == 0xaa) {
+            return Err(BadMetadataSnafu {
                 message: "invalid boot sector signature",
-                value: bootsector_data[510]
+                value: bootsector_data[510],
             }
-        );
+            .build())
+            .context(error::FileSystemSnafu {
+                reason: "check boot sector magic",
+            });
+        }
+
         let bootsector: &BootSector = unsafe { &*(bootsector_data.as_ptr() as *const BootSector) };
         log::debug!("FAT bootsector = {bootsector:x?}");
-        bootsector.validate()?;
+        bootsector.validate().context(error::FileSystemSnafu {
+            reason: "validate boot sector",
+        })?;
 
         let hh = Handler {
             cache: Arc::new(cache),
@@ -254,7 +266,7 @@ impl Handler {
     fn dir_entry_stream(
         &self,
         source: DirectorySource,
-    ) -> impl Stream<Item = Result<LongDirEntry, Error>> + '_ {
+    ) -> impl Stream<Item = Result<LongDirEntry, FsError>> + '_ {
         // max # of bytes in offset before wrapping and moving to the next segment
         let size_of_segment = match source {
             DirectorySource::Direct(_) => self.cache.block_size(),
@@ -345,7 +357,7 @@ impl Handler {
         &self,
         source: DirectorySource,
         mut comps: crate::registry::path::Components<'async_recursion>,
-    ) -> Result<Option<DirEntry>, Error> {
+    ) -> Result<Option<DirEntry>, FsError> {
         let comp = comps.next().unwrap();
         log::trace!("find entry for path component {comp:?} in {source:?}");
         let ps = match comp {
@@ -424,5 +436,7 @@ impl RegistryHandler for Handler {
 pub async fn mount(root_path: &Path, block_store: Box<dyn BlockStore>) -> Result<(), Error> {
     registry_mut()
         .register(root_path, Box::new(Handler::new(block_store).await?))
-        .context(super::RegistrySnafu)
+        .context(error::RegistrySnafu {
+            reason: "register FAT filesystem",
+        })
 }

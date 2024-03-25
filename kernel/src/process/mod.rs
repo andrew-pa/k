@@ -21,7 +21,7 @@ use core::{
 use futures::Future;
 use kapi::{Command, Completion};
 use smallvec::SmallVec;
-use snafu::{OptionExt, ResultExt, Snafu};
+use snafu::{OptionExt, ResultExt};
 use spin::{Mutex as SpinMutex, Once};
 
 pub mod thread;
@@ -30,7 +30,7 @@ pub use thread::{scheduler::scheduler, threads, Thread, ThreadId};
 pub mod interface;
 
 mod spawn;
-pub use spawn::{spawn_process, SpawnError};
+pub use spawn::spawn_process;
 
 use thread::*;
 

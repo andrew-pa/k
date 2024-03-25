@@ -10,7 +10,7 @@ use spin::Mutex;
 use crate::exception::InterruptGuard;
 
 use super::{
-    physical_memory_allocator, MemoryError, PhysicalAddress, PhysicalMemoryAllocator,
+    physical_memory_allocator, MapSnafu, MemoryError, PhysicalAddress, PhysicalMemoryAllocator,
     VirtualAddress, PAGE_SIZE,
 };
 
@@ -179,9 +179,6 @@ pub enum MapError {
         page_count: usize,
         virt_start: VirtualAddress,
     },
-    Memory {
-        source: MemoryError,
-    },
 }
 
 type LevelTable = [PageTableEntry; 512];
@@ -314,8 +311,8 @@ impl PageTable {
         page_count: usize,
         asid: u16,
         options: &PageTableEntryOptions,
-    ) -> Result<PageTable, MapError> {
-        let mut p = PageTable::empty(high_addresses, asid).context(MemorySnafu)?;
+    ) -> Result<PageTable, MemoryError> {
+        let mut p = PageTable::empty(high_addresses, asid)?;
         p.map_range(
             start_addr,
             VirtualAddress(start_addr.0),
@@ -379,7 +376,7 @@ impl PageTable {
         page_count: usize,
         overwrite: bool,
         options: &PageTableEntryOptions,
-    ) -> Result<(), MapError> {
+    ) -> Result<(), MemoryError> {
         // determine how big page_count is relative to the size of the higher level page table blocks and figure out how many new tables we'll need, if any
         let num_l3_tables = page_count.div_ceil(512);
         let num_l2_tables = num_l3_tables.div_ceil(512);
@@ -388,20 +385,22 @@ impl PageTable {
         // find spot in page table where virt_start is
         let (tag, lv0_start, lv1_start, lv2_start, lv3_start, page_offset) = virt_start.to_parts();
         if page_offset != 0 {
-            return Err(MapError::MapRangeBadVirtualBase {
-                reason: "starting virtual address for mapping range must be at a page boundary",
-                virt_start,
+            return Err(MemoryError::Map {
+                source: MapError::MapRangeBadVirtualBase {
+                    reason: "starting virtual address for mapping range must be at a page boundary",
+                    virt_start,
+                },
             });
         }
         match (self.high_addresses, tag) {
             (true, 0xffff) | (false, 0x0) => {}
-            _ => {
-                return Err(MapError::MapRangeBadVirtualBase {
+            _ => return Err(MemoryError::Map {
+                source: MapError::MapRangeBadVirtualBase {
                     reason:
                         "starting virtual address for mapping range must match tag for page table",
                     virt_start,
-                })
-            }
+                },
+            }),
         }
 
         if !overwrite {
@@ -441,8 +440,7 @@ impl PageTable {
                         }
                     }
 
-                    tr[i] =
-                        PageTableEntry::table_desc(Self::allocate_table().context(MemorySnafu)?);
+                    tr[i] = PageTableEntry::table_desc(Self::allocate_table()?);
                     table = tr[i].table_ref(lvl).unwrap();
                 }
             }

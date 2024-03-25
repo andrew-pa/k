@@ -102,7 +102,7 @@ impl<'sq> Command<'sq> {
         mut self,
         regions: &[(PhysicalAddress, usize)],
         blocks_per_page: usize,
-    ) -> Result<Command<'sq>, crate::storage::Error> {
+    ) -> Result<Command<'sq>, crate::storage::StorageError> {
         ensure!(
             !regions.is_empty(),
             crate::storage::BadVectorSnafu {

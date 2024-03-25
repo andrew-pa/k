@@ -1,5 +1,6 @@
 use crate::{
     bus::pcie::{self, msix::MsiXTable},
+    error::{self, Error},
     memory::{PhysicalBuffer, VirtualAddress, PAGE_SIZE},
     registry::{
         self, path::Component, registry_mut, Path, PathBuf, RegistryError, RegistryHandler,
@@ -145,6 +146,7 @@ impl RegistryHandler for NvmeDeviceRegistryHandler {
             &mut self.admin_cq.lock(),
             Some(ivx),
         )
+        // TODO: better error handling than panic
         .expect("create IO completion queue");
 
         log::trace!("creating IO submission queue");
@@ -233,7 +235,7 @@ impl NvmeDeviceRegistryHandler {
         pcie_addr: pcie::DeviceId,
         base_address: VirtualAddress,
         msix_table: MsiXTable,
-    ) -> Result<Self, pcie::Error> {
+    ) -> Result<Self, Error> {
         let cap: ControllerCapabilities = unsafe {
             base_address
                 .add(REG_CAP)
@@ -270,7 +272,9 @@ impl NvmeDeviceRegistryHandler {
             doorbell_base,
             cap.doorbell_stride(),
         )
-        .context(pcie::error::MemorySnafu)?;
+        .context(error::MemorySnafu {
+            reason: "allocate admin completion queue",
+        })?;
 
         let mut admin_sq = SubmissionQueue::new_admin(
             (PAGE_SIZE / SUBMISSION_ENTRY_SIZE) as u16,
@@ -278,7 +282,9 @@ impl NvmeDeviceRegistryHandler {
             cap.doorbell_stride(),
             &mut admin_cq,
         )
-        .context(pcie::error::MemorySnafu)?;
+        .context(error::MemorySnafu {
+            reason: "allocate admin submission queue",
+        })?;
 
         unsafe {
             log::trace!(
@@ -346,7 +352,9 @@ impl NvmeDeviceRegistryHandler {
         // the identify structure returns a 4KiB structure which is fortunatly only a single
         // page
         let id_res_buf =
-            PhysicalBuffer::alloc(1, &Default::default()).context(pcie::error::MemorySnafu)?;
+            PhysicalBuffer::alloc(1, &Default::default()).context(error::MemorySnafu {
+                reason: "create buffer for identify command result",
+            })?;
 
         log::trace!("sending identify command to controller");
         admin_sq
@@ -421,7 +429,7 @@ pub fn init_nvme_over_pcie(
     addr: pcie::DeviceId,
     config: &pcie::ConfigBlock,
     base: &pcie::BaseAddresses,
-) -> Result<(), pcie::Error> {
+) -> Result<(), Error> {
     log::info!("initializing NVMe over PCIe at {addr}");
     log::info!(
         "vendor = {:x}, device id = {:x}",
@@ -471,7 +479,9 @@ pub fn init_nvme_over_pcie(
         let mut path = PathBuf::from("/dev/nvme/");
         path.push(addr.to_string().as_str());
         reg.register(&path, Box::new(h))
-            .context(pcie::error::RegistrySnafu)?;
+            .context(error::RegistrySnafu {
+                reason: "register NVMe device",
+            })?;
     }
 
     Ok(())

@@ -1,8 +1,8 @@
 use crate::{
     memory::{PhysicalAddress, PAGE_SIZE},
-    storage::{BlockAddress, BlockStore, Error},
+    storage::{BlockAddress, BlockStore, StorageError},
 };
-use alloc::boxed::Box;
+use alloc::{boxed::Box, format};
 use async_trait::async_trait;
 
 use super::{interrupt::CompletionQueueHandle, queue::SubmissionQueue};
@@ -28,7 +28,7 @@ impl BlockStore for NamespaceBlockStore {
         &mut self,
         source_addr: BlockAddress,
         destination_addrs: &'a [(PhysicalAddress, usize)],
-    ) -> Result<usize, Error> {
+    ) -> Result<usize, StorageError> {
         // log::trace!("read blocks {source_addr}[..{num_blocks}] -> {destination_addrs:?}");
         let total_num_blocks: u16 = destination_addrs
             .iter()
@@ -52,9 +52,9 @@ impl BlockStore for NamespaceBlockStore {
         match (cmp.status.status_code_type(), cmp.status.status_code()) {
             (0, 0) => Ok(total_num_blocks as usize),
             _ => {
-                // log::error!("failed to do NVMe read at {source_addr} of size {num_blocks} to {destination_addrs:?}: {cmp:?}");
-                // TODO: this could maybe be more specific
-                Err(Error::DeviceError)
+                Err(StorageError::DeviceError {
+                    reason: format!("failed to do NVMe read at {source_addr} of size {total_num_blocks} to {destination_addrs:?}: {cmp:?}")
+                })
             }
         }
     }
@@ -63,7 +63,7 @@ impl BlockStore for NamespaceBlockStore {
         &mut self,
         source_addrs: &'a [(PhysicalAddress, usize)],
         destination_addr: BlockAddress,
-    ) -> Result<usize, Error> {
+    ) -> Result<usize, StorageError> {
         // log::trace!("write blocks {destination_addr} <- {source_addrs:?}[..{num_blocks}]");
         let total_num_blocks: u16 = source_addrs
             .iter()
@@ -87,9 +87,10 @@ impl BlockStore for NamespaceBlockStore {
         match (cmp.status.status_code_type(), cmp.status.status_code()) {
             (0, 0) => Ok(total_num_blocks as usize),
             _ => {
-                // log::error!("failed to do NVMe write from {source_addrs:?} of size {num_blocks} to {destination_addr}: {cmp:?}");
                 // TODO: this could maybe be more specific
-                Err(Error::DeviceError)
+                Err(StorageError::DeviceError {
+                    reason: format!("failed to do NVMe write from {source_addrs:?} of size {total_num_blocks} to {destination_addr}: {cmp:?}")
+                })
             }
         }
     }

@@ -189,10 +189,12 @@ impl core::fmt::Debug for VirtualAddress {
 /// An error resulting from a memory operation.
 #[derive(Debug, Snafu)]
 pub enum MemoryError {
-    #[snafu(display("out of memory"))]
+    /// Out of memory.
     OutOfMemory,
     #[snafu(display("insufficent memory for allocation of {size} bytes"))]
     InsufficentForAllocation { size: usize },
+    /// Error from manipulating page tables.
+    Map { source: paging::MapError },
 }
 
 mod physical_memory_allocator;

@@ -7,12 +7,12 @@ use crate::memory::PhysicalAddress;
 
 /// File system related errors.
 #[derive(Debug, Snafu)]
-pub enum Error {
+pub enum FsError {
     Memory {
         source: crate::memory::MemoryError,
     },
     Storage {
-        source: crate::storage::Error,
+        source: crate::storage::StorageError,
     },
     Registry {
         source: crate::registry::RegistryError,
@@ -48,7 +48,7 @@ pub trait File {
         src_offset: u64,
         dest_address: PhysicalAddress,
         num_pages: usize,
-    ) -> Result<(), Error>;
+    ) -> Result<(), FsError>;
 
     /// Write any changes from the in-memory file contents at `src_address` back to the persistent store
     async fn flush_pages(
@@ -56,7 +56,7 @@ pub trait File {
         dest_offset: u64,
         src_address: PhysicalAddress,
         num_pages: usize,
-    ) -> Result<(), Error>;
+    ) -> Result<(), FsError>;
 }
 
 pub mod fat;
