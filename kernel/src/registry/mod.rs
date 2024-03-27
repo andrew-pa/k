@@ -1,33 +1,29 @@
 //! Global namespace for resources like devices and files.
 use core::cell::OnceCell;
 
-use crate::{fs::File, storage::BlockStore};
+use crate::{
+    error::{self, Error},
+    fs::File,
+    storage::BlockStore,
+};
 use alloc::{boxed::Box, string::String};
 use async_trait::async_trait;
 
 pub mod path;
 use hashbrown::HashMap;
 pub use path::{Path, PathBuf};
-use snafu::Snafu;
+use snafu::{ResultExt, Snafu};
 use spin::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use self::path::{Component, Components};
 
 #[derive(Debug, Snafu)]
-#[snafu(visibility(pub), module(error))]
+#[snafu(visibility(pub))]
 pub enum RegistryError {
-    NotFound {
-        path: PathBuf,
-    },
+    NotFound { path: PathBuf },
     Unsupported,
-    HandlerAlreadyRegistered {
-        name: String,
-    },
+    HandlerAlreadyRegistered { name: String },
     InvalidPath,
-    Other {
-        reason: &'static str,
-        source: Box<dyn snafu::Error + Send + Sync>,
-    },
 }
 
 /// Resource types that can be retrieved from the Registry
@@ -44,9 +40,9 @@ pub enum ResourceType {
 #[async_trait]
 pub trait RegistryHandler {
     /// Open a [BlockStore][crate::storage::BlockStore] resource at `subpath`.
-    async fn open_block_store(&self, subpath: &Path) -> Result<Box<dyn BlockStore>, RegistryError>;
+    async fn open_block_store(&self, subpath: &Path) -> Result<Box<dyn BlockStore>, Error>;
     /// Open a [File][crate::fs::File] resource at `subpath`.
-    async fn open_file(&self, subpath: &Path) -> Result<Box<dyn File>, RegistryError>;
+    async fn open_file(&self, subpath: &Path) -> Result<Box<dyn File>, Error>;
 }
 
 // TODO: storing these as strings is bad as short strings might take up an unexpectedly large
@@ -155,15 +151,19 @@ impl Registry {
 
     /// Open a [BlockStore][crate::storage::BlockStore] resource located at `p` using the handler
     /// registered for that path, if present.
-    pub async fn open_block_store(&self, p: &Path) -> Result<Box<dyn BlockStore>, RegistryError> {
-        let (subpath, h) = self.find_handler(p)?;
+    pub async fn open_block_store(&self, p: &Path) -> Result<Box<dyn BlockStore>, Error> {
+        let (subpath, h) = self.find_handler(p).context(error::RegistrySnafu {
+            reason: "find handler for path",
+        })?;
         h.open_block_store(subpath).await
     }
 
     /// Open a [File][crate::fs::File] resource located at `p` using the handler
     /// registered for that path, if present.
-    pub async fn open_file(&self, p: &Path) -> Result<Box<dyn File>, RegistryError> {
-        let (subpath, h) = self.find_handler(p)?;
+    pub async fn open_file(&self, p: &Path) -> Result<Box<dyn File>, Error> {
+        let (subpath, h) = self.find_handler(p).context(error::RegistrySnafu {
+            reason: "find handler for path",
+        })?;
         h.open_file(subpath).await
     }
 }

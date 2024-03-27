@@ -11,13 +11,14 @@ use smallvec::SmallVec;
 use snafu::{ensure, OptionExt, ResultExt};
 
 use crate::{
-    fs::{BadMetadataSnafu, OtherSnafu, OutOfBoundsSnafu},
+    error::{self, Error},
+    fs::BadMetadataSnafu,
     memory::{PhysicalAddress, PAGE_SIZE},
-    registry::{registry_mut, Path, RegistryHandler},
+    registry::{self, registry_mut, Path, RegistryError, RegistryHandler},
     storage::{block_cache::BlockCache, BlockAddress, BlockStore},
 };
 
-use super::{Error, File, StorageSnafu};
+use super::{File, FsError};
 
 mod data;
 use data::*;
@@ -44,14 +45,16 @@ impl File for FatFile {
         num_pages: usize,
     ) -> Result<(), Error> {
         // assume: src_offset is page aligned and chunks go evenly into pages, so we never start in the middle of a chunk
-        ensure!(
-            src_offset <= self.file_size as u64,
-            OutOfBoundsSnafu {
-                value: src_offset as usize,
-                bound: self.file_size as usize,
-                message: "load_pages: source offset beyond end of file"
-            }
-        );
+        if src_offset > self.file_size as u64 {
+            return Err(Error::FileSystem {
+                reason: "load out of bounds".into(),
+                source: Box::new(FsError::OutOfBounds {
+                    value: src_offset as usize,
+                    bound: self.file_size as usize,
+                    message: "load_pages: source offset beyond end of file",
+                }),
+            });
+        }
 
         let mut cur_cluster_num = self.start_cluster_number;
         let mut cur_offset = 0;
@@ -66,7 +69,9 @@ impl File for FatFile {
                     bytemuck::bytes_of_mut(&mut cur_cluster_num),
                 )
                 .await
-                .context(StorageSnafu)?;
+                .context(error::StorageSnafu {
+                    reason: "read FAT table",
+                })?;
             cur_offset += self.params.bytes_per_cluster();
             // TODO: possible to get the end-of-file cluster number here
         }
@@ -87,7 +92,9 @@ impl File for FatFile {
                     )],
                 )
                 .await
-                .context(StorageSnafu)?;
+                .context(error::StorageSnafu {
+                    reason: "read data",
+                })?;
 
             // move to next cluster
             self.cache
@@ -97,7 +104,9 @@ impl File for FatFile {
                     bytemuck::bytes_of_mut(&mut cur_cluster_num),
                 )
                 .await
-                .context(StorageSnafu)?;
+                .context(error::StorageSnafu {
+                    reason: "read FAT table for next cluster",
+                })?;
             cur_offset += self.params.bytes_per_cluster();
         }
 
@@ -159,20 +168,23 @@ struct Handler {
 
 impl Handler {
     async fn new(block_store: Box<dyn BlockStore>) -> Result<Handler, Error> {
-        let cache = BlockCache::new(block_store, CACHE_SIZE).context(super::StorageSnafu)?;
+        let cache = BlockCache::new(block_store, CACHE_SIZE)?;
 
         // read the relevant part of the MBR, starting at byte 446
         let mut mbr_data = [0u8; 66];
         cache
             .copy_bytes(BlockAddress(0), 446, &mut mbr_data)
             .await
-            .context(super::StorageSnafu)?;
+            .context(error::StorageSnafu { reason: "load MBR" })?;
 
         // check MBR magic bytes
         if mbr_data[64] != 0x55 && mbr_data[65] != 0xaa {
-            return Err(Error::BadMetadata {
+            return Err(FsError::BadMetadata {
                 message: "bad MBR magic bytes",
                 value: ((mbr_data[64] as usize) << 8) | mbr_data[65] as usize,
+            })
+            .context(error::FileSystemSnafu {
+                reason: "check MBR magic",
             });
         }
 
@@ -193,20 +205,28 @@ impl Handler {
         cache
             .copy_bytes(partition_addr, 0, &mut bootsector_data)
             .await
-            .context(super::StorageSnafu)?;
+            .context(error::StorageSnafu {
+                reason: "read boot sector",
+            })?;
         log::debug!("{bootsector_data:x?}");
 
         // check boot sector magic bytes
-        ensure!(
-            bootsector_data[510] == 0x55 && bootsector_data[511] == 0xaa,
-            BadMetadataSnafu {
+        if !(bootsector_data[510] == 0x55 && bootsector_data[511] == 0xaa) {
+            return Err(BadMetadataSnafu {
                 message: "invalid boot sector signature",
-                value: bootsector_data[510]
+                value: bootsector_data[510],
             }
-        );
+            .build())
+            .context(error::FileSystemSnafu {
+                reason: "check boot sector magic",
+            });
+        }
+
         let bootsector: &BootSector = unsafe { &*(bootsector_data.as_ptr() as *const BootSector) };
         log::debug!("FAT bootsector = {bootsector:x?}");
-        bootsector.validate()?;
+        bootsector.validate().context(error::FileSystemSnafu {
+            reason: "validate boot sector",
+        })?;
 
         let hh = Handler {
             cache: Arc::new(cache),
@@ -271,11 +291,13 @@ impl Handler {
                     let mut block_addr = compute_block_addr(&source, &params);
 
                     loop {
+                        // read a directory entry
                         match cache
                             .copy_bytes(block_addr, offset, &mut entry_bytes)
                             .await
-                            .context(StorageSnafu)
-                        {
+                            .context(error::StorageSnafu {
+                                reason: "read directory entry",
+                            }) {
                             Ok(_) => {}
                             Err(e) => return Some((Err(e), (cache, source, offset))),
                         }
@@ -296,8 +318,9 @@ impl Handler {
                                             bytemuck::bytes_of_mut(i),
                                         )
                                         .await
-                                        .context(StorageSnafu)
-                                    {
+                                        .context(error::StorageSnafu {
+                                            reason: "read next cluster in FAT",
+                                        }) {
                                         Ok(_) => {}
                                         Err(e) => return Some((Err(e), (cache, source, offset))),
                                     }
@@ -362,19 +385,23 @@ impl Handler {
             log::trace!("got entry {:?}, {}", de.long_name(), unsafe {
                 core::str::from_utf8_unchecked(&de.short_name)
             });
-            if de
-                .is_named(ps)
-                .map_err(|e| Box::new(e) as Box<dyn snafu::Error + Send + Sync>)
-                .context(OtherSnafu {
-                    reason: "check entry name",
-                })?
-            {
-                if de.attributes.contains(DirEntryAttributes::Directory) {
-                    return self
-                        .find_entry_for_path(DirectorySource::Clusters(de.cluster_num_lo), comps)
-                        .await;
+            match de.is_named(ps) {
+                Ok(true) => {
+                    if de.attributes.contains(DirEntryAttributes::Directory) {
+                        return self
+                            .find_entry_for_path(
+                                DirectorySource::Clusters(de.cluster_num_lo),
+                                comps,
+                            )
+                            .await;
+                    }
+                    return Ok(Some(*de));
                 }
-                return Ok(Some(*de));
+                Ok(false) => (),
+                Err(e) => {
+                    log::warn!("failed to read directory entry: {e}");
+                    // just ignore the entry, this isn't fatal
+                }
             }
         }
 
@@ -384,17 +411,14 @@ impl Handler {
 
 #[async_trait]
 impl RegistryHandler for Handler {
-    async fn open_block_store(
-        &self,
-        _subpath: &Path,
-    ) -> Result<Box<dyn BlockStore>, crate::registry::RegistryError> {
-        Err(crate::registry::RegistryError::Unsupported)
+    async fn open_block_store(&self, _subpath: &Path) -> Result<Box<dyn BlockStore>, Error> {
+        Err(Error::Registry {
+            reason: "".into(),
+            source: Box::new(RegistryError::Unsupported),
+        })
     }
 
-    async fn open_file(
-        &self,
-        subpath: &Path,
-    ) -> Result<Box<dyn super::File>, crate::registry::RegistryError> {
+    async fn open_file(&self, subpath: &Path) -> Result<Box<dyn super::File>, Error> {
         log::trace!("attempting to locate {subpath} in FAT volume");
 
         let entry = self
@@ -402,12 +426,11 @@ impl RegistryHandler for Handler {
                 DirectorySource::Direct(self.params.root_directory_start),
                 subpath.components(),
             )
-            .await
-            .map_err(|e| Box::new(e) as Box<dyn snafu::Error + Send + Sync>)
-            .context(crate::registry::error::OtherSnafu {
+            .await?
+            .context(registry::NotFoundSnafu { path: subpath })
+            .context(error::RegistrySnafu {
                 reason: "failed to find directory entry for path",
-            })?
-            .with_context(|| crate::registry::error::NotFoundSnafu { path: subpath })?;
+            })?;
 
         log::debug!("found entry {entry:?} for path {subpath}");
 
@@ -424,5 +447,7 @@ impl RegistryHandler for Handler {
 pub async fn mount(root_path: &Path, block_store: Box<dyn BlockStore>) -> Result<(), Error> {
     registry_mut()
         .register(root_path, Box::new(Handler::new(block_store).await?))
-        .context(super::RegistrySnafu)
+        .context(error::RegistrySnafu {
+            reason: "register FAT filesystem",
+        })
 }

@@ -37,7 +37,7 @@ qemu-exit = "3.0.1"
 
 # software interface
 kapi = { path = "../kapi" }
-elf = { version = "0.7.2", default-features = false }
+elf = { version = "0.7.2", default-features = false, features = ["nightly"] }
 serde-json-core = "0.5"
 
 [dev-dependencies]

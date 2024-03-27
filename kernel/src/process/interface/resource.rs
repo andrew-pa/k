@@ -1,26 +1,14 @@
 use alloc::boxed::Box;
-use snafu::{ResultExt, Snafu};
+use snafu::ResultExt;
 
 use crate::{
+    error::{self, Error},
     fs::File,
     memory::{
         paging::{PageTable, PageTableEntryOptions},
         physical_memory_allocator, VirtualAddress, PAGE_SIZE,
     },
 };
-
-#[derive(Debug, Snafu)]
-pub enum HandlePageFaultError {
-    Memory {
-        source: crate::memory::MemoryError,
-    },
-    Map {
-        source: crate::memory::paging::MapError,
-    },
-    FileSystem {
-        source: crate::fs::Error,
-    },
-}
 
 pub struct MappedFile {
     pub length_in_bytes: usize,
@@ -33,13 +21,19 @@ impl MappedFile {
         base_address: VirtualAddress,
         accessed_address: VirtualAddress,
         page_tables: &mut PageTable,
-    ) -> Result<(), HandlePageFaultError> {
+    ) -> Result<(), Error> {
         // compute address of affected page
         let accessed_page = VirtualAddress(accessed_address.0 & !(PAGE_SIZE - 1));
         log::trace!("handling page fault in mapped file at {base_address}, accessed address = {accessed_address} ({accessed_page})");
         // allocate new memory
         log::trace!("allocate new memory");
-        let dest_address = { physical_memory_allocator().alloc().context(MemorySnafu)? };
+        let dest_address = {
+            physical_memory_allocator()
+                .alloc()
+                .context(error::MemorySnafu {
+                    reason: "allocate new page",
+                })?
+        };
         // map memory in page tables
         log::trace!("map new memory in process page table");
         page_tables
@@ -53,13 +47,14 @@ impl MappedFile {
                     el0_access: true,
                 },
             )
-            .context(MapSnafu)?;
+            .context(error::MemorySnafu {
+                reason: "map new page",
+            })?;
         // load data from file
         log::trace!("load actual data into memory");
         self.resource
             .load_pages((accessed_page.0 - base_address.0) as u64, dest_address, 1)
             .await
-            .context(FileSystemSnafu)
     }
 }
 

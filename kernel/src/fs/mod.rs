@@ -3,20 +3,11 @@ use alloc::boxed::Box;
 use async_trait::async_trait;
 use snafu::Snafu;
 
-use crate::memory::PhysicalAddress;
+use crate::{error::Error, memory::PhysicalAddress};
 
 /// File system related errors.
 #[derive(Debug, Snafu)]
-pub enum Error {
-    Memory {
-        source: crate::memory::MemoryError,
-    },
-    Storage {
-        source: crate::storage::Error,
-    },
-    Registry {
-        source: crate::registry::RegistryError,
-    },
+pub enum FsError {
     BadMetadata {
         message: &'static str,
         value: usize,
@@ -25,10 +16,6 @@ pub enum Error {
         value: usize,
         bound: usize,
         message: &'static str,
-    },
-    Other {
-        reason: &'static str,
-        source: Box<dyn snafu::Error + Send + Sync>,
     },
 }
 

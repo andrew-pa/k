@@ -26,6 +26,7 @@ use memory::PhysicalAddress;
 use qemu_exit::QEMUExit as _;
 
 pub mod ds;
+pub mod error;
 pub mod registry;
 
 pub mod exception;

@@ -1,41 +1,18 @@
+use alloc::format;
 use elf::segment::ProgramHeader;
 use kapi::queue::{FIRST_RECV_QUEUE_ID, FIRST_SEND_QUEUE_ID};
 use spin::once::Once;
 
-use super::*;
+use crate::error::{self, Error};
 
-/// An error that can occur trying to spawn a process.
-#[derive(Debug, Snafu)]
-pub enum SpawnError {
-    Registry {
-        path: crate::registry::PathBuf,
-        source: crate::registry::RegistryError,
-    },
-    Memory {
-        reason: &'static str,
-        source: crate::memory::MemoryError,
-    },
-    MemoryMap {
-        source: crate::memory::paging::MapError,
-    },
-    FileSystem {
-        reason: &'static str,
-        source: crate::fs::Error,
-    },
-    BinFormat {
-        reason: elf::ParseError,
-    },
-    Other {
-        reason: &'static str,
-    },
-}
+use super::*;
 
 fn load_segment(
     seg: &ProgramHeader,
     src_data: &[u8],
     pt: &mut PageTable,
     address_space_allocator: &mut VirtualAddressAllocator,
-) -> Result<(), SpawnError> {
+) -> Result<(), Error> {
     // TODO: we are doing this wrong. the init ELF file seems to make the alignment_offset end up
     // being the running total size of all segments so far, causing each new segment to have to
     // allocate padding space the size of all previous segments. This is obviously unnecessary.
@@ -45,7 +22,7 @@ fn load_segment(
     let page_alignment_offset = (seg.p_vaddr as usize) & (PAGE_SIZE - 1);
     let page_count = (seg.p_memsz as usize + page_alignment_offset).div_ceil(PAGE_SIZE);
     let mut dest_memory_segment =
-        PhysicalBuffer::alloc(page_count, &Default::default()).context(MemorySnafu {
+        PhysicalBuffer::alloc(page_count, &Default::default()).context(error::MemorySnafu {
             reason: "allocate process memory segement",
         })?;
 
@@ -79,7 +56,9 @@ fn load_segment(
             el0_access: true,
         },
     )
-    .context(MemoryMapSnafu)?;
+    .with_context(|_| error::MemorySnafu {
+        reason: format!("map process segment {seg:?}"),
+    })?;
     address_space_allocator
         .reserve(page_aligned_vaddr, page_count)
         .expect("user process VA allocations should not overlap, and the page table should check");
@@ -94,12 +73,12 @@ pub fn attach_queues(
     recv_qu: &OwnedQueue<Completion>,
     page_tables: &mut PageTable,
     address_space_allocator: &mut VirtualAddressAllocator,
-) -> Result<(VirtualAddress, usize, VirtualAddress, usize), SpawnError> {
+) -> Result<(VirtualAddress, usize, VirtualAddress, usize), Error> {
     let total_len = send_qu.buffer.len() + recv_qu.buffer.len();
     let num_pages = total_len.div_ceil(PAGE_SIZE);
     let send_base_addr = address_space_allocator
         .alloc(num_pages)
-        .context(MemorySnafu {
+        .context(error::MemorySnafu {
             reason: "allocate in process address space for channel",
         })?;
     let recv_base_addr = send_base_addr.add(send_qu.buffer.len());
@@ -115,7 +94,9 @@ pub fn attach_queues(
             true,
             &map_opts,
         )
-        .context(MemoryMapSnafu)?;
+        .context(error::MemorySnafu {
+            reason: "map process send queue",
+        })?;
     page_tables
         .map_range(
             recv_qu.buffer.physical_address(),
@@ -124,7 +105,9 @@ pub fn attach_queues(
             true,
             &map_opts,
         )
-        .context(MemoryMapSnafu)?;
+        .context(error::MemorySnafu {
+            reason: "map process recv queue",
+        })?;
     Ok((
         send_base_addr,
         send_qu.buffer.len(),
@@ -138,34 +121,28 @@ pub fn attach_queues(
 pub async fn spawn_process(
     binary_path: impl AsRef<crate::registry::Path>,
     before_launch: Option<impl FnOnce(Arc<Process>)>,
-) -> Result<Arc<Process>, SpawnError> {
+) -> Result<Arc<Process>, Error> {
     use crate::registry::registry;
 
     // load & parse binary
     let path = binary_path.as_ref();
     log::debug!("spawning process with binary file at {path}");
-    let mut f = registry()
-        .open_file(path)
-        .await
-        .with_context(|_| RegistrySnafu { path })?;
+    let mut f = registry().open_file(path).await?;
 
     let f_len = f.len() as usize;
     log::debug!("binary file size = {f_len}");
     let src_data = PhysicalBuffer::alloc(f_len.div_ceil(PAGE_SIZE), &Default::default()).context(
-        MemorySnafu {
+        error::MemorySnafu {
             reason: "allocate temporary buffer for binary",
         },
     )?;
     f.load_pages(0, src_data.physical_address(), src_data.page_count())
-        .await
-        .context(FileSystemSnafu {
-            reason: "read binary from disk",
-        })?;
+        .await?;
 
     // parse ELF binary
     let bin: elf::ElfBytes<elf::endian::LittleEndian> =
         elf::ElfBytes::minimal_parse(src_data.as_bytes())
-            .map_err(|reason| BinFormatSnafu { reason }.build())?;
+            .map_err(|e| Error::other("parse ELF binary", None, e))?;
     // log::debug!("ELF header = {:#x?}", bin.ehdr);
 
     // allocate a process ID
@@ -176,7 +153,7 @@ pub async fn spawn_process(
 
     // create page tables for the new process
     // TODO: ASID calculation is probably not ideal.
-    let mut pt = PageTable::empty(false, pid.get() as u16).context(MemorySnafu {
+    let mut pt = PageTable::empty(false, pid.get() as u16).context(error::MemorySnafu {
         reason: "create process page tables",
     })?;
 
@@ -184,7 +161,7 @@ pub async fn spawn_process(
     let mut address_space_allocator =
         VirtualAddressAllocator::new(VirtualAddress(PAGE_SIZE), 0x0000_ffff_ffff_ffff / PAGE_SIZE);
 
-    let segments = bin.segments().context(OtherSnafu {
+    let segments = bin.segments().context(error::ExpectedValueSnafu {
         reason: "expected binary to have at least one segment",
     })?;
 
@@ -208,7 +185,7 @@ pub async fn spawn_process(
     let stack_buf = {
         physical_memory_allocator()
             .alloc_contig(stack_page_count)
-            .context(MemorySnafu {
+            .context(error::MemorySnafu {
                 reason: "allocate process stack segment",
             })?
     };
@@ -223,16 +200,18 @@ pub async fn spawn_process(
             el0_access: true,
         },
     )
-    .context(MemoryMapSnafu)?;
+    .context(error::MemorySnafu {
+        reason: "map proces stack",
+    })?;
     address_space_allocator
         .reserve(stack_vaddr, stack_page_count)
         .expect("user process VA allocations should not overlap, and the page table should check");
 
     // create process communication queues
-    let send_qu = OwnedQueue::new(FIRST_SEND_QUEUE_ID, 2).context(MemorySnafu {
+    let send_qu = OwnedQueue::new(FIRST_SEND_QUEUE_ID, 2).context(error::MemorySnafu {
         reason: "allocate first send queue",
     })?;
-    let recv_qu = OwnedQueue::new(FIRST_RECV_QUEUE_ID, 2).context(MemorySnafu {
+    let recv_qu = OwnedQueue::new(FIRST_RECV_QUEUE_ID, 2).context(error::MemorySnafu {
         reason: "allocate first receive queue",
     })?;
     let (send_qu_addr, send_qu_size, recv_qu_addr, recv_qu_size) =

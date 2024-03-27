@@ -1,4 +1,5 @@
 use super::*;
+use crate::error;
 use crate::memory::{PhysicalBuffer, PAGE_SIZE};
 use crate::tasks::locks::{Mutex, RwLock};
 use alloc::vec::Vec;
@@ -78,8 +79,11 @@ impl BlockCache {
         let chunk_id_bits = num_chunks.ilog2() as usize;
         let block_offset_bits = blocks_per_chunk.ilog2() as usize;
         log::debug!("creating block cache with {num_chunks} chunks, {blocks_per_chunk} blocks per chunk, {chunk_id_bits} bits for chunk ID, {block_offset_bits} bits for block offset");
-        let buffer = PhysicalBuffer::alloc(max_size_in_pages, &Default::default())
-            .context(super::MemorySnafu)?;
+        let buffer = PhysicalBuffer::alloc(max_size_in_pages, &Default::default()).context(
+            error::MemorySnafu {
+                reason: "allocate backing store for block cache",
+            },
+        )?;
         Ok(BlockCache {
             store: Mutex::new(Box::new(store)),
             block_offset_bits,
@@ -148,7 +152,12 @@ impl BlockCache {
             .offset((chunk_id * self.chunk_size as u64) as isize)
     }
 
-    async fn load_chunk(&self, tag: u64, chunk_id: u64, mark_dirty: bool) -> Result<(), Error> {
+    async fn load_chunk(
+        &self,
+        tag: u64,
+        chunk_id: u64,
+        mark_dirty: bool,
+    ) -> Result<(), StorageError> {
         let md = { self.metadata.read().await[chunk_id as usize] };
         if !md.occupied() || md.tag() != tag {
             // chunk is not present
@@ -183,7 +192,7 @@ impl BlockCache {
         starting_chunk_id: u64,
         num_chunks_inclusive: u64,
         mark_dirty: bool,
-    ) -> Result<(), Error> {
+    ) -> Result<(), StorageError> {
         future::try_join_all((0..num_chunks_inclusive).map(|i| {
             let mut tag = starting_tag;
             let mut chunk_id = starting_chunk_id + i;
@@ -203,7 +212,7 @@ impl BlockCache {
         mut address: BlockAddress,
         mut byte_offset: usize,
         dest: &mut [u8],
-    ) -> Result<(), Error> {
+    ) -> Result<(), StorageError> {
         if byte_offset >= self.block_size() {
             address.0 += (byte_offset / self.block_size()) as u64;
             byte_offset %= self.block_size();
@@ -240,7 +249,7 @@ impl BlockCache {
         mut address: BlockAddress,
         mut byte_offset: usize,
         src: &[u8],
-    ) -> Result<(), Error> {
+    ) -> Result<(), StorageError> {
         if byte_offset >= self.block_size() {
             address.0 += (byte_offset / self.block_size()) as u64;
             byte_offset %= self.block_size();
@@ -313,7 +322,7 @@ mod test {
             &mut self,
             source_addr: BlockAddress,
             destinations: &'a [(PhysicalAddress, usize)],
-        ) -> Result<usize, Error> {
+        ) -> Result<usize, StorageError> {
             let mut total = 0;
             for (destination_addr, num_blocks) in destinations {
                 unsafe {
@@ -333,7 +342,7 @@ mod test {
             &mut self,
             source_addrs: &'a [(PhysicalAddress, usize)],
             destination_addr: BlockAddress,
-        ) -> Result<usize, Error> {
+        ) -> Result<usize, StorageError> {
             unimplemented!()
         }
     }
@@ -403,7 +412,7 @@ mod test {
             &mut self,
             source_addr: BlockAddress,
             destinations: &'a [(PhysicalAddress, usize)],
-        ) -> Result<usize, Error> {
+        ) -> Result<usize, StorageError> {
             log::debug!("read {source_addr} → {destinations:?}");
             let mut total = 0;
             for (destination_addr, num_blocks) in destinations {
@@ -427,7 +436,7 @@ mod test {
             &mut self,
             sources: &'a [(PhysicalAddress, usize)],
             destination_addr: BlockAddress,
-        ) -> Result<usize, Error> {
+        ) -> Result<usize, StorageError> {
             log::debug!("write {sources:?} → {destination_addr}");
             let mut total = 0;
             for (source_addr, num_blocks) in sources {

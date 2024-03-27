@@ -7,10 +7,11 @@ use bitfield::Bit;
 use byteorder::{BigEndian, ByteOrder};
 
 use hashbrown::HashMap;
-use snafu::{ResultExt, Snafu};
+use snafu::ResultExt;
 
 use crate::{
     ds::dtb::{DeviceTree, StandardProperty},
+    error::{self, Error},
     memory::{self, PhysicalAddress, VirtualAddress, PAGE_SIZE},
 };
 
@@ -124,12 +125,16 @@ impl BaseAddresses {
 
         let (mmio_vrt, ecam_vrt) = {
             let mut vaa = memory::virtual_address_allocator();
-            let ecam_vrt = vaa
-                .alloc(ecam_size.div_ceil(PAGE_SIZE))
-                .context(error::MemorySnafu)?;
-            let mmio_vrt = vaa
-                .alloc(mmio_size.div_ceil(PAGE_SIZE))
-                .context(error::MemorySnafu)?;
+            let ecam_vrt =
+                vaa.alloc(ecam_size.div_ceil(PAGE_SIZE))
+                    .context(error::MemorySnafu {
+                        reason: "alloc ECAM region",
+                    })?;
+            let mmio_vrt =
+                vaa.alloc(mmio_size.div_ceil(PAGE_SIZE))
+                    .context(error::MemorySnafu {
+                        reason: "alloc MMIO region",
+                    })?;
             (mmio_vrt, ecam_vrt)
         };
 
@@ -143,7 +148,9 @@ impl BaseAddresses {
                 true,
                 &memory::paging::PageTableEntryOptions::default(),
             )
-            .context(error::MappingSnafu)?;
+            .context(error::MemorySnafu {
+                reason: "map ECAM region",
+            })?;
 
             pt.map_range(
                 mmio_base,
@@ -152,7 +159,9 @@ impl BaseAddresses {
                 true,
                 &memory::paging::PageTableEntryOptions::default(),
             )
-            .context(error::MappingSnafu)?;
+            .context(error::MemorySnafu {
+                reason: "map MMIO region",
+            })?;
         }
 
         Ok(Self {
@@ -368,21 +377,6 @@ impl Type0ConfigHeader<'_> {
             },
         }
     }
-}
-
-/// Errors arising from the PCIe bus.
-#[derive(Debug, Snafu)]
-#[snafu(module, visibility(pub))]
-pub enum Error {
-    Memory {
-        source: memory::MemoryError,
-    },
-    Mapping {
-        source: memory::paging::MapError,
-    },
-    Registry {
-        source: crate::registry::RegistryError,
-    },
 }
 
 /// The type of functions that can be registered to handle the discovery of a device on the bus.

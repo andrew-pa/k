@@ -1,6 +1,9 @@
 //! Storage device drivers i.e. block devices.
-use crate::memory::PhysicalAddress;
-use alloc::boxed::Box;
+use crate::{
+    error::Error,
+    memory::{MemoryError, PhysicalAddress},
+};
+use alloc::{boxed::Box, string::String};
 use async_trait::async_trait;
 use derive_more::Display;
 use snafu::Snafu;
@@ -16,17 +19,18 @@ impl core::fmt::Debug for BlockAddress {
     }
 }
 
+// TODO: more specificity
 #[derive(Debug, Snafu)]
-pub enum Error {
-    Memory {
-        source: crate::memory::MemoryError,
-    },
+pub enum StorageError {
     /// A source/destination vector was provided that is invalid
     BadVector {
         reason: &'static str,
         entry: Option<(PhysicalAddress, usize)>,
     },
-    DeviceError,
+    /// An error occurred on the device.
+    DeviceError { reason: String },
+    /// Failed to allocate temporary memory required by driver.
+    MemoryError { source: MemoryError },
 }
 
 #[async_trait]
@@ -47,7 +51,7 @@ pub trait BlockStore: Send {
         &mut self,
         source_addr: BlockAddress,
         destinations: &'a [(PhysicalAddress, usize)],
-    ) -> Result<usize, Error>;
+    ) -> Result<usize, StorageError>;
 
     /// Write the data at each source region sequentially into the blocks starting at dest_addr.
     /// Each source is comprised of a (physical address, block count N) pair that indicates
@@ -58,7 +62,7 @@ pub trait BlockStore: Send {
         &mut self,
         sources: &'a [(PhysicalAddress, usize)],
         destination_addr: BlockAddress,
-    ) -> Result<usize, Error>;
+    ) -> Result<usize, StorageError>;
 }
 
 #[async_trait]
@@ -71,7 +75,7 @@ impl BlockStore for Box<dyn BlockStore> {
         &mut self,
         source_addr: BlockAddress,
         destination_addrs: &'a [(PhysicalAddress, usize)],
-    ) -> Result<usize, Error> {
+    ) -> Result<usize, StorageError> {
         self.as_mut()
             .read_blocks(source_addr, destination_addrs)
             .await
@@ -81,7 +85,7 @@ impl BlockStore for Box<dyn BlockStore> {
         &mut self,
         source_addrs: &'a [(PhysicalAddress, usize)],
         destination_addr: BlockAddress,
-    ) -> Result<usize, Error> {
+    ) -> Result<usize, StorageError> {
         self.as_mut()
             .write_blocks(source_addrs, destination_addr)
             .await

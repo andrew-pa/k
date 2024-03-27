@@ -70,7 +70,7 @@ pub struct BootSector {
 
 impl BootSector {
     /// Check to make sure that this partition has a valid and supported boot sector.
-    pub fn validate(&self) -> Result<(), Error> {
+    pub fn validate(&self) -> Result<(), FsError> {
         ensure!(
             self.bytes_per_sector as u64 == 512,
             BadMetadataSnafu {
