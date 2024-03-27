@@ -277,7 +277,7 @@ impl SubmissionQueue {
         .map_err(|e| Box::new(e) as _)
         .context(error::OtherSnafu {
             reason: "NVMe device failed to create queue",
-            code: None,
+            code: Some(kapi::ErrorCode::Device),
         })
     }
 
@@ -465,7 +465,7 @@ impl CompletionQueue {
         .map_err(|e| Box::new(e) as _)
         .context(error::OtherSnafu {
             reason: "NVMe device failed to create queue",
-            code: None,
+            code: Some(kapi::ErrorCode::Device),
         })
     }
 

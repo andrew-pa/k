@@ -107,7 +107,7 @@ impl RegistryHandler for NvmeDeviceRegistryHandler {
                 .map_err(|e| Box::new(e) as Box<dyn core::error::Error + Send + Sync>)
                 .context(error::OtherSnafu {
                     reason: "failed to parse NVMe device ID number",
-                    code: None,
+                    code: Some(kapi::ErrorCode::BadFormat),
                 })?,
             _ => {
                 return Err(Error::Registry {

@@ -59,4 +59,34 @@ impl Error {
             source: Box::new(src),
         }
     }
+
+    pub fn as_code(&self) -> ErrorCode {
+        match self {
+            Error::Memory { source, .. } => match **source {
+                MemoryError::OutOfMemory | MemoryError::InsufficentForAllocation { .. } => {
+                    ErrorCode::OutOfMemory
+                }
+                _ => ErrorCode::Internal,
+            },
+            Error::Registry { source, .. } => match **source {
+                RegistryError::NotFound { .. } => ErrorCode::NotFound,
+                RegistryError::Unsupported => ErrorCode::UnsupportedOperation,
+                RegistryError::InvalidPath => ErrorCode::BadFormat,
+                RegistryError::HandlerAlreadyRegistered { .. } => ErrorCode::Internal,
+            },
+            Error::Storage { source, .. } => match **source {
+                StorageError::BadVector { .. } => ErrorCode::BadFormat,
+                StorageError::DeviceError { .. } => ErrorCode::Device,
+                StorageError::MemoryError { .. } => todo!(),
+            },
+            Error::FileSystem { source, .. } => match **source {
+                FsError::OutOfBounds { .. } => ErrorCode::OutOfBounds,
+                _ => ErrorCode::Internal,
+            },
+            Error::Other {
+                code: Some(code), ..
+            } => *code,
+            _ => ErrorCode::Internal,
+        }
+    }
 }

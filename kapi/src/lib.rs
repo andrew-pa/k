@@ -44,6 +44,25 @@ unsafe impl Contiguous for SuccessCode {
 pub enum ErrorCode {
     InvalidStatusCode = 0,
     UnknownCommand,
+
+    /// The operation requested is unsupported for a particular resource.
+    UnsupportedOperation,
+
+    /// The system has run out of memory.
+    OutOfMemory,
+    /// The resource referenced could not be found.
+    NotFound,
+    /// An argument was out of bounds.
+    OutOfBounds,
+
+    /// Data provided was in an incorrect format.
+    BadFormat,
+
+    /// The underlying device returned an error.
+    Device,
+
+    /// An internal kernel error occurred, check the system log for details.
+    Internal,
 }
 
 unsafe impl Contiguous for ErrorCode {
