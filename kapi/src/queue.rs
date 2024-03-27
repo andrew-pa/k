@@ -40,17 +40,22 @@ pub struct Queue<T> {
 unsafe impl<T: Send> Send for Queue<T> {}
 unsafe impl<T: Send> Sync for Queue<T> {}
 
+/// Compute the size of a queue in bytes given the number of elements in the queue.
+pub fn queue_size_in_bytes<T>(queue_len: usize) -> usize {
+    use core::mem::{align_of, size_of};
+    let el_size = size_of::<T>();
+    let el_align = align_of::<T>() - 1;
+    size_of::<AtomicUsize>() * 2 + ((el_size + el_align) & !el_align) * queue_len
+}
+
 impl<T> Queue<T> {
     /// Create a new queue backed by a region of memory.
     ///
     /// # Safety
-    /// `backing_memory` must point to a valid region of memory that is at least `size_in_bytes` bytes long.
+    /// `backing_memory` must point to a valid region of memory that is at least
+    /// [queue_size_in_bytes]`(queue_len)` bytes long.
     /// `backing_memory` must also be correctly aligned for atomic load/store operations of `usize`.
-    pub unsafe fn new(id: QueueId, size_in_bytes: usize, backing_memory: NonNull<()>) -> Queue<T> {
-        // compute the number of slots in the queue
-        let queue_len =
-            (size_in_bytes - (core::mem::size_of::<AtomicUsize>() * 2)) / core::mem::size_of::<T>();
-
+    pub unsafe fn new(id: QueueId, queue_len: usize, backing_memory: NonNull<()>) -> Queue<T> {
         // place the head/tail pointers at the start of the buffer
         let p: NonNull<AtomicUsize> = backing_memory.cast();
 
@@ -76,12 +81,22 @@ impl<T> Queue<T> {
     /// If this completion came from the kernel, it will satisfy these requirements.
     // TODO: it would be excellent if we could check to make sure we really have a queue of T and
     // not something else.
-    pub unsafe fn from_completion(cmpl: &crate::completions::NewQueue) -> Queue<T> {
+    pub unsafe fn from_completion(cmpl: &crate::completions::NewQueue, len: usize) -> Queue<T> {
         Self::new(
             cmpl.id,
-            cmpl.size_in_bytes,
+            len,
             NonNull::new(cmpl.start as *mut ()).expect("queue start pointer is non-null"),
         )
+    }
+
+    /// Returns the maximum number of elements that can be in the queue.
+    pub fn len(&self) -> usize {
+        self.queue_len
+    }
+
+    /// Checks to see if the queue is empty.
+    pub fn is_empty(&self) -> bool {
+        self.head() == self.tail()
     }
 
     /// Gets the head index (the index of the next free slot).

@@ -30,6 +30,8 @@ pub enum ErrorCode {
     NotFound,
     /// An argument was out of bounds.
     OutOfBounds,
+    /// The kernel has run out of free IDs for a resource.
+    OutOfIds,
 
     /// Data provided was in an incorrect format.
     BadFormat,
@@ -71,8 +73,6 @@ pub struct NewQueue {
     pub id: QueueId,
     /// The address of the start of the queue.
     pub start: usize,
-    /// The size of the queue in bytes.
-    pub size_in_bytes: usize,
 }
 impl_into_kind!(NewQueue);
 

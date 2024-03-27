@@ -28,7 +28,7 @@ fn basic_create_destroy(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
             assert_eq!(c.response_to_id, 0);
             match c.kind {
                 CmplKind::NewQueue(nq) => unsafe {
-                    cmpl_qu = Some(Queue::from_completion(&nq));
+                    cmpl_qu = Some(Queue::from_completion(&nq, 16));
                 },
                 _ => panic!("unexpected completion: {c:?}"),
             }
@@ -56,7 +56,7 @@ fn basic_create_destroy(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
             assert_eq!(c.response_to_id, 1);
             match c.kind {
                 CmplKind::NewQueue(nq) => unsafe {
-                    sub_qu = Some(Queue::from_completion(&nq));
+                    sub_qu = Some(Queue::from_completion(&nq, 16));
                 },
                 _ => panic!("unexpected completion: {c:?}"),
             }
