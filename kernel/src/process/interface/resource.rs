@@ -55,9 +55,6 @@ impl MappedFile {
         self.resource
             .load_pages((accessed_page.0 - base_address.0) as u64, dest_address, 1)
             .await
-            .context(error::FileSystemSnafu {
-                reason: "fill new page from disk",
-            })
     }
 }
 

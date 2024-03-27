@@ -127,12 +127,7 @@ pub async fn spawn_process(
     // load & parse binary
     let path = binary_path.as_ref();
     log::debug!("spawning process with binary file at {path}");
-    let mut f = registry()
-        .open_file(path)
-        .await
-        .with_context(|_| error::RegistrySnafu {
-            reason: "open executable file",
-        })?;
+    let mut f = registry().open_file(path).await?;
 
     let f_len = f.len() as usize;
     log::debug!("binary file size = {f_len}");
@@ -142,10 +137,7 @@ pub async fn spawn_process(
         },
     )?;
     f.load_pages(0, src_data.physical_address(), src_data.page_count())
-        .await
-        .context(error::FileSystemSnafu {
-            reason: "read binary from disk",
-        })?;
+        .await?;
 
     // parse ELF binary
     let bin: elf::ElfBytes<elf::endian::LittleEndian> =

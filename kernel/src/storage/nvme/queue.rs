@@ -164,7 +164,6 @@ pub type QueueId = u16;
 
 #[derive(Debug, Snafu)]
 pub enum QueueCreateError {
-    Memory { source: MemoryError },
     Generic { code: u8 },
     InvalidQueueId,
     InvalidQueueSize,
@@ -238,7 +237,7 @@ impl SubmissionQueue {
         parent: Arc<Mutex<SubmissionQueue>>,
         parent_cq: &mut CompletionQueue,
         priority: QueuePriority,
-    ) -> Result<Self, QueueCreateError> {
+    ) -> Result<Self, Error> {
         assert!(id > 0);
         let s = Self::new(
             id,
@@ -248,7 +247,9 @@ impl SubmissionQueue {
             associated_completion_queue,
             Some(parent.clone()),
         )
-        .context(MemorySnafu)?;
+        .context(error::MemorySnafu {
+            reason: "allocate backing memory for NVMe submission queue",
+        })?;
         // TODO: for now all queues are physically continuous
         parent
             .lock()
@@ -273,6 +274,11 @@ impl SubmissionQueue {
             (1, 8) => Err(QueueCreateError::InvalidQueueSize),
             (_, _) => panic!("unexpected IO submission queue completion: {cmpl:?}"),
         }
+        .map_err(|e| Box::new(e) as _)
+        .context(error::OtherSnafu {
+            reason: "NVMe device failed to create queue",
+            code: None,
+        })
     }
 
     pub fn size(&self) -> u16 {
@@ -420,7 +426,7 @@ impl CompletionQueue {
         parent: Arc<Mutex<SubmissionQueue>>,
         parent_cq: &mut CompletionQueue,
         interrupt_index: Option<u16>,
-    ) -> Result<Self, QueueCreateError> {
+    ) -> Result<Self, Error> {
         assert!(id > 0);
         let s = Self::new(
             id,
@@ -429,7 +435,9 @@ impl CompletionQueue {
             doorbell_stride,
             Some(parent.clone()),
         )
-        .context(MemorySnafu)?;
+        .context(error::MemorySnafu {
+            reason: "failed to allocate memory for NVMe completion queue",
+        })?;
         // TODO: for now all queues are physically continuous
         parent
             .lock()
@@ -454,6 +462,11 @@ impl CompletionQueue {
             (1, 8) => Err(QueueCreateError::InvalidInterruptVectorIndex),
             (_, _) => panic!("unexpected IO submission queue completion: {cmpl:?}"),
         }
+        .map_err(|e| Box::new(e) as _)
+        .context(error::OtherSnafu {
+            reason: "NVMe device failed to create queue",
+            code: None,
+        })
     }
 
     pub fn queue_id(&self) -> QueueId {

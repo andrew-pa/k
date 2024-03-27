@@ -2,9 +2,7 @@ use crate::{
     bus::pcie::{self, msix::MsiXTable},
     error::{self, Error},
     memory::{PhysicalBuffer, VirtualAddress, PAGE_SIZE},
-    registry::{
-        self, path::Component, registry_mut, Path, PathBuf, RegistryError, RegistryHandler,
-    },
+    registry::{path::Component, registry_mut, Path, PathBuf, RegistryError, RegistryHandler},
 };
 use alloc::{boxed::Box, string::ToString, sync::Arc, vec::Vec};
 use async_trait::async_trait;
@@ -102,23 +100,29 @@ struct NvmeDeviceRegistryHandler {
 
 #[async_trait]
 impl RegistryHandler for NvmeDeviceRegistryHandler {
-    async fn open_block_store(
-        &self,
-        subpath: &Path,
-    ) -> Result<Box<dyn super::BlockStore>, RegistryError> {
+    async fn open_block_store(&self, subpath: &Path) -> Result<Box<dyn super::BlockStore>, Error> {
         let namespace_id = match subpath.components().next() {
             Some(Component::Name(n)) => n
                 .parse::<u32>()
                 .map_err(|e| Box::new(e) as Box<dyn core::error::Error + Send + Sync>)
-                .context(registry::error::OtherSnafu {
+                .context(error::OtherSnafu {
                     reason: "failed to parse NVMe device ID number",
+                    code: None,
                 })?,
-            _ => return Err(RegistryError::InvalidPath),
+            _ => {
+                return Err(Error::Registry {
+                    reason: "discover namespace ID from path".into(),
+                    source: Box::new(RegistryError::InvalidPath),
+                })
+            }
         };
         if !self.namespace_ids.contains(&namespace_id) {
             log::debug!("{:?}", self.namespace_ids);
-            return Err(RegistryError::NotFound {
-                path: subpath.into(),
+            return Err(Error::Registry {
+                reason: "unknown namespace ID".into(),
+                source: Box::new(RegistryError::NotFound {
+                    path: subpath.into(),
+                }),
             });
         }
 
@@ -145,9 +149,7 @@ impl RegistryHandler for NvmeDeviceRegistryHandler {
             self.admin_sq.clone(),
             &mut self.admin_cq.lock(),
             Some(ivx),
-        )
-        // TODO: better error handling than panic
-        .expect("create IO completion queue");
+        )?;
 
         log::trace!("creating IO submission queue");
         let io_sq = SubmissionQueue::new_io(
@@ -159,16 +161,14 @@ impl RegistryHandler for NvmeDeviceRegistryHandler {
             self.admin_sq.clone(),
             &mut self.admin_cq.lock(),
             command::QueuePriority::Medium,
-        )
-        .expect("create IO submission queue");
+        )?;
 
         let io_cq = interrupt::register_completion_queue(msi.intid, io_cq);
 
         // query controller for supported_block_size
         // TODO: for now this is synchronous, but it should be async as well
-        let id_res_buf = PhysicalBuffer::alloc(1, &Default::default())
-            .map_err(|e| Box::new(e) as Box<dyn core::error::Error + Send + Sync>)
-            .context(registry::error::OtherSnafu {
+        let id_res_buf =
+            PhysicalBuffer::alloc(1, &Default::default()).context(error::MemorySnafu {
                 reason: "failed to allocate memory to recieve NVMe device properties",
             })?;
 
@@ -221,8 +221,11 @@ impl RegistryHandler for NvmeDeviceRegistryHandler {
         }))
     }
 
-    async fn open_file(&self, _subpath: &Path) -> Result<Box<dyn crate::fs::File>, RegistryError> {
-        Err(RegistryError::Unsupported)
+    async fn open_file(&self, _subpath: &Path) -> Result<Box<dyn crate::fs::File>, Error> {
+        Err(Error::Registry {
+            reason: "".into(),
+            source: Box::new(RegistryError::Unsupported),
+        })
     }
 }
 

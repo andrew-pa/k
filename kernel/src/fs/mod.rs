@@ -3,20 +3,11 @@ use alloc::boxed::Box;
 use async_trait::async_trait;
 use snafu::Snafu;
 
-use crate::memory::PhysicalAddress;
+use crate::{error::Error, memory::PhysicalAddress};
 
 /// File system related errors.
 #[derive(Debug, Snafu)]
 pub enum FsError {
-    Memory {
-        source: crate::memory::MemoryError,
-    },
-    Storage {
-        source: crate::storage::StorageError,
-    },
-    Registry {
-        source: crate::registry::RegistryError,
-    },
     BadMetadata {
         message: &'static str,
         value: usize,
@@ -25,10 +16,6 @@ pub enum FsError {
         value: usize,
         bound: usize,
         message: &'static str,
-    },
-    Other {
-        reason: &'static str,
-        source: Box<dyn snafu::Error + Send + Sync>,
     },
 }
 
@@ -48,7 +35,7 @@ pub trait File {
         src_offset: u64,
         dest_address: PhysicalAddress,
         num_pages: usize,
-    ) -> Result<(), FsError>;
+    ) -> Result<(), Error>;
 
     /// Write any changes from the in-memory file contents at `src_address` back to the persistent store
     async fn flush_pages(
@@ -56,7 +43,7 @@ pub trait File {
         dest_offset: u64,
         src_address: PhysicalAddress,
         num_pages: usize,
-    ) -> Result<(), FsError>;
+    ) -> Result<(), Error>;
 }
 
 pub mod fat;
