@@ -1,8 +1,9 @@
 use core::ptr::NonNull;
 
-use kapi::queue::{Queue, QueueId};
+use bytemuck::Zeroable;
+use kapi::queue::{queue_size_in_bytes, Queue, QueueId};
 
-use crate::memory::{paging::PageTableEntryOptions, MemoryError, PhysicalBuffer};
+use crate::memory::{paging::PageTableEntryOptions, MemoryError, PhysicalBuffer, PAGE_SIZE};
 
 /// A single synchronized queue which owns its backing memory.
 ///
@@ -13,8 +14,14 @@ pub struct OwnedQueue<T> {
     queue: Queue<T>,
 }
 
-impl<T> OwnedQueue<T> {
-    pub fn new(id: QueueId, size_in_pages: usize) -> Result<OwnedQueue<T>, MemoryError> {
+impl<T: Zeroable> OwnedQueue<T> {
+    /// Allocate a new queue backed by memory.
+    ///
+    /// `T` must be [Zeroable] for this operation to be safe, since the queue memory is
+    /// initially zeroed.
+    pub fn new(id: QueueId, queue_len: usize) -> Result<OwnedQueue<T>, MemoryError> {
+        let size_in_pages = queue_size_in_bytes::<T>(queue_len).div_ceil(PAGE_SIZE);
+
         let buffer = PhysicalBuffer::alloc_zeroed(
             size_in_pages,
             &PageTableEntryOptions {
@@ -26,7 +33,7 @@ impl<T> OwnedQueue<T> {
         let queue = unsafe {
             Queue::new(
                 id,
-                buffer.len(),
+                queue_len,
                 NonNull::new(buffer.virtual_address().as_ptr()).expect("buffer non-null"),
             )
         };

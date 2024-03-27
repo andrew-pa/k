@@ -1,7 +1,7 @@
 //! Kernel-wide error type.
 
 use alloc::{boxed::Box, string::String};
-use kapi::ErrorCode;
+use kapi::completions::ErrorCode;
 use snafu::Snafu;
 
 use crate::{fs::FsError, memory::MemoryError, registry::RegistryError, storage::StorageError};
@@ -35,10 +35,13 @@ pub enum Error {
         source: Box<FsError>,
     },
 
-    /// A value was expected when none was found.
-    ExpectedValue { reason: String },
+    /// Miscellaneous error occurred with no underlying source error.
+    Misc {
+        reason: String,
+        code: Option<ErrorCode>,
+    },
 
-    /// Miscellaneous error occurred.
+    /// Miscellaneous error occurred due to some underlying error.
     Other {
         reason: String,
         /// Specific error code to return to user space, if possible.

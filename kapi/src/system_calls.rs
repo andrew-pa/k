@@ -2,7 +2,10 @@
 use core::arch::asm;
 
 /// The numeric symbol given to identify each system call.
+///
+/// See the corresponding function wrapper for additional documentation.
 #[repr(u16)]
+#[allow(missing_docs)]
 pub enum SystemCallNumber {
     Exit = 1,
     WriteLog = 4,
@@ -10,7 +13,7 @@ pub enum SystemCallNumber {
     WaitForMessage = 11,
 }
 
-/// Exit the current process.
+/// Exit the current process immediately.
 #[inline]
 pub fn exit(code: u32) -> ! {
     unsafe {
@@ -23,7 +26,7 @@ pub fn exit(code: u32) -> ! {
     unreachable!()
 }
 
-/// Yield execution, causing a new thread to be scheduled.
+/// Yield execution of the current thread, causing a new thread to be scheduled.
 #[inline]
 pub fn yield_now() {
     unsafe { asm!("svc #10",) }

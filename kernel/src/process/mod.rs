@@ -19,7 +19,7 @@ use core::{
     task::Waker,
 };
 use futures::Future;
-use kapi::{Command, Completion};
+use kapi::{commands::Command, completions::Completion};
 use smallvec::SmallVec;
 use snafu::{OptionExt, ResultExt};
 use spin::{Mutex as SpinMutex, Once};
@@ -36,8 +36,7 @@ use thread::*;
 
 use interface::OwnedQueue;
 
-/// The unique ID of a process.
-pub type ProcessId = NonZeroU32;
+pub use kapi::ProcessId;
 
 /// A user-space process.
 ///

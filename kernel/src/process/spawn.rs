@@ -108,12 +108,7 @@ pub fn attach_queues(
         .context(error::MemorySnafu {
             reason: "map process recv queue",
         })?;
-    Ok((
-        send_base_addr,
-        send_qu.buffer.len(),
-        recv_base_addr,
-        recv_qu.buffer.len(),
-    ))
+    Ok((send_base_addr, send_qu.len(), recv_base_addr, recv_qu.len()))
 }
 
 /// Creates a new process from a binary loaded from a path in the registry.
@@ -163,6 +158,7 @@ pub async fn spawn_process(
 
     let segments = bin.segments().context(error::ExpectedValueSnafu {
         reason: "expected binary to have at least one segment",
+        code: Some(kapi::completions::ErrorCode::BadFormat),
     })?;
 
     for seg in segments {
