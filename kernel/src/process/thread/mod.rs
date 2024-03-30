@@ -13,12 +13,11 @@ use crate::{
 
 use super::Process;
 
-/// The system-wide unique ID of a thread.
-pub type ThreadId = u32;
-
 pub mod reg;
 pub mod scheduler;
 use reg::*;
+
+pub use kapi::ThreadId;
 
 /// The priority of a thread in the scheduler.
 #[repr(u8)]

@@ -19,7 +19,7 @@ use core::{
     task::Waker,
 };
 use futures::Future;
-use kapi::{Command, Completion};
+use kapi::{commands::Command, completions::Completion};
 use smallvec::SmallVec;
 use snafu::{OptionExt, ResultExt};
 use spin::{Mutex as SpinMutex, Once};
@@ -36,8 +36,7 @@ use thread::*;
 
 use interface::OwnedQueue;
 
-/// The unique ID of a process.
-pub type ProcessId = NonZeroU32;
+pub use kapi::ProcessId;
 
 /// A user-space process.
 ///
@@ -50,14 +49,16 @@ pub struct Process {
     /// Page tables for this process.
     page_tables: PageTable,
     /// Allocator for the virtual address space of the process.
-    #[allow(dead_code)]
-    address_space_allocator: VirtualAddressAllocator,
+    address_space_allocator: Mutex<VirtualAddressAllocator>,
     /// The next free queue ID.
     #[allow(dead_code)]
     next_queue_id: AtomicU16,
-    /// The queues associated with this process.
+    /// The send (user space to kernel) queues associated with this process, and their associated
+    /// receive queue.
     #[allow(clippy::type_complexity)]
-    queues: ConcurrentLinkedList<(Arc<OwnedQueue<Command>>, Arc<OwnedQueue<Completion>>)>,
+    send_queues: ConcurrentLinkedList<(Arc<OwnedQueue<Command>>, Arc<OwnedQueue<Completion>>)>,
+    /// The receive (kernel to user space) queues associated with this process.
+    recv_queues: ConcurrentLinkedList<Arc<OwnedQueue<Completion>>>,
     /// The exit code this process exited with (if it has exited).
     exit_code: Once<Option<u32>>,
     /// Future wakers for futures waiting on exit code.
@@ -76,13 +77,15 @@ impl Process {
     pub fn dispatch_new_commands(self: &Arc<Process>) {
         // downgrade the Arc so that pending tasks don't keep the process alive unnecessarily
         let this = &Arc::downgrade(self);
-        for (send_qu, assoc_recv_qu) in self.queues.iter() {
+        for (send_qu, assoc_recv_qu) in self.send_queues.iter() {
             while let Some(cmd) = send_qu.poll() {
                 let this = this.clone();
                 let assoc_recv_qu = assoc_recv_qu.clone();
+                log::trace!("[pid {}, SQ {}]: {cmd:?}", self.id, send_qu.id);
                 crate::tasks::spawn(async move {
                     if let Some(proc) = this.upgrade() {
                         let cmpl = interface::dispatch(&proc, cmd).await;
+                        log::trace!("[pid {}, RQ {}]: {cmpl:?}", proc.id, assoc_recv_qu.id);
                         match assoc_recv_qu.post(&cmpl) {
                             Ok(()) => {}
                             Err(_) => {

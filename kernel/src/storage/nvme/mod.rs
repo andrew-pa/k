@@ -7,6 +7,7 @@ use crate::{
 use alloc::{boxed::Box, string::ToString, sync::Arc, vec::Vec};
 use async_trait::async_trait;
 use bitfield::{bitfield, Bit};
+use kapi::completions::ErrorCode;
 use smallvec::SmallVec;
 use snafu::ResultExt;
 use spin::Mutex;
@@ -107,7 +108,7 @@ impl RegistryHandler for NvmeDeviceRegistryHandler {
                 .map_err(|e| Box::new(e) as Box<dyn core::error::Error + Send + Sync>)
                 .context(error::OtherSnafu {
                     reason: "failed to parse NVMe device ID number",
-                    code: Some(kapi::ErrorCode::BadFormat),
+                    code: Some(ErrorCode::BadFormat),
                 })?,
             _ => {
                 return Err(Error::Registry {

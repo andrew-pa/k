@@ -26,13 +26,12 @@ impl Future for CompletionFuture {
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         use PendingCompletion::*;
-        log::debug!("polling NVMe completion future for {}", self.cmd_id);
+        // log::trace!("polling NVMe completion future for {}", self.cmd_id);
         let pc = self.pending_completions.remove_blocking(&self.cmd_id);
         // TODO: if we recieve an interrupt here and pc == None, will we ever get the
         // completion? probably not
         match pc {
             None => {
-                log::debug!("pending");
                 self.pending_completions
                     .insert_blocking(self.cmd_id, Waiting(cx.waker().clone()));
                 Poll::Pending
@@ -65,8 +64,8 @@ impl CompletionQueueHandle {
     pub fn wait_for_completion(&mut self, cmd: Command<'_>) -> CompletionFuture {
         let cmd_id = self.next_cmd_id;
         self.next_cmd_id = self.next_cmd_id.wrapping_add(1);
-        log::debug!("created future for NVMe command id {cmd_id}");
-        log::trace!("NVMe command {cmd_id} = {cmd:?}");
+        // log::debug!("created future for NVMe command id {cmd_id}");
+        // log::trace!("NVMe command {cmd_id} = {cmd:?}");
         let extra_data_ptr_pages_to_drop = cmd.set_command_id(cmd_id).submit();
         CompletionFuture {
             cmd_id,
@@ -97,9 +96,9 @@ fn handle_interrupt(
             "pc addr: 0x{:x}",
             Arc::as_ptr(pending_completions) as *const _ as usize
         );
-        log::debug!("got completion {cmp:x?}");
+        // log::debug!("got completion {cmp:x?}");
         if let Some(mut pc) = pending_completions.get_mut_blocking(&cmp.id) {
-            log::debug!("pending completion?");
+            // log::debug!("pending completion?");
             *pc = match &*pc {
                 Waiting(w) => {
                     log::debug!("waking future for NVMe command id {}", cmp.id);
@@ -109,7 +108,7 @@ fn handle_interrupt(
                 Ready(old_cmp) => panic!("recieved second completion {cmp:?} for id with pending ready completion {old_cmp:?}"),
             }
         } else {
-            log::debug!("inserting pending ready completion");
+            // log::debug!("inserting pending ready completion");
             pending_completions.insert_blocking(cmp.id, Ready(cmp));
         }
     } else {

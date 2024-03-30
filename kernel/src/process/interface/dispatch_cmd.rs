@@ -1,44 +1,149 @@
-use crate::{process::*, registry::Path};
-use kapi::*;
+use bytemuck::Zeroable;
+use kapi::{
+    commands::{self as cmds, Kind as CmdKind},
+    completions::{self as cmpl, ErrorCode, Kind as CmplKind},
+    queue::QueueId,
+};
 
-// TODO: refactor into a function that returns Result<Completion, Error> and change this function
-// so that it calls that function and then on errors calls some Error -> Completion function
-pub async fn dispatch(proc: &Arc<Process>, cmd: Command) -> Completion {
-    log::debug!("received from pid {}: {cmd:?}", proc.id);
-    match cmd.kind {
-        CommandKind::Invalid => todo!(),
-        CommandKind::Test => Completion {
-            status: SuccessCode::Success.into(),
-            response_to_id: cmd.id,
-            result0: proc.id.into(),
-            result1: cmd.args[0],
-        },
-        CommandKind::SpawnProcess => {
-            let path_bytes = unsafe {
-                core::slice::from_raw_parts(cmd.args[0] as *const u8, cmd.args[1] as usize)
-            };
-            // TODO: should we copy the path string into the kernel heap?
-            let path =
-                Path::new(core::str::from_utf8(path_bytes).expect("TODO: graceful error handling"));
-            match spawn_process(path, None::<fn(_)>).await {
-                Ok(proc) => Completion {
-                    status: SuccessCode::Success.into(),
-                    response_to_id: cmd.id,
-                    result0: proc.id.into(),
-                    result1: 0,
-                },
-                Err(e) => {
-                    log::error!("process {}: failed to spawn process: {e}", proc.id);
-                    // TODO: compute error code
-                    todo!()
+use crate::{
+    error::{self, Error},
+    process::*,
+};
+
+impl Process {
+    /// Get the next free queue ID in this process.
+    ///
+    /// If all the queue IDs have already been used, an error is returned.
+    fn next_queue_id(&self) -> Result<QueueId, Error> {
+        // the complexity here is because once `next_queue_id` becomes zero, it needs to stay zero
+        // to prevent reusing IDs.
+        let mut id = self
+            .next_queue_id
+            .load(core::sync::atomic::Ordering::Acquire);
+        loop {
+            if id == 0 {
+                return Err(Error::Misc {
+                    reason: "ran out of queue IDs for process".into(),
+                    code: Some(ErrorCode::OutOfIds),
+                });
+            }
+            match self.next_queue_id.compare_exchange_weak(
+                id,
+                id.wrapping_add(1),
+                core::sync::atomic::Ordering::Acquire,
+                core::sync::atomic::Ordering::Relaxed,
+            ) {
+                Ok(_) => {
+                    return Ok(unsafe {
+                        // SAFETY: we just checked `id` to see if it was zero above.
+                        QueueId::new_unchecked(id)
+                    });
                 }
+                Err(x) => id = x,
             }
         }
-        CommandKind::Reserved(kind) => Completion {
-            status: ErrorCode::UnknownCommand.into(),
-            response_to_id: cmd.id,
-            result0: kind as u32,
-            result1: 0,
-        },
+    }
+
+    async fn create_queue<T: Zeroable>(
+        &self,
+        num_elements: usize,
+    ) -> Result<(OwnedQueue<T>, cmpl::NewQueue), Error> {
+        let id = self.next_queue_id()?;
+        let qu = OwnedQueue::<T>::new(id, num_elements).context(error::MemorySnafu {
+            reason: "allocate backing memory for queue",
+        })?;
+        let addr = self
+            .address_space_allocator
+            .lock()
+            .await
+            .alloc(qu.buffer.page_count())
+            .context(error::MemorySnafu {
+                reason: "allocate address space for queue",
+            })?;
+        self.page_tables
+            .map_range(
+                qu.buffer.physical_address(),
+                addr,
+                qu.buffer.page_count(),
+                true,
+                &PageTableEntryOptions {
+                    read_only: false,
+                    el0_access: true,
+                },
+            )
+            .context(error::MemorySnafu {
+                reason: "map queue into process address space",
+            })?;
+        Ok((qu, cmpl::NewQueue { id, start: addr.0 }))
+    }
+
+    async fn create_completion_queue(
+        &self,
+        info: &cmds::CreateCompletionQueue,
+    ) -> Result<cmpl::NewQueue, Error> {
+        let (oq, nq) = self.create_queue::<Completion>(info.size).await?;
+        self.recv_queues.push(Arc::new(oq));
+        Ok(nq)
+    }
+
+    async fn create_submission_queue(
+        &self,
+        info: &cmds::CreateSubmissionQueue,
+    ) -> Result<cmpl::NewQueue, Error> {
+        let rq = self
+            .recv_queues
+            .iter()
+            .find(|q| q.id == info.associated_completion_queue)
+            .cloned()
+            .with_context(|| error::MiscSnafu {
+                reason: alloc::format!(
+                    "completion queue {} not found",
+                    info.associated_completion_queue
+                ),
+                code: Some(ErrorCode::InvalidId),
+            })?;
+        let (oq, nq) = self.create_queue::<Command>(info.size).await?;
+        self.send_queues.push((Arc::new(oq), rq));
+        Ok(nq)
+    }
+}
+
+async fn dispatch_inner(proc: &Arc<Process>, cmd: Command) -> Result<CmplKind, ErrorCode> {
+    match &cmd.kind {
+        CmdKind::Test(cmds::Test { arg }) => Ok(cmpl::Test {
+            arg: *arg,
+            pid: proc.id,
+        }
+        .into()),
+        CmdKind::CreateCompletionQueue(info) => {
+            proc.create_completion_queue(info).await.map(Into::into)
+        }
+        CmdKind::CreateSubmissionQueue(info) => {
+            proc.create_submission_queue(info).await.map(Into::into)
+        }
+        kind => Err(Error::Misc {
+            reason: alloc::format!("received unknown command: {}", kind.discriminant()),
+            code: Some(ErrorCode::UnknownCommand),
+        }),
+    }
+    .map_err(|e| {
+        log::error!(
+            "[pid {}] error occurred processing {cmd:?}: {}",
+            proc.id,
+            snafu::Report::from_error(&e)
+        );
+        e.as_code()
+    })
+}
+
+pub async fn dispatch(proc: &Arc<Process>, cmd: Command) -> Completion {
+    let response_to_id = cmd.id;
+    let kind = match dispatch_inner(proc, cmd).await {
+        Ok(c) => c,
+        Err(e) => e.into(),
+    };
+    Completion {
+        response_to_id,
+        kind,
     }
 }

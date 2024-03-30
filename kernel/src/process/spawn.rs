@@ -108,12 +108,7 @@ pub fn attach_queues(
         .context(error::MemorySnafu {
             reason: "map process recv queue",
         })?;
-    Ok((
-        send_base_addr,
-        send_qu.buffer.len(),
-        recv_base_addr,
-        recv_qu.buffer.len(),
-    ))
+    Ok((send_base_addr, send_qu.len(), recv_base_addr, recv_qu.len()))
 }
 
 /// Creates a new process from a binary loaded from a path in the registry.
@@ -161,8 +156,9 @@ pub async fn spawn_process(
     let mut address_space_allocator =
         VirtualAddressAllocator::new(VirtualAddress(PAGE_SIZE), 0x0000_ffff_ffff_ffff / PAGE_SIZE);
 
-    let segments = bin.segments().context(error::ExpectedValueSnafu {
+    let segments = bin.segments().context(error::MiscSnafu {
         reason: "expected binary to have at least one segment",
+        code: Some(kapi::completions::ErrorCode::BadFormat),
     })?;
 
     for seg in segments {
@@ -211,13 +207,17 @@ pub async fn spawn_process(
     let send_qu = OwnedQueue::new(FIRST_SEND_QUEUE_ID, 2).context(error::MemorySnafu {
         reason: "allocate first send queue",
     })?;
-    let recv_qu = OwnedQueue::new(FIRST_RECV_QUEUE_ID, 2).context(error::MemorySnafu {
-        reason: "allocate first receive queue",
-    })?;
+    let recv_qu = Arc::new(OwnedQueue::new(FIRST_RECV_QUEUE_ID, 2).context(
+        error::MemorySnafu {
+            reason: "allocate first receive queue",
+        },
+    )?);
     let (send_qu_addr, send_qu_size, recv_qu_addr, recv_qu_size) =
         attach_queues(&send_qu, &recv_qu, &mut pt, &mut address_space_allocator)?;
-    let queues = ConcurrentLinkedList::default();
-    queues.push((Arc::new(send_qu), Arc::new(recv_qu)));
+    let send_queues = ConcurrentLinkedList::default();
+    send_queues.push((Arc::new(send_qu), recv_qu.clone()));
+    let recv_queues = ConcurrentLinkedList::default();
+    recv_queues.push(recv_qu);
 
     // log::debug!("process page table: {pt:?}");
 
@@ -227,8 +227,9 @@ pub async fn spawn_process(
         page_tables: pt,
         threads: Default::default(),
         next_queue_id: AtomicU16::new((FIRST_RECV_QUEUE_ID.saturating_add(1)).into()),
-        queues,
-        address_space_allocator,
+        send_queues,
+        recv_queues,
+        address_space_allocator: Mutex::new(address_space_allocator),
         exit_code: Once::new(),
         exit_waker: spin::Mutex::new(Vec::new()),
     });
