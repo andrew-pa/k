@@ -98,8 +98,8 @@ impl Kind {
 #[repr(C)]
 #[derive(Debug, Clone, Zeroable)]
 pub struct Command {
-    /// The ID number for this command that will be repeated in completions that are associated with it.
-    pub id: u16,
     /// The type of the command.
     pub kind: Kind,
+    /// The ID number for this command that will be repeated in completions that are associated with it.
+    pub id: u16,
 }

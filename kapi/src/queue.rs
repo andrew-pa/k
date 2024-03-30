@@ -53,7 +53,8 @@ impl<T> Queue<T> {
     ///
     /// # Safety
     /// `backing_memory` must point to a valid region of memory that is at least
-    /// [queue_size_in_bytes]`(queue_len)` bytes long.
+    /// [queue_size_in_bytes]`(queue_len)` bytes long, and that will live at least as long as this
+    /// Queue instance.
     /// `backing_memory` must also be correctly aligned for atomic load/store operations of `usize`.
     pub unsafe fn new(id: QueueId, queue_len: usize, backing_memory: NonNull<()>) -> Queue<T> {
         // place the head/tail pointers at the start of the buffer

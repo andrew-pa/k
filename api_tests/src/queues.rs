@@ -69,6 +69,8 @@ fn basic_create_destroy(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
     // try sending a test command on the new queues
     crate::cmd_test(&sub_qu, &cmpl_qu);
 
+    log::trace!("e: {}", send_qu.is_empty());
+
     // destroy both queues
     send_qu
         .post(&Command {

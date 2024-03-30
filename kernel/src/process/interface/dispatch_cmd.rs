@@ -44,13 +44,18 @@ impl Process {
         }
     }
 
-    fn create_queue<T: Zeroable>(&self, num_elements: usize) -> Result<cmpl::NewQueue, Error> {
+    async fn create_queue<T: Zeroable>(
+        &self,
+        num_elements: usize,
+    ) -> Result<(OwnedQueue<T>, cmpl::NewQueue), Error> {
         let id = self.next_queue_id()?;
         let qu = OwnedQueue::<T>::new(id, num_elements).context(error::MemorySnafu {
             reason: "allocate backing memory for queue",
         })?;
         let addr = self
             .address_space_allocator
+            .lock()
+            .await
             .alloc(qu.buffer.page_count())
             .context(error::MemorySnafu {
                 reason: "allocate address space for queue",
@@ -69,14 +74,37 @@ impl Process {
             .context(error::MemorySnafu {
                 reason: "map queue into process address space",
             })?;
-        Ok(cmpl::NewQueue { id, start: addr.0 })
+        Ok((qu, cmpl::NewQueue { id, start: addr.0 }))
     }
 
-    fn create_completion_queue(
+    async fn create_completion_queue(
         &self,
         info: &cmds::CreateCompletionQueue,
     ) -> Result<cmpl::NewQueue, Error> {
-        self.create_queue::<Completion>(info.size)
+        let (oq, nq) = self.create_queue::<Completion>(info.size).await?;
+        self.recv_queues.push(Arc::new(oq));
+        Ok(nq)
+    }
+
+    async fn create_submission_queue(
+        &self,
+        info: &cmds::CreateSubmissionQueue,
+    ) -> Result<cmpl::NewQueue, Error> {
+        let rq = self
+            .recv_queues
+            .iter()
+            .find(|q| q.id == info.associated_completion_queue)
+            .cloned()
+            .with_context(|| error::MiscSnafu {
+                reason: alloc::format!(
+                    "completion queue {} not found",
+                    info.associated_completion_queue
+                ),
+                code: Some(ErrorCode::InvalidId),
+            })?;
+        let (oq, nq) = self.create_queue::<Command>(info.size).await?;
+        self.send_queues.push((Arc::new(oq), rq));
+        Ok(nq)
     }
 }
 
@@ -87,7 +115,12 @@ async fn dispatch_inner(proc: &Arc<Process>, cmd: Command) -> Result<CmplKind, E
             pid: proc.id,
         }
         .into()),
-        CmdKind::CreateCompletionQueue(info) => proc.create_completion_queue(&info).map(Into::into),
+        CmdKind::CreateCompletionQueue(info) => {
+            proc.create_completion_queue(info).await.map(Into::into)
+        }
+        CmdKind::CreateSubmissionQueue(info) => {
+            proc.create_submission_queue(info).await.map(Into::into)
+        }
         kind => Err(Error::Misc {
             reason: alloc::format!("received unknown command: {}", kind.discriminant()),
             code: Some(ErrorCode::UnknownCommand),
@@ -104,13 +137,11 @@ async fn dispatch_inner(proc: &Arc<Process>, cmd: Command) -> Result<CmplKind, E
 }
 
 pub async fn dispatch(proc: &Arc<Process>, cmd: Command) -> Completion {
-    log::trace!("received from pid {}: {cmd:?}", proc.id);
     let response_to_id = cmd.id;
     let kind = match dispatch_inner(proc, cmd).await {
         Ok(c) => c,
         Err(e) => e.into(),
     };
-    log::trace!("sending completion for cmd #{response_to_id}: {kind:?}");
     Completion {
         response_to_id,
         kind,

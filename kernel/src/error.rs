@@ -36,6 +36,7 @@ pub enum Error {
     },
 
     /// Miscellaneous error occurred with no underlying source error.
+    #[snafu(display("{reason} (code = {code:?})"))]
     Misc {
         reason: String,
         code: Option<ErrorCode>,
@@ -86,6 +87,9 @@ impl Error {
                 FsError::OutOfBounds { .. } => ErrorCode::OutOfBounds,
                 _ => ErrorCode::Internal,
             },
+            Error::Misc {
+                code: Some(code), ..
+            } => *code,
             Error::Other {
                 code: Some(code), ..
             } => *code,
