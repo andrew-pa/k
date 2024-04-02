@@ -18,6 +18,7 @@ pub enum QueuePriority {
     Low = 0b11,
 }
 
+// TODO: get rid of magic constants and manual bitfields
 #[allow(unused)]
 impl<'sq> Command<'sq> {
     // Admin commands //
@@ -35,7 +36,8 @@ impl<'sq> Command<'sq> {
         physically_continuous: bool,
     ) -> Self {
         self.set_opcode(0x05)
-            .set_dword(10, ((queue_size as u32) << 16) | (queue_id as u32))
+            // queue_size is zeros based (see NVMe Spec§1.5), so the actual value is +1 the given value.
+            .set_dword(10, (((queue_size - 1) as u32) << 16) | (queue_id as u32))
             .set_dword(
                 11,
                 ((interrupt_vector_index as u32) << 16)
@@ -57,7 +59,8 @@ impl<'sq> Command<'sq> {
         physically_continuous: bool,
     ) -> Self {
         self.set_opcode(0x01)
-            .set_dword(10, ((queue_size as u32) << 16) | (queue_id as u32))
+            // queue_size is zeros based (see NVMe Spec§1.5), so the actual value is +1 the given value.
+            .set_dword(10, (((queue_size - 1) as u32) << 16) | (queue_id as u32))
             .set_dword(
                 11,
                 ((completion_queue_id as u32) << 16)

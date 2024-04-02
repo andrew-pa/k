@@ -19,6 +19,7 @@ fn default_init_process_path() -> &'static str {
 /// The kernel deserializes this struct from JSON as found in the bootargs device tree parameter.
 /// Use `env set bootargs ...` to set these in u-boot before booting the kernel.
 #[derive(serde::Deserialize, Debug, Default)]
+#[serde(deny_unknown_fields)]
 pub struct BootOptions<'a> {
     #[serde(default = "default_init_process_path")]
     init_process_path: &'a str,

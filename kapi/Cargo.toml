@@ -11,3 +11,4 @@ snafu = { version = "0.8", default-features = false, features = ["unstable-core-
 log = "0.4"
 bytemuck = "1"
 bitfield = "0.14"
+crossbeam-utils = { version = "0.8", default-features = false }

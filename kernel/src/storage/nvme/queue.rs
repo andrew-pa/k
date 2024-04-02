@@ -58,7 +58,11 @@ impl core::fmt::Debug for Command<'_> {
 
 impl<'sq> Command<'sq> {
     pub fn submit(self) -> SmallVec<[PhysicalBuffer; 1]> {
-        log::trace!("submitting NVMe command {self:?}");
+        // log::trace!(
+        //     "submitting NVMe command (tail = {} -> {}) {self:?}",
+        //     self.parent.tail,
+        //     self.new_tail
+        // );
         self.parent.tail = self.new_tail;
         unsafe {
             self.parent.tail_doorbell.write_volatile(self.parent.tail);
@@ -116,6 +120,10 @@ impl<'sq> Command<'sq> {
         let mut prp_page: &mut [PhysicalAddress] = bytemuck::cast_slice_mut(&mut self.cmd[6..10]);
         let mut current_offset = 0;
 
+        // if regions.len() == 1 && regions[0].1 > blocks_per_page && regions[0].1 <= blocks_per_page*2 {
+        //     prp_page[0] = regions[0].0;
+        //     prp_page[1] = regions[0].0.add(PAGE_SIZE);
+        // } else {
         for region in regions {
             let mut num_blocks = 0;
             let mut next_page_addr = region.0;
@@ -141,6 +149,7 @@ impl<'sq> Command<'sq> {
                 num_blocks += blocks_per_page;
             }
         }
+        // }
 
         Ok(self)
     }
@@ -505,10 +514,15 @@ impl CompletionQueue {
 
             ptr.as_ref().unwrap()
         };
-        // log::trace!("read cmp: {cmp:?}, head = {}", self.head);
+        // log::trace!(
+        //     "head = {:x}, current phase = {}, cmp.phase = {}",
+        //     self.head,
+        //     self.current_phase,
+        //     cmp.status.phase_tag()
+        // );
         if cmp.status.phase_tag() == self.current_phase {
             self.head += 1;
-            if self.head > self.entry_count {
+            if self.head >= self.entry_count {
                 self.head = 0;
                 self.current_phase = !self.current_phase;
             }

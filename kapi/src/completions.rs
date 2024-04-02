@@ -44,6 +44,9 @@ pub enum ErrorCode {
     /// A size was provided that is invalid for the operation.
     InvalidSize,
 
+    /// The object was still in use when its destruction was requested.
+    InUse,
+
     /// An internal kernel error occurred, check the system log for details.
     Internal,
 }
@@ -51,6 +54,15 @@ pub enum ErrorCode {
 impl From<ErrorCode> for Kind {
     fn from(value: ErrorCode) -> Self {
         Kind::Err(value)
+    }
+}
+
+/// Response to a command with no returned values, but indicates success.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Success;
+impl From<Success> for Kind {
+    fn from(_value: Success) -> Self {
+        Kind::Success
     }
 }
 

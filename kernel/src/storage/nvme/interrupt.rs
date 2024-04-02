@@ -90,13 +90,13 @@ fn handle_interrupt(
     pending_completions: &Arc<CHashMap<u16, PendingCompletion>>,
 ) {
     use PendingCompletion::*;
-    log::debug!("handling NVMe interrupt {int_id}, {}", qu.queue_id());
+    // log::trace!("handling NVMe interrupt {int_id}, {}", qu.queue_id());
     if let Some(cmp) = qu.pop() {
-        log::debug!(
-            "pc addr: 0x{:x}",
-            Arc::as_ptr(pending_completions) as *const _ as usize
-        );
-        // log::debug!("got completion {cmp:x?}");
+        // log::debug!(
+        //     "pc addr: 0x{:x}",
+        //     Arc::as_ptr(pending_completions) as *const _ as usize
+        // );
+        // log::trace!("completion {cmp:x?}");
         if let Some(mut pc) = pending_completions.get_mut_blocking(&cmp.id) {
             // log::debug!("pending completion?");
             *pc = match &*pc {
@@ -108,7 +108,7 @@ fn handle_interrupt(
                 Ready(old_cmp) => panic!("recieved second completion {cmp:?} for id with pending ready completion {old_cmp:?}"),
             }
         } else {
-            // log::debug!("inserting pending ready completion");
+            // log::trace!("inserting ready completion before future was ever polled");
             pending_completions.insert_blocking(cmp.id, Ready(cmp));
         }
     } else {

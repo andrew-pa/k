@@ -1,6 +1,5 @@
 use core::ptr::NonNull;
 
-use bytemuck::Zeroable;
 use kapi::queue::{queue_size_in_bytes, Queue, QueueId};
 
 use crate::memory::{paging::PageTableEntryOptions, MemoryError, PhysicalBuffer, PAGE_SIZE};
@@ -14,15 +13,12 @@ pub struct OwnedQueue<T> {
     queue: Queue<T>,
 }
 
-impl<T: Zeroable> OwnedQueue<T> {
-    /// Allocate a new queue backed by memory.
-    ///
-    /// `T` must be [Zeroable] for this operation to be safe, since the queue memory is
-    /// initially zeroed.
-    pub fn new(id: QueueId, queue_len: usize) -> Result<OwnedQueue<T>, MemoryError> {
-        let size_in_pages = queue_size_in_bytes::<T>(queue_len).div_ceil(PAGE_SIZE);
+impl<T> OwnedQueue<T> {
+    /// Allocate and Initialize a new queue backed by memory.
+    pub fn new(id: QueueId, capacity: usize) -> Result<OwnedQueue<T>, MemoryError> {
+        let size_in_pages = queue_size_in_bytes::<T>(capacity).div_ceil(PAGE_SIZE);
 
-        let buffer = PhysicalBuffer::alloc_zeroed(
+        let buffer = PhysicalBuffer::alloc(
             size_in_pages,
             &PageTableEntryOptions {
                 read_only: false,
@@ -33,10 +29,15 @@ impl<T: Zeroable> OwnedQueue<T> {
         let queue = unsafe {
             Queue::new(
                 id,
-                queue_len,
                 NonNull::new(buffer.virtual_address().as_ptr()).expect("buffer non-null"),
+                capacity,
             )
         };
+
+        // make sure that the queue is set up correctly.
+        unsafe {
+            queue.initialize();
+        }
 
         Ok(Self { buffer, queue })
     }
@@ -47,5 +48,22 @@ impl<T> core::ops::Deref for OwnedQueue<T> {
 
     fn deref(&self) -> &Self::Target {
         &self.queue
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test_case]
+    fn basic() {
+        let qu = OwnedQueue::new(QueueId::new(1).unwrap(), 16).expect("create queue");
+        assert_eq!(qu.poll(), None);
+        qu.post(5).unwrap();
+        qu.post(6).unwrap();
+        qu.post(7).unwrap();
+        assert_eq!(qu.poll(), Some(5));
+        assert_eq!(qu.poll(), Some(6));
+        assert_eq!(qu.poll(), Some(7));
     }
 }

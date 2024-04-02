@@ -86,7 +86,7 @@ impl Process {
                     if let Some(proc) = this.upgrade() {
                         let cmpl = interface::dispatch(&proc, cmd).await;
                         log::trace!("[pid {}, RQ {}]: {cmpl:?}", proc.id, assoc_recv_qu.id);
-                        match assoc_recv_qu.post(&cmpl) {
+                        match assoc_recv_qu.post(cmpl) {
                             Ok(()) => {}
                             Err(_) => {
                                 todo!("kill process on queue overflow")
