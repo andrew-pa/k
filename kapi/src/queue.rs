@@ -1,15 +1,15 @@
 //! Asynchronous queues for kernel/user-space communication.
-use core::{num::NonZeroU16, ptr::NonNull, sync::atomic::AtomicUsize};
+//!
+//! The implementation is a copy of the `crossbeam-queue` (`ArrayQueue`)[https://github.com/crossbeam-rs/crossbeam/blob/master/crossbeam-queue/src/array_queue.rs] definition, but adapted so that the queue algorithm does not own the memory (so that it can be shared between processes).
+use core::{
+    cell::UnsafeCell,
+    mem::MaybeUninit,
+    num::NonZeroU16,
+    ptr::NonNull,
+    sync::atomic::{self, AtomicUsize, Ordering},
+};
 
-use snafu::Snafu;
-
-/// Errors that could occur interacting with a queue.
-#[derive(Debug, Snafu)]
-pub enum Error {
-    /// The queue is full.
-    #[snafu(display("queue is too full to receive message"))]
-    Full,
-}
+use crossbeam_utils::{Backoff, CachePadded};
 
 /// An ID that uniquely identifies a queue relative to the process it is in.
 pub type QueueId = NonZeroU16;
@@ -18,57 +18,72 @@ pub const FIRST_SEND_QUEUE_ID: QueueId = unsafe { NonZeroU16::new_unchecked(1) }
 /// The ID of the first receve queue (created by the kernel) for each process.
 pub const FIRST_RECV_QUEUE_ID: QueueId = unsafe { NonZeroU16::new_unchecked(2) };
 
+/// A slot in the queue.
+struct Slot<T> {
+    /// The current stamp.
+    ///
+    /// If the stamp equals the tail, this node will be next written to. If it equals head + 1,
+    /// this node will be next read from.
+    stamp: AtomicUsize,
+
+    /// The value in this slot.
+    value: UnsafeCell<MaybeUninit<T>>,
+}
+
+struct Counters {
+    head: CachePadded<AtomicUsize>,
+    tail: CachePadded<AtomicUsize>,
+}
+
 /// A single synchronized queue reference.
 ///
-/// This queue does *not* own the memory that backs it.
-/// Works the same as an NVMe queue.
+/// This queue does *not* own the memory that backs it, and does *not* drop the elements when it is
+/// dropped!
 ///
 /// A queue is internally mutable and synchronized.
 pub struct Queue<T> {
     /// The process-unique ID of this queue.
     pub id: QueueId,
-    queue_len: usize,
-    /// A pointer into the buffer to the value of the head index.
-    head_ptr: NonNull<AtomicUsize>,
-    /// A pointer into the buffer to the value of the tail index.
-    tail_ptr: NonNull<AtomicUsize>,
-    /// A pointer into the buffer to the start of the actual data in the queue.
-    data_ptr: NonNull<T>, // TODO: we might need an additional lock to synchronize access to queues between
-                          // different threads in the kernel?
+    /// Counters that keep track of the location of the queue in the buffer.
+    counter_ptr: NonNull<Counters>,
+    /// A pointer into the buffer to the actual data in the queue.
+    data_ptr: NonNull<Slot<T>>,
+    /// Number of slots in the queue.
+    capacity: usize,
+    /// A stamp with the value of `{ lap: 1, index: 0 }`.
+    one_lap: usize,
 }
 
 unsafe impl<T: Send> Send for Queue<T> {}
 unsafe impl<T: Send> Sync for Queue<T> {}
 
-/// Compute the size of a queue in bytes given the number of elements in the queue.
-pub fn queue_size_in_bytes<T>(queue_len: usize) -> usize {
+/// Compute the total size of a queue in bytes given the capacity and message type.
+pub fn queue_size_in_bytes<T>(capacity: usize) -> usize {
     use core::mem::{align_of, size_of};
-    let el_size = size_of::<T>();
-    let el_align = align_of::<T>() - 1;
-    size_of::<AtomicUsize>() * 2 + ((el_size + el_align) & !el_align) * queue_len
+    let el_size = size_of::<Slot<T>>();
+    let el_align = align_of::<Slot<T>>() - 1;
+    size_of::<Counters>() + ((el_size + el_align) & !el_align) * capacity
 }
 
 impl<T> Queue<T> {
     /// Create a new queue backed by a region of memory.
     ///
     /// # Safety
-    /// `backing_memory` must point to a valid region of memory that is at least
-    /// [queue_size_in_bytes]`(queue_len)` bytes long, and that will live at least as long as this
-    /// Queue instance.
+    /// `backing_memory` must point to a valid region of memory that is at least [queue_size_in_bytes]`(capacity)` bytes long, and that will live at least as long as this Queue instance.
     /// `backing_memory` must also be correctly aligned for atomic load/store operations of `usize`.
-    pub unsafe fn new(id: QueueId, queue_len: usize, backing_memory: NonNull<()>) -> Queue<T> {
-        // place the head/tail pointers at the start of the buffer
-        let p: NonNull<AtomicUsize> = backing_memory.cast();
+    /// The memory region must also have been correctly initialized to be a queue.
+    pub unsafe fn new(id: QueueId, backing_memory: NonNull<()>, capacity: usize) -> Queue<T> {
+        assert!(capacity > 0);
 
-        // put the messages after the head and tail pointers in the buffer
-        let data_ptr: NonNull<T> = p.add(2).cast();
+        let counter_ptr = backing_memory.cast();
 
         Queue {
             id,
-            queue_len,
-            head_ptr: p,
-            tail_ptr: p.add(1),
-            data_ptr,
+            counter_ptr,
+            data_ptr: counter_ptr.add(1).cast(),
+            // One lap is the smallest power of two greater than `cap`.
+            one_lap: (capacity + 1).next_power_of_two(),
+            capacity,
         }
     }
 
@@ -82,91 +97,181 @@ impl<T> Queue<T> {
     /// If this completion came from the kernel, it will satisfy these requirements.
     // TODO: it would be excellent if we could check to make sure we really have a queue of T and
     // not something else.
-    pub unsafe fn from_completion(cmpl: &crate::completions::NewQueue, len: usize) -> Queue<T> {
+    pub unsafe fn from_completion(
+        cmpl: &crate::completions::NewQueue,
+        capacity: usize,
+    ) -> Queue<T> {
         Self::new(
             cmpl.id,
-            len,
             NonNull::new(cmpl.start as *mut ()).expect("queue start pointer is non-null"),
+            capacity,
         )
     }
 
-    /// Returns the maximum number of elements that can be in the queue.
-    pub fn len(&self) -> usize {
-        self.queue_len
-    }
+    /// Initialize the queue. This will remove but not drop anything already in the queue.
+    pub unsafe fn initialize(&self) {
+        let counters = self.counter_ptr.as_ref();
+        counters.head.store(0, Ordering::Relaxed);
+        counters.tail.store(0, Ordering::Relaxed);
 
-    /// Checks to see if the queue is empty.
-    pub fn is_empty(&self) -> bool {
-        self.head() == self.tail()
-    }
-
-    /// Gets the head index (the index of the next free slot).
-    #[inline]
-    fn head(&self) -> usize {
-        // TODO: we need to check to make sure that the user space process hasn't messed this value
-        // up and that it is still in bounds
-        unsafe {
-            self.head_ptr
-                .as_ref()
-                .load(core::sync::atomic::Ordering::Acquire)
+        for index in 0..self.capacity {
+            *self.data_ptr.add(index).as_mut() = Slot {
+                stamp: AtomicUsize::new(index),
+                value: UnsafeCell::new(MaybeUninit::uninit()),
+            };
         }
     }
 
-    /// Move the head forward one slot.
-    #[inline]
-    fn move_head(&self) {
-        unsafe {
-            let head = self.head_ptr.as_ref();
-            if head.fetch_add(1, core::sync::atomic::Ordering::AcqRel) == self.queue_len - 1 {
-                head.store(0, core::sync::atomic::Ordering::Release);
+    /// Number of slots in the queue.
+    pub fn capacity(&self) -> usize {
+        self.capacity
+    }
+
+    fn push_or_else<F>(&self, mut value: T, f: F) -> Result<(), T>
+    where
+        F: Fn(T, usize, usize, &Slot<T>) -> Result<T, T>,
+    {
+        let Counters { tail: ctail, .. } = unsafe { self.counter_ptr.as_ref() };
+
+        let backoff = Backoff::new();
+        let mut tail = ctail.load(Ordering::Relaxed);
+
+        loop {
+            // Deconstruct the tail.
+            let index = tail & (self.one_lap - 1);
+            let lap = tail & !(self.one_lap - 1);
+
+            let new_tail = if index + 1 < self.capacity {
+                // Same lap, incremented index.
+                // Set to `{ lap: lap, index: index + 1 }`.
+                tail + 1
+            } else {
+                // One lap forward, index wraps around to zero.
+                // Set to `{ lap: lap.wrapping_add(1), index: 0 }`.
+                lap.wrapping_add(self.one_lap)
+            };
+
+            // Inspect the corresponding slot.
+            debug_assert!(index < self.capacity);
+            let slot = unsafe { self.data_ptr.add(index).as_ref() };
+            let stamp = slot.stamp.load(Ordering::Acquire);
+
+            // If the tail and the stamp match, we may attempt to push.
+            if tail == stamp {
+                // Try moving the tail.
+                match ctail.compare_exchange_weak(
+                    tail,
+                    new_tail,
+                    Ordering::SeqCst,
+                    Ordering::Relaxed,
+                ) {
+                    Ok(_) => {
+                        // Write the value into the slot and update the stamp.
+                        unsafe {
+                            slot.value.get().write(MaybeUninit::new(value));
+                        }
+                        slot.stamp.store(tail + 1, Ordering::Release);
+                        return Ok(());
+                    }
+                    Err(t) => {
+                        tail = t;
+                        backoff.spin();
+                    }
+                }
+            } else if stamp.wrapping_add(self.one_lap) == tail + 1 {
+                atomic::fence(Ordering::SeqCst);
+                value = f(value, tail, new_tail, slot)?;
+                backoff.spin();
+                tail = ctail.load(Ordering::Relaxed);
+            } else {
+                // Snooze because we need to wait for the stamp to get updated.
+                backoff.snooze();
+                tail = ctail.load(Ordering::Relaxed);
             }
         }
     }
 
-    /// Gets the tail index (the index of the next pending message).
-    #[inline]
-    fn tail(&self) -> usize {
-        // TODO: we need to check to make sure that the user space process hasn't messed this value
-        // up and that it is still in bounds
-        unsafe {
-            self.tail_ptr
-                .as_ref()
-                .load(core::sync::atomic::Ordering::Acquire)
-        }
-    }
+    /// Attempts to push an element into the queue.
+    ///
+    /// If the queue is full, the element is returned back as an error.
+    pub fn post(&self, value: T) -> Result<(), T> {
+        self.push_or_else(value, |v, tail, _, _| {
+            let Counters { head: chead, .. } = unsafe { self.counter_ptr.as_ref() };
+            let head = chead.load(Ordering::Relaxed);
 
-    /// Move the tail forward one slot.
-    #[inline]
-    fn move_tail(&self) {
-        unsafe {
-            let tail = self.tail_ptr.as_ref();
-            if tail.fetch_add(1, core::sync::atomic::Ordering::AcqRel) == self.queue_len - 1 {
-                tail.store(0, core::sync::atomic::Ordering::Release);
+            // If the head lags one lap behind the tail as well...
+            if head.wrapping_add(self.one_lap) == tail {
+                // ...then the queue is full.
+                Err(v)
+            } else {
+                Ok(v)
             }
-        }
-    }
-
-    /// Returns the first outstanding message in the queue if present.
-    pub fn poll(&self) -> Option<T> {
-        let head = self.head();
-        (head != self.tail()).then(|| unsafe {
-            let cmd = self.data_ptr.offset(head as isize).read();
-            self.move_head();
-            cmd
         })
     }
 
-    /// Post a message in the queue.
-    pub fn post(&self, msg: &T) -> Result<(), Error> {
-        let tail = self.tail();
-        (self.head() != (tail + 1) % self.queue_len)
-            .then(|| {
-                unsafe {
-                    let dst = self.data_ptr.offset(tail as isize);
-                    core::ptr::copy(msg, dst.as_ptr(), 1);
+    /// Attempts to pop an element from the queue.
+    ///
+    /// If the queue is empty, `None` is returned.
+    pub fn poll(&self) -> Option<T> {
+        let Counters {
+            head: chead,
+            tail: ctail,
+        } = unsafe { self.counter_ptr.as_ref() };
+        let backoff = Backoff::new();
+        let mut head = chead.load(Ordering::Relaxed);
+
+        loop {
+            // Deconstruct the head.
+            let index = head & (self.one_lap - 1);
+            let lap = head & !(self.one_lap - 1);
+
+            // Inspect the corresponding slot.
+            debug_assert!(index < self.capacity);
+            let slot = unsafe { self.data_ptr.add(index).as_ref() };
+            let stamp = slot.stamp.load(Ordering::Acquire);
+
+            // If the stamp is ahead of the head by 1, we may attempt to pop.
+            if head + 1 == stamp {
+                let new = if index + 1 < self.capacity {
+                    // Same lap, incremented index.
+                    // Set to `{ lap: lap, index: index + 1 }`.
+                    head + 1
+                } else {
+                    // One lap forward, index wraps around to zero.
+                    // Set to `{ lap: lap.wrapping_add(1), index: 0 }`.
+                    lap.wrapping_add(self.one_lap)
+                };
+
+                // Try moving the head.
+                match chead.compare_exchange_weak(head, new, Ordering::SeqCst, Ordering::Relaxed) {
+                    Ok(_) => {
+                        // Read the value from the slot and update the stamp.
+                        let msg = unsafe { slot.value.get().read().assume_init() };
+                        slot.stamp
+                            .store(head.wrapping_add(self.one_lap), Ordering::Release);
+                        return Some(msg);
+                    }
+                    Err(h) => {
+                        head = h;
+                        backoff.spin();
+                    }
                 }
-                self.move_tail();
-            })
-            .ok_or(Error::Full)
+            } else if stamp == head {
+                atomic::fence(Ordering::SeqCst);
+                let tail = ctail.load(Ordering::Relaxed);
+
+                // If the tail equals the head, that means the channel is empty.
+                if tail == head {
+                    return None;
+                }
+
+                backoff.spin();
+                head = chead.load(Ordering::Relaxed);
+            } else {
+                // Snooze because we need to wait for the stamp to get updated.
+                backoff.snooze();
+                head = chead.load(Ordering::Relaxed);
+            }
+        }
     }
 }

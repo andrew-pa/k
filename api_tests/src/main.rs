@@ -52,7 +52,7 @@ pub fn test_runner(
 
 fn cmd_invalid(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
     send_qu
-        .post(&Command {
+        .post(Command {
             id: 0,
             kind: CmdKind::Invalid,
         })
@@ -70,7 +70,7 @@ fn cmd_invalid(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
 
 fn cmd_test(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
     send_qu
-        .post(&Command {
+        .post(Command {
             id: 0,
             kind: Test { arg: 42 }.into(),
         })
@@ -98,24 +98,24 @@ mod queues;
 #[no_mangle]
 pub extern "C" fn _start(
     send_qu_addr: usize,
-    send_qu_len: usize,
+    send_qu_cap: usize,
     recv_qu_addr: usize,
-    recv_qu_len: usize,
+    recv_qu_cap: usize,
 ) {
     log::set_logger(&KernelLogger).expect("set logger");
     log::set_max_level(log::LevelFilter::Trace);
-    log::info!("starting API test process. kernel queues @ Send[0x{send_qu_addr:x}:{send_qu_len:x}] Recv[0x{recv_qu_addr:x}:{recv_qu_len:x}]");
+    log::info!("starting API test process. kernel queues @ Send[0x{send_qu_addr:x}:{send_qu_cap:x}] Recv[0x{recv_qu_addr:x}:{recv_qu_cap:x}]");
     let (send_qu, recv_qu) = unsafe {
         (
             Queue::new(
                 FIRST_SEND_QUEUE_ID,
-                send_qu_len,
                 NonNull::new(send_qu_addr as *mut _).expect("send queue ptr is non-null"),
+                send_qu_cap,
             ),
             Queue::<Completion>::new(
                 FIRST_RECV_QUEUE_ID,
-                recv_qu_len,
                 NonNull::new(recv_qu_addr as *mut _).expect("recv queue ptr is non-null"),
+                recv_qu_cap,
             ),
         )
     };

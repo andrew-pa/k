@@ -16,7 +16,7 @@ pub const TESTS: &[&dyn Testable] = &[
 fn basic_create_destroy(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
     // create a completion queue
     send_qu
-        .post(&Command {
+        .post(Command {
             id: 0,
             kind: CreateCompletionQueue { size: 16 }.into(),
         })
@@ -40,7 +40,7 @@ fn basic_create_destroy(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
 
     // create a submission queue and associate it with our completion queue
     send_qu
-        .post(&Command {
+        .post(Command {
             id: 1,
             kind: CreateSubmissionQueue {
                 size: 16,
@@ -69,17 +69,15 @@ fn basic_create_destroy(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
     // try sending a test command on the new queues
     crate::cmd_test(&sub_qu, &cmpl_qu);
 
-    log::trace!("e: {}", send_qu.is_empty());
-
     // destroy both queues
     send_qu
-        .post(&Command {
+        .post(Command {
             id: 2,
             kind: DestroyQueue { id: sub_qu.id }.into(),
         })
         .expect("post destroy subm queue msg");
     send_qu
-        .post(&Command {
+        .post(Command {
             id: 3,
             kind: DestroyQueue { id: cmpl_qu.id }.into(),
         })
@@ -107,7 +105,7 @@ fn fail_to_create_submission_queue_with_bad_completion_id(
 ) {
     // create a submission queue and try to associate it with an invalid completion queue ID
     send_qu
-        .post(&Command {
+        .post(Command {
             id: 1,
             kind: CreateSubmissionQueue {
                 size: 16,
@@ -133,7 +131,7 @@ fn fail_to_create_submission_queue_with_bad_completion_id(
 fn fail_to_create_queue_with_zero_size(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
     // create a submission queue and try to associate it with an invalid completion queue ID
     send_qu
-        .post(&Command {
+        .post(Command {
             id: 1,
             kind: CreateCompletionQueue { size: 0 }.into(),
         })
