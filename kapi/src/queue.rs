@@ -109,6 +109,12 @@ impl<T> Queue<T> {
     }
 
     /// Initialize the queue. This will remove but not drop anything already in the queue.
+    /// This function exists for the use of the kernel, but is unnecessary for user-space
+    /// processes.
+    ///
+    /// # Safety
+    /// This is only safe to run once after a queue has been allocated but before it is used.
+    /// The queue will not function correctly, however, if it is never called.
     pub unsafe fn initialize(&self) {
         let counters = self.counter_ptr.as_ref();
         counters.head.store(0, Ordering::Relaxed);

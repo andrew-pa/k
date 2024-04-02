@@ -29,7 +29,6 @@ impl BlockStore for NamespaceBlockStore {
         source_addr: BlockAddress,
         destination_addrs: &'a [(PhysicalAddress, usize)],
     ) -> Result<usize, StorageError> {
-        // log::trace!("read blocks {source_addr}[..{num_blocks}] -> {destination_addrs:?}");
         let total_num_blocks: u16 = destination_addrs
             .iter()
             .map(|(_, n)| n)
@@ -42,6 +41,7 @@ impl BlockStore for NamespaceBlockStore {
                 }
                 .build()
             })?;
+        log::trace!("read blocks {source_addr}[..{total_num_blocks}] -> {destination_addrs:?}");
         let cmp = self.io_cq.wait_for_completion(
             self.io_sq.begin()
                 .expect("NVMe submission queue full. TODO: we should be able to await for a new spot in the queue rather than panic")
