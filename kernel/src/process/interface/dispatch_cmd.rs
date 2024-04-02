@@ -1,4 +1,3 @@
-use bytemuck::Zeroable;
 use kapi::{
     commands::{self as cmds, Kind as CmdKind},
     completions::{self as cmpl, ErrorCode, Kind as CmplKind},
@@ -44,10 +43,17 @@ impl Process {
         }
     }
 
-    async fn create_queue<T: Zeroable>(
+    async fn create_queue<T>(
         &self,
         num_elements: usize,
     ) -> Result<(OwnedQueue<T>, cmpl::NewQueue), Error> {
+        if num_elements == 0 {
+            return Err(Error::Misc {
+                reason: "queue must have at least a capacity of 1, got 0".into(),
+                code: Some(ErrorCode::InvalidSize),
+            });
+        }
+
         let id = self.next_queue_id()?;
         let qu = OwnedQueue::<T>::new(id, num_elements).context(error::MemorySnafu {
             reason: "allocate backing memory for queue",
@@ -106,6 +112,19 @@ impl Process {
         self.send_queues.push((Arc::new(oq), rq));
         Ok(nq)
     }
+
+    fn destroy_queue(&self, info: &cmds::DestroyQueue) -> Result<cmpl::Success, Error> {
+        if self.send_queues.iter().any(|(_, q)| q.id == info.id) {
+            Err(Error::Misc {
+                reason: "completion queue still in use".into(),
+                code: Some(ErrorCode::InUse),
+            })
+        } else {
+            self.recv_queues.remove(|q| q.id == info.id);
+            self.send_queues.remove(|(q, _)| q.id == info.id);
+            Ok(cmpl::Success)
+        }
+    }
 }
 
 async fn dispatch_inner(proc: &Arc<Process>, cmd: Command) -> Result<CmplKind, ErrorCode> {
@@ -121,6 +140,7 @@ async fn dispatch_inner(proc: &Arc<Process>, cmd: Command) -> Result<CmplKind, E
         CmdKind::CreateSubmissionQueue(info) => {
             proc.create_submission_queue(info).await.map(Into::into)
         }
+        CmdKind::DestroyQueue(info) => proc.destroy_queue(info).map(Into::into),
         kind => Err(Error::Misc {
             reason: alloc::format!("received unknown command: {}", kind.discriminant()),
             code: Some(ErrorCode::UnknownCommand),
