@@ -1,6 +1,7 @@
 //! Initialization routines that are called during the boot process by `kmain` to setup the system.
 use super::*;
 use crate::{ds::dtb::DeviceTree, registry::Path};
+use alloc::sync::Arc;
 use hashbrown::HashMap;
 
 /// Configure logging using [log] and the [uart::DebugUartLogger].
@@ -117,11 +118,11 @@ pub fn spawn_task_executor_thread() {
     log::debug!("task stack = {task_stack:x?}");
 
     unsafe {
-        process::thread::spawn_thread(process::Thread::kernel_thread(
+        process::thread::spawn_thread(Arc::new(process::Thread::kernel_thread(
             process::thread::TASK_THREAD,
             tasks::run_executor,
             &task_stack,
-        ));
+        )));
     }
 
     // the task executor thread should continue to run while the kernel is running so we prevent

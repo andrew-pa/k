@@ -119,12 +119,11 @@ pub fn next_thread_id() -> ThreadId {
 /// Spawn a thread. It is up to the caller to ensure that this thread is valid.
 ///
 /// This inserts the thread in the global table and also adds it to the scheduler.
-pub fn spawn_thread(thread: Thread) {
+pub fn spawn_thread(thread: Arc<Thread>) {
     // TODO: async version?
     // TODO: check to make sure the thread ID is actually unique
-    let t = Arc::new(thread);
-    threads().push(t.clone());
-    scheduler::scheduler().add_thread(t);
+    threads().push(thread.clone());
+    scheduler::scheduler().add_thread(thread);
 }
 
 impl ExecutionState {

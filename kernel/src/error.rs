@@ -35,6 +35,12 @@ pub enum Error {
         source: Box<FsError>,
     },
 
+    Inner {
+        reason: String,
+        #[snafu(source(from(Error, Box::new)))]
+        source: Box<Error>,
+    },
+
     /// Miscellaneous error occurred with no underlying source error.
     #[snafu(display("{reason} (code = {code:?})"))]
     Misc {
@@ -93,6 +99,7 @@ impl Error {
             Error::Other {
                 code: Some(code), ..
             } => *code,
+            Error::Inner { source, .. } => source.as_code(),
             _ => ErrorCode::Internal,
         }
     }

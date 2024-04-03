@@ -177,6 +177,55 @@ impl PhysicalMemoryAllocator {
             return Ok(addr);
         }
     }
+
+    /// Try to allocate a contiguous range of pages of length `page_count`. If a smaller contiguous
+    /// range is found first, it will be returned. The return on success contains the address and
+    /// number of pages allocated.
+    pub fn try_alloc_contig(
+        &mut self,
+        desired_page_count: usize,
+    ) -> Result<(PhysicalAddress, usize), MemoryError> {
+        let mut pi = self.allocated_pages.iter_mut().enumerate();
+        // skip until an empty page
+        let start_index;
+        loop {
+            match pi.next() {
+                Some((i, allocated)) => {
+                    if *allocated {
+                        continue;
+                    }
+                    start_index = Some(i);
+                    break;
+                }
+                None => return Err(MemoryError::OutOfMemory),
+            }
+        }
+
+        let mut actual_page_count = desired_page_count;
+        // check to see if there are enough pages here
+        for i in 0..(desired_page_count - 1) {
+            match pi.next() {
+                Some((_, allocated)) => {
+                    if *allocated {
+                        actual_page_count = i + 1;
+                        break;
+                    }
+                }
+                None => {
+                    return Err(MemoryError::InsufficentForAllocation {
+                        size: desired_page_count * PAGE_SIZE,
+                    })
+                }
+            }
+        }
+
+        // we found enough pages, mark them as allocated and return
+        let start_index = start_index.unwrap();
+        self.allocated_pages[start_index..(start_index + actual_page_count)].fill(true);
+        let addr = PhysicalAddress(self.memory_start + start_index * PAGE_SIZE);
+        log::trace!("allocated {actual_page_count} pages at {addr}");
+        Ok((addr, actual_page_count))
+    }
 }
 
 static mut PMA: OnceCell<Mutex<PhysicalMemoryAllocator>> = OnceCell::new();

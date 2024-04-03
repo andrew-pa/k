@@ -5,7 +5,7 @@ use kapi::{
 };
 
 use crate::{
-    error::{self, Error},
+    error::{self, Error, InnerSnafu, MemorySnafu},
     process::*,
 };
 
@@ -125,6 +125,68 @@ impl Process {
             Ok(cmpl::Success)
         }
     }
+
+    /// Map more memory into the process. This memory may not be physically continuous, but will be
+    /// virtually continuous in the process's address space.
+    async fn alloc_memory(&self, mut page_count: usize) -> Result<VirtualAddress, Error> {
+        let vaddr = self
+            .address_space_allocator
+            .lock()
+            .await
+            .alloc(page_count)
+            .context(MemorySnafu {
+                reason: "allocate virtual addresses for memory region in process",
+            })?;
+        let mut vstart = vaddr;
+        let options = PageTableEntryOptions {
+            read_only: false,
+            el0_access: true,
+        };
+        while page_count > 0 {
+            let (paddr, size) = physical_memory_allocator()
+                .try_alloc_contig(page_count)
+                .context(MemorySnafu {
+                    reason: "allocate physical memory for process",
+                })?;
+            self.page_tables
+                .map_range(paddr, vstart, size, true, &options)
+                .context(MemorySnafu {
+                    reason: "map physical memory into process address space",
+                })?;
+            page_count -= size;
+            vstart = vstart.add(size);
+        }
+        Ok(vaddr)
+    }
+
+    async fn spawn_thread(
+        self: &Arc<Process>,
+        info: &cmds::SpawnThread,
+    ) -> Result<cmpl::NewThread, Error> {
+        let stack_page_count = info.stack_size.div_ceil(PAGE_SIZE);
+
+        let initial_stack_pointer =
+            self.alloc_memory(stack_page_count)
+                .await
+                .context(InnerSnafu {
+                    reason: "allocate thread stack",
+                })?;
+
+        let tid = thread::next_thread_id();
+        let thread = Arc::new(Thread::user_thread(
+            self.clone(),
+            tid,
+            VirtualAddress(info.entry_point as usize),
+            initial_stack_pointer,
+            ThreadPriority::Normal,
+            Registers::from_args(&[info.user_data as usize]),
+        ));
+
+        self.threads.lock().await.push(thread.clone());
+        thread::spawn_thread(thread);
+
+        Ok(cmpl::NewThread { id: tid })
+    }
 }
 
 async fn dispatch_inner(proc: &Arc<Process>, cmd: Command) -> Result<CmplKind, ErrorCode> {
@@ -141,6 +203,7 @@ async fn dispatch_inner(proc: &Arc<Process>, cmd: Command) -> Result<CmplKind, E
             proc.create_submission_queue(info).await.map(Into::into)
         }
         CmdKind::DestroyQueue(info) => proc.destroy_queue(info).map(Into::into),
+        CmdKind::SpawnThread(info) => proc.spawn_thread(info).await.map(Into::into),
         kind => Err(Error::Misc {
             reason: alloc::format!("received unknown command: {}", kind.discriminant()),
             code: Some(ErrorCode::UnknownCommand),
