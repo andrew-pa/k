@@ -13,7 +13,7 @@ pub enum SystemCallNumber {
     WaitForMessage = 11,
 }
 
-/// Exit the current process immediately.
+/// Exit the current thread immediately.
 #[inline]
 pub fn exit(code: u32) -> ! {
     unsafe {

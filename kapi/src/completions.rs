@@ -1,7 +1,7 @@
 //! Asynchronous results that can be received in user-space from the kernel via a [crate::queue::Queue].
-use bytemuck::{Contiguous, Zeroable};
+use bytemuck::Contiguous;
 
-use crate::{queue::QueueId, ProcessId};
+use crate::{queue::QueueId, ProcessId, ThreadId};
 
 macro_rules! impl_into_kind {
     ($t:ident) => {
@@ -88,6 +88,25 @@ pub struct NewQueue {
 }
 impl_into_kind!(NewQueue);
 
+/// Response to a [crate::commands::SpawnThread] command.
+#[repr(C)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewThread {
+    /// The ID of the new thread.
+    pub id: ThreadId,
+}
+impl_into_kind!(NewThread);
+
+/// Response to a [crate::commands::WatchThread] command, or a [crate::commands::SpawnThread] with
+/// `send_completion_on_exit` set to true.
+#[repr(C)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThreadExit {
+    /// Code that the thread exited with.
+    pub exit_code: u32, // TODO: what about error/panic related exits?
+}
+impl_into_kind!(ThreadExit);
+
 /// Type of completion and any resulting values returned by the command.
 #[repr(u16)]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -100,15 +119,15 @@ pub enum Kind {
     Success = 1,
     Test(Test),
     NewQueue(NewQueue),
+    NewThread(NewThread),
+    ThreadExit(ThreadExit),
     /// The command failed to complete successfully.
     Err(ErrorCode),
 }
 
-unsafe impl Zeroable for Kind {}
-
 /// A completion/event that can be receved from the kernel.
 #[repr(C)]
-#[derive(Debug, Clone, Zeroable)]
+#[derive(Debug, Clone)]
 pub struct Completion {
     /// The ID number for the command that caused this completion.
     pub response_to_id: u16,

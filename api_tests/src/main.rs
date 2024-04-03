@@ -94,6 +94,7 @@ fn cmd_test(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
 }
 
 mod queues;
+mod threads;
 
 #[no_mangle]
 pub extern "C" fn _start(
@@ -121,7 +122,7 @@ pub extern "C" fn _start(
     };
 
     test_runner(
-        &[&[&cmd_invalid, &cmd_test], queues::TESTS],
+        &[&[&cmd_invalid, &cmd_test], queues::TESTS, threads::TESTS],
         &send_qu,
         &recv_qu,
     );
