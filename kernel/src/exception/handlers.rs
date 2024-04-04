@@ -37,7 +37,10 @@ unsafe extern "C" fn handle_synchronous_exception(regs: *mut Registers, esr: usi
     let esr = ExceptionSyndromeRegister(esr as u64);
     let ec = ExceptionClass(esr.ec());
 
-    if !ec.is_system_call() && !ec.is_user_space_page_fault() {
+    if !ec.is_system_call()
+        && !ec.is_user_space_data_page_fault()
+        && !ec.is_user_space_code_page_fault()
+    {
         panic!(
             "synchronous exception! {}, FAR={far:x}, registers = {:?}, ELR={:x?}",
             esr,
@@ -67,7 +70,7 @@ unsafe extern "C" fn handle_synchronous_exception(regs: *mut Registers, esr: usi
             regs,
             esr.iss() as u16,
         );
-    } else if ec.is_user_space_page_fault() {
+    } else if ec.is_user_space_data_page_fault() || ec.is_user_space_code_page_fault() {
         // page fault in user space
         let proc = parent.expect("this exception is only for page faults in a lower exception level and since the kernel runs at EL1, that means that we can only get here from a fault in EL0, therefore there must be a current process running (or something is very wrong)");
 

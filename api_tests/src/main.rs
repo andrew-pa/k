@@ -16,7 +16,6 @@ use kapi::{
     completions::{self, Completion, ErrorCode, Kind as CplKind},
     queue::{Queue, FIRST_RECV_QUEUE_ID, FIRST_SEND_QUEUE_ID},
     system_calls::{current_process_id, current_thread_id, exit, yield_now, KernelLogger},
-    ProcessId,
 };
 
 pub trait Testable {

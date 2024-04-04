@@ -5,6 +5,7 @@ use kapi::{
     completions::{self as cmpl, ErrorCode, Kind as CmplKind},
     queue::QueueId,
 };
+use snafu::ensure;
 
 use crate::{
     error::{self, Error, InnerSnafu, MemorySnafu},
@@ -167,6 +168,14 @@ impl Process {
         cmd_id: u16,
         recv_qu: Weak<OwnedQueue<Completion>>,
     ) -> Result<cmpl::NewThread, Error> {
+        ensure!(
+            info.stack_size > 0,
+            error::MiscSnafu {
+                code: Some(ErrorCode::InvalidSize),
+                reason: "thread stack must have non-zero size"
+            }
+        );
+
         let stack_page_count = info.stack_size.div_ceil(PAGE_SIZE);
 
         let initial_stack_pointer =
@@ -187,7 +196,7 @@ impl Process {
         ));
 
         if info.send_completion_on_exit {
-            crate::tasks::spawn(thread.exit_code().then(move |ec| async move {
+            crate::tasks::spawn(thread.exit_code().map(move |ec| {
                 if let Some(rq) = recv_qu.upgrade() {
                     // TODO: deal with queue overflow
                     let _ = rq.post(Completion {
@@ -202,6 +211,18 @@ impl Process {
         thread::spawn_thread(thread);
 
         Ok(cmpl::NewThread { id: tid })
+    }
+
+    async fn watch_thread(
+        self: &Arc<Process>,
+        info: &cmds::WatchThread,
+    ) -> Result<cmpl::ThreadExit, Error> {
+        let thread = thread_for_id(info.thread_id).context(error::MiscSnafu {
+            reason: "find thread to watch",
+            code: Some(ErrorCode::InvalidId),
+        })?;
+
+        Ok(thread.exit_code().await)
     }
 
     /// Execute a single command on the process, returning the resulting completion.
@@ -227,6 +248,7 @@ impl Process {
                 .spawn_thread(info, cmd.id, recv_qu)
                 .await
                 .map(Into::into),
+            CmdKind::WatchThread(info) => self.watch_thread(info).await.map(Into::into),
             kind => Err(Error::Misc {
                 reason: alloc::format!("received unknown command: {}", kind.discriminant()),
                 code: Some(ErrorCode::UnknownCommand),

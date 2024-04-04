@@ -13,7 +13,12 @@ use kapi::{
 
 use crate::Testable;
 
-pub const TESTS: &[&dyn Testable] = &[&basic, &basic_watch, &fail_to_create_thread_with_no_stack];
+pub const TESTS: &[&dyn Testable] = &[
+    &basic,
+    &basic_watch,
+    &fail_to_create_thread_with_no_stack,
+    &thread_with_bad_entry_point_page_faults,
+];
 
 fn basic_thread_entry(user_data: *mut ()) -> ! {
     unsafe {
@@ -161,6 +166,49 @@ fn fail_to_create_thread_with_no_stack(send_qu: &Queue<Command>, recv_qu: &Queue
             assert_eq!(c.response_to_id, 1);
             match c.kind {
                 CmplKind::Err(ErrorCode::InvalidSize) => return,
+                _ => panic!("unexpected completion: {c:?}"),
+            }
+        }
+        yield_now();
+    }
+}
+
+fn thread_with_bad_entry_point_page_faults(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
+    let nasty_entry_point: fn(*mut ()) -> ! = unsafe { core::mem::transmute(1usize) };
+
+    send_qu
+        .post(Command {
+            id: 0,
+            kind: SpawnThread {
+                entry_point: nasty_entry_point,
+                stack_size: 4096,
+                user_data: null_mut(),
+                send_completion_on_exit: true,
+            }
+            .into(),
+        })
+        .expect("post create queue msg");
+
+    let mut tid: Option<ThreadId> = None;
+    while tid.is_none() {
+        if let Some(c) = recv_qu.poll() {
+            assert_eq!(c.response_to_id, 0);
+            match c.kind {
+                CmplKind::NewThread(nt) => {
+                    tid = Some(nt.id);
+                }
+                _ => panic!("unexpected completion: {c:?}"),
+            }
+        }
+        yield_now();
+    }
+
+    // wait for the thread to page fault
+    loop {
+        if let Some(c) = recv_qu.poll() {
+            assert_eq!(c.response_to_id, 0);
+            match c.kind {
+                CmplKind::ThreadExit(ThreadExit::PageFault) => return,
                 _ => panic!("unexpected completion: {c:?}"),
             }
         }
