@@ -1,11 +1,14 @@
+use alloc::sync::Weak;
+use futures::FutureExt;
 use kapi::{
     commands::{self as cmds, Kind as CmdKind},
     completions::{self as cmpl, ErrorCode, Kind as CmplKind},
     queue::QueueId,
 };
+use snafu::ensure;
 
 use crate::{
-    error::{self, Error},
+    error::{self, Error, InnerSnafu, MemorySnafu},
     process::*,
 };
 
@@ -125,45 +128,145 @@ impl Process {
             Ok(cmpl::Success)
         }
     }
-}
 
-async fn dispatch_inner(proc: &Arc<Process>, cmd: Command) -> Result<CmplKind, ErrorCode> {
-    match &cmd.kind {
-        CmdKind::Test(cmds::Test { arg }) => Ok(cmpl::Test {
-            arg: *arg,
-            pid: proc.id,
+    /// Map more memory into the process. This memory may not be physically continuous, but will be
+    /// virtually continuous in the process's address space.
+    async fn alloc_memory(&self, mut page_count: usize) -> Result<VirtualAddress, Error> {
+        let vaddr = self
+            .address_space_allocator
+            .lock()
+            .await
+            .alloc(page_count)
+            .context(MemorySnafu {
+                reason: "allocate virtual addresses for memory region in process",
+            })?;
+        let mut vstart = vaddr;
+        let options = PageTableEntryOptions {
+            read_only: false,
+            el0_access: true,
+        };
+        while page_count > 0 {
+            let (paddr, size) = physical_memory_allocator()
+                .try_alloc_contig(page_count)
+                .context(MemorySnafu {
+                    reason: "allocate physical memory for process",
+                })?;
+            self.page_tables
+                .map_range(paddr, vstart, size, true, &options)
+                .context(MemorySnafu {
+                    reason: "map physical memory into process address space",
+                })?;
+            page_count -= size;
+            vstart = vstart.add(size);
         }
-        .into()),
-        CmdKind::CreateCompletionQueue(info) => {
-            proc.create_completion_queue(info).await.map(Into::into)
-        }
-        CmdKind::CreateSubmissionQueue(info) => {
-            proc.create_submission_queue(info).await.map(Into::into)
-        }
-        CmdKind::DestroyQueue(info) => proc.destroy_queue(info).map(Into::into),
-        kind => Err(Error::Misc {
-            reason: alloc::format!("received unknown command: {}", kind.discriminant()),
-            code: Some(ErrorCode::UnknownCommand),
-        }),
+        Ok(vaddr)
     }
-    .map_err(|e| {
-        log::error!(
-            "[pid {}] error occurred processing {cmd:?}: {}",
-            proc.id,
-            snafu::Report::from_error(&e)
-        );
-        e.as_code()
-    })
-}
 
-pub async fn dispatch(proc: &Arc<Process>, cmd: Command) -> Completion {
-    let response_to_id = cmd.id;
-    let kind = match dispatch_inner(proc, cmd).await {
-        Ok(c) => c,
-        Err(e) => e.into(),
-    };
-    Completion {
-        response_to_id,
-        kind,
+    async fn spawn_thread(
+        self: &Arc<Process>,
+        info: &cmds::SpawnThread,
+        cmd_id: u16,
+        recv_qu: Weak<OwnedQueue<Completion>>,
+    ) -> Result<cmpl::NewThread, Error> {
+        ensure!(
+            info.stack_size > 0,
+            error::MiscSnafu {
+                code: Some(ErrorCode::InvalidSize),
+                reason: "thread stack must have non-zero size"
+            }
+        );
+
+        let stack_page_count = info.stack_size.div_ceil(PAGE_SIZE);
+
+        let initial_stack_pointer =
+            self.alloc_memory(stack_page_count)
+                .await
+                .context(InnerSnafu {
+                    reason: "allocate thread stack",
+                })?;
+
+        let tid = thread::next_thread_id();
+        let thread = Arc::new(Thread::user_thread(
+            self.clone(),
+            tid,
+            VirtualAddress(info.entry_point as usize),
+            initial_stack_pointer,
+            ThreadPriority::Normal,
+            Registers::from_args(&[info.user_data as usize]),
+        ));
+
+        if info.send_completion_on_exit {
+            crate::tasks::spawn(thread.exit_code().map(move |ec| {
+                if let Some(rq) = recv_qu.upgrade() {
+                    // TODO: deal with queue overflow
+                    let _ = rq.post(Completion {
+                        response_to_id: cmd_id,
+                        kind: ec.into(),
+                    });
+                }
+            }));
+        }
+
+        self.threads.lock().await.push(thread.clone());
+        thread::spawn_thread(thread);
+
+        Ok(cmpl::NewThread { id: tid })
+    }
+
+    async fn watch_thread(
+        self: &Arc<Process>,
+        info: &cmds::WatchThread,
+    ) -> Result<cmpl::ThreadExit, Error> {
+        let thread = thread_for_id(info.thread_id).context(error::MiscSnafu {
+            reason: "find thread to watch",
+            code: Some(ErrorCode::InvalidId),
+        })?;
+
+        Ok(thread.exit_code().await)
+    }
+
+    /// Execute a single command on the process, returning the resulting completion.
+    pub async fn dispatch_command(
+        self: &Arc<Process>,
+        cmd: Command,
+        recv_qu: Weak<OwnedQueue<Completion>>,
+    ) -> Completion {
+        let res = match &cmd.kind {
+            CmdKind::Test(cmds::Test { arg }) => Ok(cmpl::Test {
+                arg: *arg,
+                pid: self.id,
+            }
+            .into()),
+            CmdKind::CreateCompletionQueue(info) => {
+                self.create_completion_queue(info).await.map(Into::into)
+            }
+            CmdKind::CreateSubmissionQueue(info) => {
+                self.create_submission_queue(info).await.map(Into::into)
+            }
+            CmdKind::DestroyQueue(info) => self.destroy_queue(info).map(Into::into),
+            CmdKind::SpawnThread(info) => self
+                .spawn_thread(info, cmd.id, recv_qu)
+                .await
+                .map(Into::into),
+            CmdKind::WatchThread(info) => self.watch_thread(info).await.map(Into::into),
+            kind => Err(Error::Misc {
+                reason: alloc::format!("received unknown command: {}", kind.discriminant()),
+                code: Some(ErrorCode::UnknownCommand),
+            }),
+        };
+
+        let kind = res.unwrap_or_else(|e| {
+            log::error!(
+                "[pid {}] error occurred processing {cmd:?}: {}",
+                self.id,
+                snafu::Report::from_error(&e)
+            );
+            CmplKind::Err(e.as_code())
+        });
+
+        Completion {
+            response_to_id: cmd.id,
+            kind,
+        }
     }
 }

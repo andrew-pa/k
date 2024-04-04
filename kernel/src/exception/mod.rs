@@ -318,8 +318,13 @@ impl ExceptionClass {
     }
 
     #[inline]
-    fn is_user_space_page_fault(&self) -> bool {
+    fn is_user_space_data_page_fault(&self) -> bool {
         self.0 == 0b100100
+    }
+
+    #[inline]
+    fn is_user_space_code_page_fault(&self) -> bool {
+        self.0 == 0b100000
     }
 }
 

@@ -1,8 +1,5 @@
 //! Asynchronous commands that can be submitted to the kernel from user-space via a [crate::queue::Queue].
-
-use bytemuck::Zeroable;
-
-use crate::queue::QueueId;
+use crate::{queue::QueueId, ThreadId};
 
 macro_rules! impl_into_kind {
     ($t:ident) => {
@@ -63,6 +60,41 @@ pub struct DestroyQueue {
 }
 impl_into_kind!(DestroyQueue);
 
+/// Spawn a new thread in the current process.
+/// [Completion Type][crate::completions::NewThread]
+#[repr(C)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpawnThread {
+    /// The function that will serve as the thread's entry point.
+    pub entry_point: fn(*mut ()) -> !,
+    /// Initial size of the stack allocated for this thread in bytes.
+    /// Rounded up to the nearest page.
+    pub stack_size: usize,
+    /// A pointer to any user data that will be passed to the thread verbatim.
+    ///
+    /// It is up to the sender to ensure that this data is correctly synchronized
+    /// (i.e. points to something that is Send).
+    pub user_data: *mut (),
+    /// If true, an additional completion will be sent when the thread exits.
+    /// [Completion Type][crate::completions::ThreadExit]
+    pub send_completion_on_exit: bool,
+}
+/// The `user_data` pointer should be find to send, since that is what is expected.
+unsafe impl Send for SpawnThread {}
+impl_into_kind!(SpawnThread);
+
+/// Request a completion to be sent when a thread exits.
+/// This command will only complete when the thread finishes.
+/// If the thread has already exited when this command is processed, then TODO
+/// [Completion Type][crate::completions::ThreadExit]
+#[repr(C)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WatchThread {
+    /// The thread to watch.
+    pub thread_id: ThreadId,
+}
+impl_into_kind!(WatchThread);
+
 /// Type of command and any required parameters.
 ///
 /// Each command is further documented on the inner parameter struct.
@@ -80,9 +112,9 @@ pub enum Kind {
     CreateCompletionQueue(CreateCompletionQueue),
     CreateSubmissionQueue(CreateSubmissionQueue),
     DestroyQueue(DestroyQueue),
+    SpawnThread(SpawnThread),
+    WatchThread(WatchThread),
 }
-
-unsafe impl Zeroable for Kind {}
 
 impl Kind {
     /// Get the enum discriminant value that identifies this command.
@@ -96,7 +128,7 @@ impl Kind {
 
 /// A command that can be sent to the kernel.
 #[repr(C)]
-#[derive(Debug, Clone, Zeroable)]
+#[derive(Debug, Clone)]
 pub struct Command {
     /// The type of the command.
     pub kind: Kind,

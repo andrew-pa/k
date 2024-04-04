@@ -2,7 +2,10 @@ use core::ptr::NonNull;
 
 use kapi::queue::{queue_size_in_bytes, Queue, QueueId};
 
-use crate::memory::{paging::PageTableEntryOptions, MemoryError, PhysicalBuffer, PAGE_SIZE};
+use crate::{
+    assert_send,
+    memory::{paging::PageTableEntryOptions, MemoryError, PhysicalBuffer, PAGE_SIZE},
+};
 
 /// A single synchronized queue which owns its backing memory.
 ///
@@ -42,6 +45,9 @@ impl<T> OwnedQueue<T> {
         Ok(Self { buffer, queue })
     }
 }
+
+assert_send!(kapi::commands::Command);
+assert_send!(kapi::completions::Completion);
 
 impl<T> core::ops::Deref for OwnedQueue<T> {
     type Target = Queue<T>;

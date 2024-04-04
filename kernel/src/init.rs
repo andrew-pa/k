@@ -1,6 +1,7 @@
 //! Initialization routines that are called during the boot process by `kmain` to setup the system.
 use super::*;
 use crate::{ds::dtb::DeviceTree, registry::Path};
+use alloc::sync::Arc;
 use hashbrown::HashMap;
 
 /// Configure logging using [log] and the [uart::DebugUartLogger].
@@ -117,11 +118,11 @@ pub fn spawn_task_executor_thread() {
     log::debug!("task stack = {task_stack:x?}");
 
     unsafe {
-        process::thread::spawn_thread(process::Thread::kernel_thread(
+        process::thread::spawn_thread(Arc::new(process::Thread::kernel_thread(
             process::thread::TASK_THREAD,
             tasks::run_executor,
             &task_stack,
-        ));
+        )));
     }
 
     // the task executor thread should continue to run while the kernel is running so we prevent
@@ -149,10 +150,20 @@ pub async fn finish_boot(opts: BootOptions<'_>) {
 
     log::info!("init pid = {}", init_proc.id);
 
-    let ec = init_proc
-        .exit_code()
-        .await
-        .expect("init process killed unexpectedly");
-    log::warn!("init process exited with code {ec}");
-    qemu_exit::AArch64::new().exit(ec);
+    let main_thread = {
+        init_proc
+            .threads
+            .lock()
+            .await
+            .first()
+            .expect("init process has main thread")
+            .clone()
+    };
+
+    let ec = main_thread.exit_code().await;
+    log::warn!("init process exited with code {ec:?}");
+    qemu_exit::AArch64::new().exit(match ec {
+        kapi::completions::ThreadExit::Normal(c) => c.into(),
+        kapi::completions::ThreadExit::PageFault => 0x1_0000,
+    });
 }

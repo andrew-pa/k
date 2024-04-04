@@ -15,8 +15,7 @@ use kapi::{
     commands::{Command, Kind as CmdKind, Test},
     completions::{self, Completion, ErrorCode, Kind as CplKind},
     queue::{Queue, FIRST_RECV_QUEUE_ID, FIRST_SEND_QUEUE_ID},
-    system_calls::{exit, yield_now, KernelLogger},
-    ProcessId,
+    system_calls::{current_process_id, current_thread_id, exit, yield_now, KernelLogger},
 };
 
 pub trait Testable {
@@ -69,6 +68,8 @@ fn cmd_invalid(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
 }
 
 fn cmd_test(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
+    let pid = current_process_id();
+
     send_qu
         .post(Command {
             id: 0,
@@ -79,14 +80,7 @@ fn cmd_test(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
     loop {
         if let Some(c) = recv_qu.poll() {
             assert_eq!(c.response_to_id, 0);
-            assert_eq!(
-                c.kind,
-                completions::Test {
-                    pid: ProcessId::new(1).unwrap(),
-                    arg: 42,
-                }
-                .into()
-            );
+            assert_eq!(c.kind, completions::Test { pid, arg: 42 }.into());
             return;
         }
         yield_now();
@@ -94,6 +88,7 @@ fn cmd_test(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
 }
 
 mod queues;
+mod threads;
 
 #[no_mangle]
 pub extern "C" fn _start(
@@ -120,8 +115,14 @@ pub extern "C" fn _start(
         )
     };
 
+    log::debug!(
+        "process id = {}, thread id = {}",
+        current_process_id(),
+        current_thread_id()
+    );
+
     test_runner(
-        &[&[&cmd_invalid, &cmd_test], queues::TESTS],
+        &[&[&cmd_invalid, &cmd_test], queues::TESTS, threads::TESTS],
         &send_qu,
         &recv_qu,
     );
