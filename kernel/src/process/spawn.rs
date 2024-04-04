@@ -1,7 +1,6 @@
 use alloc::format;
 use elf::segment::ProgramHeader;
 use kapi::queue::{FIRST_RECV_QUEUE_ID, FIRST_SEND_QUEUE_ID};
-use spin::once::Once;
 
 use crate::error::{self, Error};
 
@@ -235,8 +234,6 @@ pub async fn spawn_process(
         send_queues,
         recv_queues,
         address_space_allocator: Mutex::new(address_space_allocator),
-        exit_code: Once::new(),
-        exit_waker: spin::Mutex::new(SmallVec::new()),
     });
     processes().push(proc.clone());
 

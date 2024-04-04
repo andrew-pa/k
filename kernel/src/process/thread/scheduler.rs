@@ -46,6 +46,9 @@ impl ThreadScheduler {
             if queue.is_empty() {
                 continue;
             }
+            if *next >= queue.len() {
+                *next = 0;
+            }
             // skip any threads that are waiting in this queue
             let mut skips = queue.len();
             while queue[*next].state() != ThreadState::Running {

@@ -22,6 +22,7 @@ fn basic_thread_entry(user_data: *mut ()) -> ! {
         assert_eq!(data.read(), 12345678, "check user data pointer");
         data.write(87654321);
     }
+    log::trace!("hello from thread!");
     exit(7)
 }
 
@@ -61,7 +62,7 @@ fn basic(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
     loop {
         if let Some(c) = recv_qu.poll() {
             assert_eq!(c.response_to_id, 0);
-            assert_eq!(c.kind, CmplKind::ThreadExit(ThreadExit { exit_code: 7 }));
+            assert_eq!(c.kind, CmplKind::ThreadExit(ThreadExit::Normal(7)));
             break;
         }
         yield_now();
@@ -129,8 +130,8 @@ fn basic_watch(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
         if let Some(c) = recv_qu.poll() {
             assert!(c.response_to_id == 0 || c.response_to_id == 1);
             match c.kind {
-                CmplKind::ThreadExit(te) => {
-                    assert_eq!(te.exit_code, 7);
+                CmplKind::ThreadExit(ThreadExit::Normal(c)) => {
+                    assert_eq!(c, 7);
                     outstanding -= 1;
                 }
                 _ => panic!("unexpected completion: {c:?}"),

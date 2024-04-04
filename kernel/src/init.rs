@@ -150,10 +150,20 @@ pub async fn finish_boot(opts: BootOptions<'_>) {
 
     log::info!("init pid = {}", init_proc.id);
 
-    let ec = init_proc
-        .exit_code()
-        .await
-        .expect("init process killed unexpectedly");
-    log::warn!("init process exited with code {ec}");
-    qemu_exit::AArch64::new().exit(ec);
+    let main_thread = {
+        init_proc
+            .threads
+            .lock()
+            .await
+            .first()
+            .expect("init process has main thread")
+            .clone()
+    };
+
+    let ec = main_thread.exit_code().await;
+    log::warn!("init process exited with code {ec:?}");
+    qemu_exit::AArch64::new().exit(match ec {
+        kapi::completions::ThreadExit::Normal(c) => c.into(),
+        kapi::completions::ThreadExit::PageFault => 0x1_0000,
+    });
 }

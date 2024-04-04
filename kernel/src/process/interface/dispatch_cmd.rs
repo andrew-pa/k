@@ -1,3 +1,5 @@
+use alloc::sync::Weak;
+use futures::FutureExt;
 use kapi::{
     commands::{self as cmds, Kind as CmdKind},
     completions::{self as cmpl, ErrorCode, Kind as CmplKind},
@@ -162,6 +164,8 @@ impl Process {
     async fn spawn_thread(
         self: &Arc<Process>,
         info: &cmds::SpawnThread,
+        cmd_id: u16,
+        recv_qu: Weak<OwnedQueue<Completion>>,
     ) -> Result<cmpl::NewThread, Error> {
         let stack_page_count = info.stack_size.div_ceil(PAGE_SIZE);
 
@@ -182,6 +186,18 @@ impl Process {
             Registers::from_args(&[info.user_data as usize]),
         ));
 
+        if info.send_completion_on_exit {
+            crate::tasks::spawn(thread.exit_code().then(move |ec| async move {
+                if let Some(rq) = recv_qu.upgrade() {
+                    // TODO: deal with queue overflow
+                    let _ = rq.post(Completion {
+                        response_to_id: cmd_id,
+                        kind: ec.into(),
+                    });
+                }
+            }));
+        }
+
         self.threads.lock().await.push(thread.clone());
         thread::spawn_thread(thread);
 
@@ -189,7 +205,11 @@ impl Process {
     }
 
     /// Execute a single command on the process, returning the resulting completion.
-    pub async fn dispatch_command(self: &Arc<Process>, cmd: Command) -> Completion {
+    pub async fn dispatch_command(
+        self: &Arc<Process>,
+        cmd: Command,
+        recv_qu: Weak<OwnedQueue<Completion>>,
+    ) -> Completion {
         let res = match &cmd.kind {
             CmdKind::Test(cmds::Test { arg }) => Ok(cmpl::Test {
                 arg: *arg,
@@ -203,7 +223,10 @@ impl Process {
                 self.create_submission_queue(info).await.map(Into::into)
             }
             CmdKind::DestroyQueue(info) => self.destroy_queue(info).map(Into::into),
-            CmdKind::SpawnThread(info) => self.spawn_thread(info).await.map(Into::into),
+            CmdKind::SpawnThread(info) => self
+                .spawn_thread(info, cmd.id, recv_qu)
+                .await
+                .map(Into::into),
             kind => Err(Error::Misc {
                 reason: alloc::format!("received unknown command: {}", kind.discriminant()),
                 code: Some(ErrorCode::UnknownCommand),

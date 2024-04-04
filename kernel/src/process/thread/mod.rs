@@ -1,6 +1,9 @@
 use core::sync::atomic::{AtomicU32, AtomicU8, Ordering};
 
 use alloc::sync::Arc;
+use futures::Future;
+use kapi::completions::ThreadExit;
+use smallvec::SmallVec;
 use spin::{once::Once, Mutex};
 
 use bytemuck::Contiguous;
@@ -59,6 +62,14 @@ struct ExecutionState {
     sp: VirtualAddress,
 }
 
+#[derive(Default)]
+struct ExitState {
+    /// The exit code this process exited with (if it has exited).
+    code: Once<ThreadExit>,
+    /// Future wakers for futures waiting on exit code.
+    wakers: Mutex<SmallVec<[core::task::Waker; 1]>>,
+}
+
 /// A thread is a single unit of user-space code execution, happening in the context of some
 /// process.
 pub struct Thread {
@@ -70,6 +81,7 @@ pub struct Thread {
     /// An atomic [ThreadPriority].
     priority: AtomicU8,
     exec_state: Mutex<ExecutionState>,
+    exit_state: Arc<ExitState>,
 }
 
 crate::assert_sync!(Thread);
@@ -99,6 +111,7 @@ pub fn threads() -> &'static ConcurrentLinkedList<Arc<Thread>> {
                 pc: VirtualAddress(0),
                 sp: VirtualAddress(0),
             }),
+            exit_state: Default::default(),
         }));
         ths
     })
@@ -170,6 +183,7 @@ impl Thread {
                 pc: (start as *const ()).into(),
                 sp: stack.virtual_address().add(stack.len() - 16),
             }),
+            exit_state: Default::default(),
         }
     }
 
@@ -193,6 +207,63 @@ impl Thread {
                 pc: entry_point,
                 sp: initial_stack_pointer,
             }),
+            exit_state: Default::default(),
+        }
+    }
+
+    /// Create a future that will resolve with the value of the exit code when this thread exits.
+    pub fn exit_code(&self) -> impl Future<Output = ThreadExit> {
+        struct ExitFuture {
+            state: Arc<ExitState>,
+        }
+
+        impl Future for ExitFuture {
+            type Output = ThreadExit;
+
+            fn poll(
+                self: core::pin::Pin<&mut Self>,
+                cx: &mut core::task::Context<'_>,
+            ) -> core::task::Poll<Self::Output> {
+                match self.state.code.poll() {
+                    Some(c) => core::task::Poll::Ready(c.clone()),
+                    None => {
+                        self.state.wakers.lock().push(cx.waker().clone());
+                        core::task::Poll::Pending
+                    }
+                }
+            }
+        }
+
+        ExitFuture {
+            state: self.exit_state.clone(),
+        }
+    }
+
+    /// Cause a thread to exit, freeing its resources. If this is the last thread in a process, then
+    /// the process will also exit.
+    pub fn exit(self: &Arc<Thread>, exit_code: ThreadExit) {
+        log::trace!("thread {} exited with code {exit_code:?}", self.id);
+
+        scheduler::scheduler().remove_thread(self);
+        threads().remove(|t| t.id == self.id);
+
+        let pid_if_last_thread = if let Some(p) = self.parent.as_ref() {
+            let mut ts = p.threads.lock_blocking();
+            ts.retain(|t| t.id != self.id);
+            ts.is_empty().then_some(p.id)
+        } else {
+            None
+        };
+
+        self.exit_state.code.call_once(|| exit_code);
+        for w in self.exit_state.wakers.lock().drain(..) {
+            w.wake();
+        }
+
+        if let Some(pid) = pid_if_last_thread {
+            // this thread was the last, so the process itself is now dead.
+            log::trace!("process {pid} exited");
+            super::processes().remove(|p| p.id == pid);
         }
     }
 

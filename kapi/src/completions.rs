@@ -99,11 +99,13 @@ impl_into_kind!(NewThread);
 
 /// Response to a [crate::commands::WatchThread] command, or a [crate::commands::SpawnThread] with
 /// `send_completion_on_exit` set to true.
-#[repr(C)]
+#[repr(u8)]
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ThreadExit {
-    /// Code that the thread exited with.
-    pub exit_code: u32, // TODO: what about error/panic related exits?
+pub enum ThreadExit {
+    /// The thread exited normally (i.e. by calling [exit][crate::system_calls::exit]).
+    Normal(u16),
+    /// The thread tried to access an address that was unmapped in the address space.
+    PageFault,
 }
 impl_into_kind!(ThreadExit);
 
