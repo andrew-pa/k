@@ -260,6 +260,8 @@ impl Thread {
             w.wake();
         }
 
+        // TODO: we're currently leaking the stack for this thread if we allocated it
+
         if let Some(pid) = pid_if_last_thread {
             // this thread was the last, so the process itself is now dead.
             log::trace!("process {pid} exited");

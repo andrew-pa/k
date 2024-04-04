@@ -1,5 +1,8 @@
 //! Definitions for synchronous system calls.
 use core::arch::asm;
+use core::ptr::addr_of_mut;
+
+use crate::{ProcessId, ThreadId};
 
 /// The numeric symbol given to identify each system call.
 ///
@@ -8,6 +11,8 @@ use core::arch::asm;
 #[allow(missing_docs)]
 pub enum SystemCallNumber {
     Exit = 1,
+    GetCurrentProcessId = 2,
+    GetCurrentThreadId = 3,
     WriteLog = 4,
     Yield = 10,
     WaitForMessage = 11,
@@ -24,6 +29,35 @@ pub fn exit(code: u32) -> ! {
         )
     }
     unreachable!()
+}
+
+/// Get the current process ID.
+#[inline]
+pub fn current_process_id() -> ProcessId {
+    unsafe {
+        let mut pid: u32 = 0;
+        asm!(
+            "mov x0, {pid}",
+            "svc #2",
+            pid = in(reg) addr_of_mut!(pid)
+        );
+        // the kernel will return a valid PID
+        ProcessId::new_unchecked(pid)
+    }
+}
+
+/// Get the current thread ID.
+#[inline]
+pub fn current_thread_id() -> ThreadId {
+    unsafe {
+        let mut tid: u32 = 0;
+        asm!(
+            "mov x0, {tid}",
+            "svc #3",
+            tid = in(reg) addr_of_mut!(tid)
+        );
+        tid
+    }
 }
 
 /// Yield execution of the current thread, causing a new thread to be scheduled.

@@ -142,6 +142,26 @@ pub fn register_system_call_handlers() {
         thread.exit(kapi::completions::ThreadExit::Normal(regs.x[0] as u16));
     });
     h.insert_blocking(
+        SystemCallNumber::GetCurrentProcessId as u16,
+        |_id, proc, _thread, regs| {
+            // TODO: validate pointer
+            let p = regs.x[0] as *mut NonZeroU32;
+            unsafe {
+                p.write(proc.id);
+            }
+        },
+    );
+    h.insert_blocking(
+        SystemCallNumber::GetCurrentThreadId as u16,
+        |_id, _proc, thread, regs| {
+            // TODO: validate pointer
+            let p = regs.x[0] as *mut u32;
+            unsafe {
+                p.write(thread.id);
+            }
+        },
+    );
+    h.insert_blocking(
         SystemCallNumber::Yield as u16,
         |_id, _proc, _thread, _regs| {
             scheduler().schedule_next_thread();
