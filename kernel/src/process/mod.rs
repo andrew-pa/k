@@ -41,6 +41,7 @@ pub use kapi::ProcessId;
 /// A user-space process.
 ///
 /// A process is a collection of threads that share the same address space and system resources.
+/// For a process to end, *all* of its associated threads must first exit.
 pub struct Process {
     /// The ID of this process.
     pub id: ProcessId,
@@ -58,11 +59,13 @@ pub struct Process {
     #[allow(clippy::type_complexity)]
     send_queues: ConcurrentLinkedList<(Arc<OwnedQueue<Command>>, Arc<OwnedQueue<Completion>>)>,
     /// The receive (kernel to user space) queues associated with this process.
+    // TODO: these queues don't need to be owned, because the process implicitly owns
+    // all the mapped memory in its page tables by default.
     recv_queues: ConcurrentLinkedList<Arc<OwnedQueue<Completion>>>,
     /// The exit code this process exited with (if it has exited).
     exit_code: Once<Option<u32>>,
     /// Future wakers for futures waiting on exit code.
-    exit_waker: SpinMutex<Vec<Waker>>,
+    exit_waker: SpinMutex<SmallVec<[Waker; 1]>>,
 }
 
 crate::assert_sync!(Process);
@@ -84,7 +87,7 @@ impl Process {
                 log::trace!("[pid {}, SQ {}]: {cmd:?}", self.id, send_qu.id);
                 crate::tasks::spawn(async move {
                     if let Some(proc) = this.upgrade() {
-                        let cmpl = interface::dispatch(&proc, cmd).await;
+                        let cmpl = proc.dispatch_command(cmd).await;
                         log::trace!("[pid {}, RQ {}]: {cmpl:?}", proc.id, assoc_recv_qu.id);
                         match assoc_recv_qu.post(cmpl) {
                             Ok(()) => {}

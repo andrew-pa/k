@@ -236,7 +236,7 @@ pub async fn spawn_process(
         recv_queues,
         address_space_allocator: Mutex::new(address_space_allocator),
         exit_code: Once::new(),
-        exit_waker: spin::Mutex::new(Vec::new()),
+        exit_waker: spin::Mutex::new(SmallVec::new()),
     });
     processes().push(proc.clone());
 

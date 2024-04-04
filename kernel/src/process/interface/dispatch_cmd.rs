@@ -187,46 +187,41 @@ impl Process {
 
         Ok(cmpl::NewThread { id: tid })
     }
-}
 
-async fn dispatch_inner(proc: &Arc<Process>, cmd: Command) -> Result<CmplKind, ErrorCode> {
-    match &cmd.kind {
-        CmdKind::Test(cmds::Test { arg }) => Ok(cmpl::Test {
-            arg: *arg,
-            pid: proc.id,
-        }
-        .into()),
-        CmdKind::CreateCompletionQueue(info) => {
-            proc.create_completion_queue(info).await.map(Into::into)
-        }
-        CmdKind::CreateSubmissionQueue(info) => {
-            proc.create_submission_queue(info).await.map(Into::into)
-        }
-        CmdKind::DestroyQueue(info) => proc.destroy_queue(info).map(Into::into),
-        CmdKind::SpawnThread(info) => proc.spawn_thread(info).await.map(Into::into),
-        kind => Err(Error::Misc {
-            reason: alloc::format!("received unknown command: {}", kind.discriminant()),
-            code: Some(ErrorCode::UnknownCommand),
-        }),
-    }
-    .map_err(|e| {
-        log::error!(
-            "[pid {}] error occurred processing {cmd:?}: {}",
-            proc.id,
-            snafu::Report::from_error(&e)
-        );
-        e.as_code()
-    })
-}
+    /// Execute a single command on the process, returning the resulting completion.
+    pub async fn dispatch_command(self: &Arc<Process>, cmd: Command) -> Completion {
+        let res = match &cmd.kind {
+            CmdKind::Test(cmds::Test { arg }) => Ok(cmpl::Test {
+                arg: *arg,
+                pid: self.id,
+            }
+            .into()),
+            CmdKind::CreateCompletionQueue(info) => {
+                self.create_completion_queue(info).await.map(Into::into)
+            }
+            CmdKind::CreateSubmissionQueue(info) => {
+                self.create_submission_queue(info).await.map(Into::into)
+            }
+            CmdKind::DestroyQueue(info) => self.destroy_queue(info).map(Into::into),
+            CmdKind::SpawnThread(info) => self.spawn_thread(info).await.map(Into::into),
+            kind => Err(Error::Misc {
+                reason: alloc::format!("received unknown command: {}", kind.discriminant()),
+                code: Some(ErrorCode::UnknownCommand),
+            }),
+        };
 
-pub async fn dispatch(proc: &Arc<Process>, cmd: Command) -> Completion {
-    let response_to_id = cmd.id;
-    let kind = match dispatch_inner(proc, cmd).await {
-        Ok(c) => c,
-        Err(e) => e.into(),
-    };
-    Completion {
-        response_to_id,
-        kind,
+        let kind = res.unwrap_or_else(|e| {
+            log::error!(
+                "[pid {}] error occurred processing {cmd:?}: {}",
+                self.id,
+                snafu::Report::from_error(&e)
+            );
+            CmplKind::Err(e.as_code())
+        });
+
+        Completion {
+            response_to_id: cmd.id,
+            kind,
+        }
     }
 }
