@@ -109,6 +109,15 @@ pub enum ThreadExit {
 }
 impl_into_kind!(ThreadExit);
 
+/// Response to a [crate::commands::SpawnProcess] command.
+#[repr(C)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewProcess {
+    /// The ID of the new process.
+    pub id: ProcessId,
+}
+impl_into_kind!(NewProcess);
+
 /// Type of completion and any resulting values returned by the command.
 #[repr(u16)]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -123,6 +132,7 @@ pub enum Kind {
     NewQueue(NewQueue),
     NewThread(NewThread),
     ThreadExit(ThreadExit),
+    NewProcess(NewProcess),
     /// The command failed to complete successfully.
     Err(ErrorCode),
 }

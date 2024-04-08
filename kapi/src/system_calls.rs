@@ -1,6 +1,6 @@
 //! Definitions for synchronous system calls.
-use core::arch::asm;
 use core::ptr::addr_of_mut;
+use core::{arch::asm, ptr::null_mut};
 
 use crate::{ProcessId, ThreadId};
 
@@ -14,8 +14,12 @@ pub enum SystemCallNumber {
     GetCurrentProcessId = 2,
     GetCurrentThreadId = 3,
     WriteLog = 4,
+
     Yield = 10,
     WaitForMessage = 11,
+
+    HeapAllocate = 20,
+    HeapFree = 21,
 }
 
 /// Exit the current thread immediately.
@@ -57,6 +61,41 @@ pub fn current_thread_id() -> ThreadId {
             tid = in(reg) addr_of_mut!(tid)
         );
         tid
+    }
+}
+
+/// Allocate more memory in the process address space. The address will be page aligned, and the
+/// size will be rounded up to the next page. The valid pointer to the start of the range and the
+/// actual size in bytes is returned.
+#[inline]
+pub fn heap_allocate(size_in_bytes: usize) -> (*mut (), usize) {
+    unsafe {
+        let mut p: *mut () = null_mut();
+        let mut s: usize = 0;
+        asm!(
+            "mov x0, {p}",
+            "mov x1, {s}",
+            "mov x2, {is}",
+            "svc #20",
+            is = in(reg) size_in_bytes,
+            p = in(reg) addr_of_mut!(p),
+            s = in(reg) addr_of_mut!(s),
+        );
+        (p, s)
+    }
+}
+
+/// Free some allocation created by [heap_allocate]. After this call, `ptr` is invalid.
+#[inline]
+pub fn heap_free(ptr: *mut (), size_in_bytes: usize) {
+    unsafe {
+        asm!(
+            "mov x0, {p}",
+            "mov x1, {s}",
+            "svc #21",
+            p = in(reg) ptr,
+            s = in(reg) size_in_bytes,
+        );
     }
 }
 

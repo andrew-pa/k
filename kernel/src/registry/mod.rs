@@ -61,7 +61,7 @@ impl Node {
         name: &str,
         handler: Box<dyn RegistryHandler>,
     ) -> Result<(), RegistryError> {
-        log::trace!("{}.{name}", prefix.as_path());
+        // log::trace!("{}.{name}", prefix.as_path());
         use Node::*;
         match (prefix.next(), self) {
             (Some(Component::Name(s)), Directory(children)) => children

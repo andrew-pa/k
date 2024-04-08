@@ -1,5 +1,5 @@
 //! Asynchronous commands that can be submitted to the kernel from user-space via a [crate::queue::Queue].
-use crate::{queue::QueueId, ThreadId};
+use crate::{queue::QueueId, ProcessId, ThreadId};
 
 macro_rules! impl_into_kind {
     ($t:ident) => {
@@ -90,10 +90,49 @@ impl_into_kind!(SpawnThread);
 #[repr(C)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WatchThread {
-    /// The thread to watch.
+    /// The ID of the thread to watch.
     pub thread_id: ThreadId,
 }
 impl_into_kind!(WatchThread);
+
+/// A reference to a path in the registry which names a resource.
+///
+/// # Safety
+/// It is up to the user to ensure that the `text` pointer is valid until the path is no longer in
+/// use (i.e. the completion to the command containing the path has been received).
+/// It is additionally up to the user to make sure that the provided pointer is in fact [Send].
+#[repr(C)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Path {
+    /// UTF-8 encoded text of the path.
+    pub text: *const u8,
+    /// The number of bytes that make up the path.
+    pub len: usize,
+}
+unsafe impl Send for Path {}
+
+/// Spawn a new process.
+/// [Completion Type][crate::completions::NewProcess]
+#[repr(C)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpawnProcess {
+    /// Path to executable binary on the file system, in ELF format.
+    pub binary_path: Path,
+    /// If true, an additional completion will be sent when the main thread of this process exits.
+    /// [Completion Type][crate::completions::ThreadExit]
+    pub send_completion_on_main_thread_exit: bool,
+}
+impl_into_kind!(SpawnProcess);
+
+/// Kill a process. This will cause all threads in the process to exit immediately.
+/// [Completion Type][crate::completions::Success]
+#[repr(C)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KillProcess {
+    /// The ID of the process to kill.
+    pub process_id: ProcessId,
+}
+impl_into_kind!(KillProcess);
 
 /// Type of command and any required parameters.
 ///
@@ -112,8 +151,12 @@ pub enum Kind {
     CreateCompletionQueue(CreateCompletionQueue),
     CreateSubmissionQueue(CreateSubmissionQueue),
     DestroyQueue(DestroyQueue),
+
     SpawnThread(SpawnThread),
     WatchThread(WatchThread),
+
+    SpawnProcess(SpawnProcess),
+    KillProcess(KillProcess),
 }
 
 impl Kind {
@@ -133,5 +176,6 @@ pub struct Command {
     /// The type of the command.
     pub kind: Kind,
     /// The ID number for this command that will be repeated in completions that are associated with it.
+    // TODO: this should probably be a u32
     pub id: u16,
 }

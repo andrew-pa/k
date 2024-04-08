@@ -201,7 +201,7 @@ pub async fn spawn_process(
         },
     )
     .context(error::MemorySnafu {
-        reason: "map proces stack",
+        reason: "map process stack",
     })?;
     address_space_allocator
         .reserve(stack_vaddr, stack_page_count)
