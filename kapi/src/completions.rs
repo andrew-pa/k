@@ -43,6 +43,8 @@ pub enum ErrorCode {
     InvalidId,
     /// A size was provided that is invalid for the operation.
     InvalidSize,
+    /// The provided user space pointer was invalid.
+    InvalidPointer,
 
     /// The object was still in use when its destruction was requested.
     InUse,
@@ -106,6 +108,8 @@ pub enum ThreadExit {
     Normal(u16),
     /// The thread tried to access an address that was unmapped in the address space.
     PageFault,
+    /// The thread was forcibly caused to exit by another process.
+    Killed,
 }
 impl_into_kind!(ThreadExit);
 

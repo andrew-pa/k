@@ -1,5 +1,6 @@
 //! Asynchronous commands that can be submitted to the kernel from user-space via a [crate::queue::Queue].
-use crate::{queue::QueueId, ProcessId, ThreadId};
+
+use crate::{queue::QueueId, Buffer, Path, ProcessId, ThreadId};
 
 macro_rules! impl_into_kind {
     ($t:ident) => {
@@ -95,22 +96,6 @@ pub struct WatchThread {
 }
 impl_into_kind!(WatchThread);
 
-/// A reference to a path in the registry which names a resource.
-///
-/// # Safety
-/// It is up to the user to ensure that the `text` pointer is valid until the path is no longer in
-/// use (i.e. the completion to the command containing the path has been received).
-/// It is additionally up to the user to make sure that the provided pointer is in fact [Send].
-#[repr(C)]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Path {
-    /// UTF-8 encoded text of the path.
-    pub text: *const u8,
-    /// The number of bytes that make up the path.
-    pub len: usize,
-}
-unsafe impl Send for Path {}
-
 /// Spawn a new process.
 /// [Completion Type][crate::completions::NewProcess]
 #[repr(C)]
@@ -118,6 +103,9 @@ unsafe impl Send for Path {}
 pub struct SpawnProcess {
     /// Path to executable binary on the file system, in ELF format.
     pub binary_path: Path,
+    /// Additional parameters to provide to the process.
+    /// The buffer will be copied into the process' address space.
+    pub parameters: Buffer,
     /// If true, an additional completion will be sent when the main thread of this process exits.
     /// [Completion Type][crate::completions::ThreadExit]
     pub send_completion_on_main_thread_exit: bool,

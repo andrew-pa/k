@@ -165,5 +165,6 @@ pub async fn finish_boot(opts: BootOptions<'_>) {
     qemu_exit::AArch64::new().exit(match ec {
         kapi::completions::ThreadExit::Normal(c) => c.into(),
         kapi::completions::ThreadExit::PageFault => 0x1_0000,
+        kapi::completions::ThreadExit::Killed => 0x1_0001,
     });
 }
