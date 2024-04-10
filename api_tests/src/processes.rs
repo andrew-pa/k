@@ -17,6 +17,7 @@ pub const TESTS: &[&dyn Testable] = &[
     &fail_binary_not_found,
     &fail_invalid_path_ptr,
     &fail_invalid_parameter_ptr,
+    &fail_to_kill_bad_id,
 ];
 
 fn basic(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
@@ -188,6 +189,27 @@ fn basic_kill(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
                 }
                 _ => panic!("unexpected completion: {c:?}"),
             }
+        }
+        yield_now();
+    }
+}
+
+fn fail_to_kill_bad_id(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
+    send_qu
+        .post(Command {
+            id: 0,
+            kind: KillProcess {
+                process_id: ProcessId::new(293492034).unwrap(),
+            }
+            .into(),
+        })
+        .expect("send kill process");
+
+    loop {
+        if let Some(c) = recv_qu.poll() {
+            assert_eq!(c.response_to_id, 0);
+            assert_eq!(c.kind, CmplKind::Err(ErrorCode::InvalidId));
+            break;
         }
         yield_now();
     }
