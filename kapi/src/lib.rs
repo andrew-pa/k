@@ -16,6 +16,9 @@ pub mod completions;
 pub mod queue;
 pub mod system_calls;
 
+/// The maximum number of bytes in a path.
+pub const PATH_MAX_LEN: usize = 4096;
+
 /// A reference to a path in the registry which names a resource.
 ///
 /// # Safety
@@ -34,6 +37,7 @@ unsafe impl Send for Path {}
 
 impl From<&str> for Path {
     fn from(value: &str) -> Self {
+        assert!(value.len() <= PATH_MAX_LEN);
         Self {
             text: value.as_ptr(),
             len: value.len(),

@@ -4,12 +4,14 @@ use kapi::{
     commands::{self as cmds, Kind as CmdKind},
     completions::{self as cmpl, ErrorCode, Kind as CmplKind},
     queue::QueueId,
+    PATH_MAX_LEN,
 };
 use snafu::ensure;
 
 use crate::{
     error::{self, Error, InnerSnafu, MemorySnafu},
     process::*,
+    registry::Path,
 };
 
 impl Process {
@@ -225,6 +227,28 @@ impl Process {
         Ok(thread.exit_code().await)
     }
 
+    async fn spawn_child(
+        self: &Arc<Process>,
+        info: &cmds::SpawnProcess,
+    ) -> Result<cmpl::NewProcess, Error> {
+        // convert info.binary_path into a kernel Path
+        let mut path_buf = [0u8; PATH_MAX_LEN];
+        self.page_tables
+            .mapped_copy_from(
+                info.binary_path.text.into(),
+                &mut path_buf[0..info.binary_path.len],
+            )
+            .context(error::MemorySnafu {
+                reason: "invalid path slice",
+            })?;
+        let binary_path = Path::from_bytes(&path_buf[0..info.binary_path.len])
+            .context(error::Utf8Snafu { reason: "path" })?;
+        // copy parameters into new buffer, if present
+        // spawn process
+        // watch for exit if requested
+        todo!("{}", binary_path)
+    }
+
     /// Execute a single command on the process, returning the resulting completion.
     pub async fn dispatch_command(
         self: &Arc<Process>,
@@ -249,6 +273,7 @@ impl Process {
                 .await
                 .map(Into::into),
             CmdKind::WatchThread(info) => self.watch_thread(info).await.map(Into::into),
+            CmdKind::SpawnProcess(info) => self.spawn_child(info).await.map(Into::into),
             kind => Err(Error::Misc {
                 reason: alloc::format!("received unknown command: {}", kind.discriminant()),
                 code: Some(ErrorCode::UnknownCommand),

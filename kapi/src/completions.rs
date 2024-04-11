@@ -45,6 +45,8 @@ pub enum ErrorCode {
     InvalidSize,
     /// The provided user space pointer was invalid.
     InvalidPointer,
+    /// A string was provided that was not valid UTF-8.
+    InvalidUtf8,
 
     /// The object was still in use when its destruction was requested.
     InUse,
