@@ -2,7 +2,7 @@ use alloc::format;
 use elf::segment::ProgramHeader;
 use kapi::queue::{FIRST_RECV_QUEUE_ID, FIRST_SEND_QUEUE_ID};
 
-use crate::error::{self, Error};
+use crate::error::{self, Error, MemorySnafu};
 
 use super::*;
 
@@ -119,6 +119,7 @@ pub fn attach_queues(
 /// Supports ELF binaries.
 pub async fn spawn_process(
     binary_path: impl AsRef<crate::registry::Path>,
+    parameter_buffer: Option<(PhysicalBuffer, usize)>,
     before_launch: Option<impl FnOnce(Arc<Process>)>,
 ) -> Result<Arc<Process>, Error> {
     use crate::registry::registry;
@@ -223,6 +224,31 @@ pub async fn spawn_process(
     let recv_queues = ConcurrentLinkedList::default();
     recv_queues.push(recv_qu);
 
+    let (params_addr, params_size) = if let Some((buf, actual_size)) = parameter_buffer {
+        let (phy, page_count) = buf.unmap();
+        let addr = address_space_allocator
+            .alloc(page_count)
+            .context(MemorySnafu {
+                reason: "allocate virtual addresses for process parameters",
+            })?;
+        pt.map_range(
+            phy,
+            addr,
+            page_count,
+            true,
+            &PageTableEntryOptions {
+                read_only: false,
+                el0_access: true,
+            },
+        )
+        .context(error::MemorySnafu {
+            reason: "map process parameters",
+        })?;
+        (addr, actual_size)
+    } else {
+        (VirtualAddress(0), 0)
+    };
+
     // log::debug!("process page table: {pt:?}");
 
     // create process structure
@@ -239,8 +265,14 @@ pub async fn spawn_process(
 
     // create main thread
     let tid = next_thread_id();
-    let start_regs =
-        Registers::from_args(&[send_qu_addr.0, send_qu_size, recv_qu_addr.0, recv_qu_size]);
+    let start_regs = Registers::from_args(&[
+        send_qu_addr.0,
+        send_qu_size,
+        recv_qu_addr.0,
+        recv_qu_size,
+        params_addr.0,
+        params_size,
+    ]);
     let main_thread = Arc::new(Thread::user_thread(
         proc.clone(),
         tid,

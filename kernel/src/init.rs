@@ -12,7 +12,7 @@ pub fn logging(log_level: log::LevelFilter) {
 }
 
 fn default_init_process_path() -> &'static str {
-    "/fat/init"
+    "/volumes/root/bin/init"
 }
 
 /// Kernel "command line" parameters.
@@ -141,10 +141,12 @@ pub async fn finish_boot(opts: BootOptions<'_>) {
             .unwrap()
     };
     log::info!("mount FAT filesystem");
-    fs::fat::mount(Path::new("/fat"), bs).await.unwrap();
+    fs::fat::mount(Path::new("/volumes/root"), bs)
+        .await
+        .unwrap();
 
     log::info!("spawning init process");
-    let init_proc = process::spawn_process(opts.init_process_path, None::<fn(_)>)
+    let init_proc = process::spawn_process(opts.init_process_path, None, None::<fn(_)>)
         .await
         .expect("spawn init process");
 

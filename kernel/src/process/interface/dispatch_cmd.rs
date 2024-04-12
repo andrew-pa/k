@@ -230,6 +230,8 @@ impl Process {
     async fn spawn_child(
         self: &Arc<Process>,
         info: &cmds::SpawnProcess,
+        cmd_id: u16,
+        recv_qu: Weak<OwnedQueue<Completion>>,
     ) -> Result<cmpl::NewProcess, Error> {
         // convert info.binary_path into a kernel Path
         let mut path_buf = [0u8; PATH_MAX_LEN];
@@ -243,10 +245,55 @@ impl Process {
             })?;
         let binary_path = Path::from_bytes(&path_buf[0..info.binary_path.len])
             .context(error::Utf8Snafu { reason: "path" })?;
-        // copy parameters into new buffer, if present
+
+        let params_buf = (info.parameters.len > 0)
+            .then(|| {
+                let mut buf = PhysicalBuffer::alloc_zeroed(
+                    info.parameters.len.div_ceil(PAGE_SIZE),
+                    &PageTableEntryOptions {
+                        read_only: false,
+                        el0_access: true,
+                    },
+                )
+                .context(MemorySnafu {
+                    reason: "allocate buffer for process parameters",
+                })?;
+                self.page_tables
+                    .mapped_copy_from(
+                        info.parameters.data.into(),
+                        &mut buf.as_bytes_mut()[0..info.parameters.len],
+                    )
+                    .context(MemorySnafu {
+                        reason: "copy process parameters into new process",
+                    })?;
+                Ok((buf, info.parameters.len))
+            })
+            .transpose()?;
+
         // spawn process
-        // watch for exit if requested
-        todo!("{}", binary_path)
+        let proc = spawn_process(
+            binary_path,
+            params_buf,
+            Some(|proc: Arc<Process>| {
+                // watch for exit if requested
+                if info.send_completion_on_main_thread_exit {
+                    let threads = proc.threads.lock_blocking();
+                    let thread = threads.first().unwrap();
+                    crate::tasks::spawn(thread.exit_code().map(move |ec| {
+                        if let Some(rq) = recv_qu.upgrade() {
+                            // TODO: deal with queue overflow
+                            let _ = rq.post(Completion {
+                                response_to_id: cmd_id,
+                                kind: ec.into(),
+                            });
+                        }
+                    }));
+                }
+            }),
+        )
+        .await?;
+
+        Ok(cmpl::NewProcess { id: proc.id })
     }
 
     /// Execute a single command on the process, returning the resulting completion.
@@ -273,7 +320,10 @@ impl Process {
                 .await
                 .map(Into::into),
             CmdKind::WatchThread(info) => self.watch_thread(info).await.map(Into::into),
-            CmdKind::SpawnProcess(info) => self.spawn_child(info).await.map(Into::into),
+            CmdKind::SpawnProcess(info) => self
+                .spawn_child(info, cmd.id, recv_qu)
+                .await
+                .map(Into::into),
             kind => Err(Error::Misc {
                 reason: alloc::format!("received unknown command: {}", kind.discriminant()),
                 code: Some(ErrorCode::UnknownCommand),
@@ -282,7 +332,7 @@ impl Process {
 
         let kind = res.unwrap_or_else(|e| {
             log::error!(
-                "[pid {}] error occurred processing {cmd:?}: {}",
+                "[pid {}] error occurred processing {cmd:?}:\n{}",
                 self.id,
                 snafu::Report::from_error(&e)
             );

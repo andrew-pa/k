@@ -36,17 +36,17 @@ $(BUILD_DIR)/kernel.img: build-rust $(UBOOT_BIN)/tools/mkimage $(TARGET_DIR)/ker
 	./scripts/make-image.sh $(TARGET_DIR)/kernel $(BUILD_DIR)/kernel.img
 
 $(BUILD_DIR)/init: build-rust $(TARGET_DIR)/init
-	mkdir -p $(BUILD_DIR)
-	cp $(TARGET_DIR)/init $(BUILD_DIR)/init
+	mkdir -p $(BUILD_DIR)/bin
+	cp $(TARGET_DIR)/init $(BUILD_DIR)/bin/init
 
 $(BUILD_DIR)/api_tests: build-rust $(TARGET_DIR)/api_tests
-	mkdir -p $(BUILD_DIR)
-	cp $(TARGET_DIR)/api_tests $(BUILD_DIR)/api_tests
+	mkdir -p $(BUILD_DIR)/bin
+	cp $(TARGET_DIR)/api_tests $(BUILD_DIR)/bin/api_tests
 
 
 # QEMU Run/Test/Debug
 run: build-all $(QEMU) $(UBOOT_BIN)/u-boot.bin #? Boots the system inside QEMU.
-	./scripts/qemu-exec.sh $(BUILD_DIR) '{"init_process_path":"/fat/init"}'
+	./scripts/qemu-exec.sh $(BUILD_DIR) '{"init_process_path":"/volumes/root/bin/init"}'
 
 debug: build-all $(QEMU) $(UBOOT_BIN)/u-boot.bin #? Run with QEMU in debug mode. Waits for GDB to attach before continuing.
 	./scripts/qemu-exec.sh $(BUILD_DIR) '{}' '-s -S'
@@ -56,7 +56,7 @@ test: build-all $(QEMU) $(UBOOT_BIN)/u-boot.bin $(UBOOT_BIN)/tools/mkimage #? Ru
 	cargo test -p kernel
 
 api-test: build-all $(QEMU) $(UBOOT_BIN)/u-boot.bin #? Boots system inside QEMU and runs API tests.
-	./scripts/qemu-exec.sh $(BUILD_DIR) '{"init_process_path":"/fat/api_tests"}'
+	./scripts/qemu-exec.sh $(BUILD_DIR) '{"init_process_path":"/volumes/root/bin/api_tests"}'
 
 # Rule to extract documentation comments for each rule in the Makefile
 # Comments are `#?` after the rule head.

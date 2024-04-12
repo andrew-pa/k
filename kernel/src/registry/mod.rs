@@ -20,9 +20,14 @@ use self::path::{Component, Components};
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub))]
 pub enum RegistryError {
-    NotFound { path: PathBuf },
+    #[snafu(display("path not found: {path}"))]
+    NotFound {
+        path: PathBuf,
+    },
     Unsupported,
-    HandlerAlreadyRegistered { name: String },
+    HandlerAlreadyRegistered {
+        name: String,
+    },
     InvalidPath,
 }
 

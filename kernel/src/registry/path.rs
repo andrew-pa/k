@@ -202,6 +202,12 @@ impl Deref for PathBuf {
     }
 }
 
+impl Display for PathBuf {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{}", &self.s)
+    }
+}
+
 impl PathBuf {
     pub fn push(&mut self, p: impl AsRef<Path>) {
         if !self.s.ends_with(PATH_SEP) {
