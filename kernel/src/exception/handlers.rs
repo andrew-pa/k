@@ -28,6 +28,7 @@ fn handle_system_call(proc: Arc<Process>, thread: Arc<Thread>, regs: &mut Regist
                 id,
                 regs
             )
+            // TODO: should we kill the thread?
         }
     }
 }

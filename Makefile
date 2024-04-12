@@ -25,7 +25,7 @@ $(QEMU):
 all-bindep: $(QEMU) $(UBOOT_BIN)/u-boot.bin $(UBOOT_BIN)/tools/mkimage
 
 # Building/Packaging the Kernel
-build-all: $(BUILD_DIR)/kernel.img $(BUILD_DIR)/init $(BUILD_DIR)/api_tests #? Build and package everything.
+build-all: $(BUILD_DIR)/kernel.img $(BUILD_DIR)/bin/init $(BUILD_DIR)/bin/api_tests $(BUILD_DIR)/bin/test_process #? Build and package everything.
 
 build-rust: #? Build all Rust source.
 	export CC_aarch64_unknown_none=aarch64-linux-gnu-gcc
@@ -35,14 +35,17 @@ $(BUILD_DIR)/kernel.img: build-rust $(UBOOT_BIN)/tools/mkimage $(TARGET_DIR)/ker
 	mkdir -p $(BUILD_DIR)
 	./scripts/make-image.sh $(TARGET_DIR)/kernel $(BUILD_DIR)/kernel.img
 
-$(BUILD_DIR)/init: build-rust $(TARGET_DIR)/init
+$(BUILD_DIR)/bin/init: build-rust $(TARGET_DIR)/init
 	mkdir -p $(BUILD_DIR)/bin
 	cp $(TARGET_DIR)/init $(BUILD_DIR)/bin/init
 
-$(BUILD_DIR)/api_tests: build-rust $(TARGET_DIR)/api_tests
+$(BUILD_DIR)/bin/api_tests: build-rust $(TARGET_DIR)/api_tests
 	mkdir -p $(BUILD_DIR)/bin
 	cp $(TARGET_DIR)/api_tests $(BUILD_DIR)/bin/api_tests
 
+$(BUILD_DIR)/bin/test_process: build-rust $(TARGET_DIR)/test_process
+	mkdir -p $(BUILD_DIR)/bin
+	cp $(TARGET_DIR)/test_process $(BUILD_DIR)/bin/test_process
 
 # QEMU Run/Test/Debug
 run: build-all $(QEMU) $(UBOOT_BIN)/u-boot.bin #? Boots the system inside QEMU.

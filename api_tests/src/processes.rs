@@ -25,7 +25,7 @@ fn basic(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
         .post(Command {
             id: 0,
             kind: SpawnProcess {
-                binary_path: Path::from("/volumes/root/bin/test"),
+                binary_path: Path::from("/volumes/root/bin/test_process"),
                 parameters: Buffer::empty(),
                 send_completion_on_main_thread_exit: true,
             }
@@ -112,7 +112,7 @@ fn fail_invalid_parameter_ptr(send_qu: &Queue<Command>, recv_qu: &Queue<Completi
         .post(Command {
             id: 0,
             kind: SpawnProcess {
-                binary_path: Path::from("/volumes/root/bin/test"),
+                binary_path: Path::from("/volumes/root/bin/test_process"),
                 parameters: Buffer {
                     data: 0xffff_aaaa_bbbb_cccc as *const u8,
                     len: 1004,
@@ -138,8 +138,8 @@ fn basic_kill(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
         .post(Command {
             id: 0,
             kind: SpawnProcess {
-                binary_path: Path::from("/volumes/root/bin/test"),
-                parameters: Buffer::from(&[1u8] as &[u8]),
+                binary_path: Path::from("/volumes/root/bin/test_process"),
+                parameters: Buffer::from(&[42u8] as &[u8]),
                 send_completion_on_main_thread_exit: true,
             }
             .into(),
