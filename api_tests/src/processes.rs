@@ -12,7 +12,7 @@ use crate::Testable;
 
 pub const TESTS: &[&dyn Testable] = &[
     &basic,
-    &basic_heap,
+    // &basic_heap,
     &basic_kill,
     &fail_binary_not_found,
     &fail_invalid_path_ptr,

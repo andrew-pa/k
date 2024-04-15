@@ -46,9 +46,6 @@ impl<T> OwnedQueue<T> {
     }
 }
 
-assert_send!(kapi::commands::Command);
-assert_send!(kapi::completions::Completion);
-
 impl<T> core::ops::Deref for OwnedQueue<T> {
     type Target = Queue<T>;
 
@@ -56,6 +53,19 @@ impl<T> core::ops::Deref for OwnedQueue<T> {
         &self.queue
     }
 }
+
+impl<T> core::fmt::Debug for OwnedQueue<T> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("OwnedQueue")
+            .field("buffer", &self.buffer)
+            .field("id", &self.queue.id)
+            .field("capacity", &self.queue.capacity())
+            .finish()
+    }
+}
+
+assert_send!(kapi::commands::Command);
+assert_send!(kapi::completions::Completion);
 
 #[cfg(test)]
 mod tests {

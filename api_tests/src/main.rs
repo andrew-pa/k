@@ -87,6 +87,8 @@ fn cmd_test(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
     }
 }
 
+// TODO: new test that sends lots of messages to make sure that queue wrapping works correctly
+
 mod processes;
 mod queues;
 mod threads;

@@ -14,7 +14,7 @@ pub extern "C" fn _start(
 ) {
     log::set_logger(&KernelLogger).expect("set logger");
     log::set_max_level(log::LevelFilter::Trace);
-    log::info!("api_tests test process. params @ {params_addr:x}.{params_size}");
+    log::info!("api_tests test process. params @ 0x{params_addr:x}:{params_size}");
 
     log::debug!(
         "process id = {}, thread id = {}",

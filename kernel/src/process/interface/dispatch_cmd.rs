@@ -266,6 +266,7 @@ impl Process {
                     .context(MemorySnafu {
                         reason: "copy process parameters into new process",
                     })?;
+                log::trace!("created parameter buffer {:?} -> {buf:?}", info.parameters);
                 Ok((buf, info.parameters.len))
             })
             .transpose()?;
@@ -324,8 +325,12 @@ impl Process {
                 .spawn_child(info, cmd.id, recv_qu)
                 .await
                 .map(Into::into),
+            CmdKind::KillProcess(info) => kill_process(info).await.map(Into::into),
             kind => Err(Error::Misc {
-                reason: alloc::format!("received unknown command: {}", kind.discriminant()),
+                reason: alloc::format!(
+                    "received unknown command: {:?}",
+                    core::mem::discriminant(kind)
+                ),
                 code: Some(ErrorCode::UnknownCommand),
             }),
         };
@@ -344,4 +349,22 @@ impl Process {
             kind,
         }
     }
+}
+
+async fn kill_process(info: &cmds::KillProcess) -> Result<cmpl::Success, Error> {
+    let process = process_for_id(info.process_id).context(error::MiscSnafu {
+        reason: "find process to kill",
+        code: Some(ErrorCode::InvalidId),
+    })?;
+
+    let threads = {
+        let t = process.threads.lock().await;
+        t.clone()
+    };
+
+    for thread in threads {
+        thread.exit(cmpl::ThreadExit::Killed);
+    }
+
+    Ok(cmpl::Success)
 }

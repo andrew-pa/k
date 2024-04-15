@@ -4,7 +4,7 @@ use core::{cell::OnceCell, ops::Range, ptr::NonNull, sync::atomic::AtomicBool};
 
 use bitfield::bitfield;
 use smallvec::SmallVec;
-use snafu::{ensure, ResultExt, Snafu};
+use snafu::{ensure, OptionExt, ResultExt, Snafu};
 use spin::Mutex;
 
 use crate::exception::InterruptGuard;
@@ -181,7 +181,7 @@ pub enum MapError {
     },
     InvalidTag,
     CopyFromUnmapped {
-        last_valid: VirtualAddress,
+        last_valid: Option<VirtualAddress>,
         remaining_bytes: usize,
     },
 }
@@ -557,7 +557,25 @@ impl PageTable {
 
         let mut i = PageTableIter::starting_at(self, [i0, i1, i2, i3]);
 
-        let first = i.next().expect("TODO: errors");
+        let first = i
+            .next()
+            .context(CopyFromUnmappedSnafu {
+                last_valid: None,
+                remaining_bytes: dst.len(),
+            })
+            .context(MapSnafu)?;
+
+        // the first region in the table before the starting address is actually a totally
+        // different part of memory means that the entire region is unmapped/invalid.
+        if first.base_virt_addr.add(po) != src_start {
+            return Err(MemoryError::Map {
+                source: MapError::CopyFromUnmapped {
+                    last_valid: None,
+                    remaining_bytes: dst.len(),
+                },
+            });
+        }
+
         let mut offset = (first.page_count * PAGE_SIZE - po).min(dst.len());
         log::trace!(
             "first copy {}..{offset} -> 0..{offset} ({:?})",
@@ -602,7 +620,7 @@ impl PageTable {
 
         Err(MemoryError::Map {
             source: MapError::CopyFromUnmapped {
-                last_valid: next_start,
+                last_valid: Some(next_start),
                 remaining_bytes: dst.len() - offset,
             },
         })

@@ -147,16 +147,6 @@ pub enum Kind {
     KillProcess(KillProcess),
 }
 
-impl Kind {
-    /// Get the enum discriminant value that identifies this command.
-    pub fn discriminant(&self) -> u16 {
-        // SAFETY: Because `Self` is marked `repr(u16)`, its layout is a `repr(C)` `union`
-        // between `repr(C)` structs, each of which has the `u16` discriminant as its first
-        // field, so we can read the discriminant without offsetting the pointer.
-        unsafe { *<*const _>::from(self).cast::<u16>() }
-    }
-}
-
 /// A command that can be sent to the kernel.
 #[repr(C)]
 #[derive(Debug, Clone)]

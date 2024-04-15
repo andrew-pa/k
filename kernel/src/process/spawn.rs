@@ -12,10 +12,6 @@ fn load_segment(
     pt: &mut PageTable,
     address_space_allocator: &mut VirtualAddressAllocator,
 ) -> Result<(), Error> {
-    // TODO: we are doing this wrong. the init ELF file seems to make the alignment_offset end up
-    // being the running total size of all segments so far, causing each new segment to have to
-    // allocate padding space the size of all previous segments. This is obviously unnecessary.
-
     log::trace!("mapping segment {seg:x?}");
     let page_aligned_vaddr = VirtualAddress((seg.p_vaddr as usize) & !(PAGE_SIZE - 1));
     let page_alignment_offset = (seg.p_vaddr as usize) & (PAGE_SIZE - 1);
@@ -209,14 +205,15 @@ pub async fn spawn_process(
         .expect("user process VA allocations should not overlap, and the page table should check");
 
     // create process communication queues
-    let send_qu = OwnedQueue::new(FIRST_SEND_QUEUE_ID, 2).context(error::MemorySnafu {
+    let send_qu = OwnedQueue::new(FIRST_SEND_QUEUE_ID, 64).context(error::MemorySnafu {
         reason: "allocate first send queue",
     })?;
-    let recv_qu = Arc::new(OwnedQueue::new(FIRST_RECV_QUEUE_ID, 2).context(
+    let recv_qu = Arc::new(OwnedQueue::new(FIRST_RECV_QUEUE_ID, 64).context(
         error::MemorySnafu {
             reason: "allocate first receive queue",
         },
     )?);
+    log::trace!("created first queues for process: {send_qu:?}/{recv_qu:?}");
     let (send_qu_addr, send_qu_size, recv_qu_addr, recv_qu_size) =
         attach_queues(&send_qu, &recv_qu, &mut pt, &mut address_space_allocator)?;
     let send_queues = ConcurrentLinkedList::default();
