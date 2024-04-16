@@ -17,6 +17,7 @@ use core::{
     num::NonZeroU32,
     sync::atomic::{AtomicU16, AtomicU32},
 };
+use futures::Future;
 use kapi::{commands::Command, completions::Completion};
 use smallvec::SmallVec;
 use snafu::{OptionExt, ResultExt};
@@ -35,6 +36,46 @@ use thread::*;
 use interface::OwnedQueue;
 
 pub use kapi::ProcessId;
+
+/// A struct to manage an observable thread exit state.
+#[derive(Default)]
+struct ExitState {
+    /// The exit code this process/thread exited with (if it has exited).
+    code: Once<kapi::completions::ThreadExit>,
+    /// Future wakers for futures waiting on exit code.
+    wakers: spin::Mutex<SmallVec<[core::task::Waker; 1]>>,
+}
+
+impl ExitState {
+    fn set(&self, val: kapi::completions::ThreadExit) {
+        self.code.call_once(|| val);
+        for w in self.wakers.lock().drain(..) {
+            w.wake();
+        }
+    }
+}
+
+/// A future that resolves when an [ExitState] gets set.
+struct ExitFuture {
+    state: Arc<ExitState>,
+}
+
+impl Future for ExitFuture {
+    type Output = kapi::completions::ThreadExit;
+
+    fn poll(
+        self: core::pin::Pin<&mut Self>,
+        cx: &mut core::task::Context<'_>,
+    ) -> core::task::Poll<Self::Output> {
+        match self.state.code.poll() {
+            Some(c) => core::task::Poll::Ready(c.clone()),
+            None => {
+                self.state.wakers.lock().push(cx.waker().clone());
+                core::task::Poll::Pending
+            }
+        }
+    }
+}
 
 /// A user-space process.
 ///
@@ -60,6 +101,9 @@ pub struct Process {
     // TODO: these queues don't need to be owned, because the process implicitly owns
     // all the mapped memory in its page tables by default.
     recv_queues: ConcurrentLinkedList<Arc<OwnedQueue<Completion>>>,
+    /// The exit state for the whole process, which will be the same as the *last* thread to exit
+    /// in the process.
+    exit_state: Arc<ExitState>,
 }
 
 crate::assert_sync!(Process);
@@ -109,6 +153,14 @@ impl Process {
         );
 
         thread.exit(kapi::completions::ThreadExit::PageFault);
+    }
+
+    /// Create a future that will resolve with the value of the exit code when the last thread in
+    /// the process exits.
+    pub fn exit_code(&self) -> impl Future<Output = kapi::completions::ThreadExit> {
+        ExitFuture {
+            state: self.exit_state.clone(),
+        }
     }
 }
 

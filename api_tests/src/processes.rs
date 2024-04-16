@@ -1,7 +1,7 @@
 use core::ptr::null;
 
 use kapi::{
-    commands::{Command, KillProcess, SpawnProcess},
+    commands::{Command, KillProcess, SpawnProcess, WatchProcess},
     completions::{Completion, ErrorCode, Kind as CmplKind, ThreadExit},
     queue::Queue,
     system_calls::{heap_allocate, heap_free, yield_now},
@@ -12,7 +12,8 @@ use crate::Testable;
 
 pub const TESTS: &[&dyn Testable] = &[
     &basic,
-    // &basic_heap,
+    &basic_watch,
+    &basic_heap,
     &basic_kill,
     &fail_binary_not_found,
     &fail_invalid_path_ptr,
@@ -53,6 +54,80 @@ fn basic(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
             assert_eq!(c.response_to_id, 0);
             assert_eq!(c.kind, CmplKind::ThreadExit(ThreadExit::Normal(0)));
             break;
+        }
+        yield_now();
+    }
+}
+
+fn basic_watch(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
+    send_qu
+        .post(Command {
+            id: 0,
+            kind: SpawnProcess {
+                binary_path: Path::from("/volumes/root/bin/test_process"),
+                parameters: Buffer::from(&[42u8] as &[u8]),
+                send_completion_on_main_thread_exit: true,
+            }
+            .into(),
+        })
+        .expect("send spawn process");
+
+    let mut pid: Option<ProcessId> = None;
+    while pid.is_none() {
+        if let Some(c) = recv_qu.poll() {
+            assert_eq!(c.response_to_id, 0);
+            match c.kind {
+                CmplKind::NewProcess(nt) => {
+                    pid = Some(nt.id);
+                }
+                _ => panic!("unexpected completion: {c:?}"),
+            }
+        }
+        yield_now();
+    }
+    let pid = pid.expect("get pid");
+
+    send_qu
+        .post(Command {
+            id: 1,
+            kind: WatchProcess { process_id: pid }.into(),
+        })
+        .expect("send watch process");
+    send_qu
+        .post(Command {
+            id: 2,
+            kind: KillProcess { process_id: pid }.into(),
+        })
+        .expect("send kill process");
+
+    // wait for the process to exit
+    let mut outstanding = 3;
+    while outstanding > 0 {
+        if let Some(c) = recv_qu.poll() {
+            match c {
+                Completion {
+                    response_to_id: 0,
+                    kind: CmplKind::ThreadExit(ThreadExit::Killed),
+                } => {
+                    log::trace!("got thread exit");
+                    outstanding -= 1;
+                }
+                Completion {
+                    response_to_id: 1,
+                    kind: CmplKind::ThreadExit(ThreadExit::Killed),
+                } => {
+                    log::trace!("got thread exit from watch");
+                    outstanding -= 1;
+                }
+                Completion {
+                    response_to_id: 2,
+                    kind: CmplKind::Success,
+                } => {
+                    log::trace!("got kill completion");
+                    outstanding -= 1;
+                }
+                _ => panic!("unexpected completion: {c:?}"),
+            }
         }
         yield_now();
     }

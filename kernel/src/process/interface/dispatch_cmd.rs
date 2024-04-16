@@ -278,9 +278,7 @@ impl Process {
             Some(|proc: Arc<Process>| {
                 // watch for exit if requested
                 if info.send_completion_on_main_thread_exit {
-                    let threads = proc.threads.lock_blocking();
-                    let thread = threads.first().unwrap();
-                    crate::tasks::spawn(thread.exit_code().map(move |ec| {
+                    crate::tasks::spawn(proc.exit_code().map(move |ec| {
                         if let Some(rq) = recv_qu.upgrade() {
                             // TODO: deal with queue overflow
                             let _ = rq.post(Completion {
@@ -295,6 +293,18 @@ impl Process {
         .await?;
 
         Ok(cmpl::NewProcess { id: proc.id })
+    }
+
+    async fn watch_process(
+        self: &Arc<Process>,
+        info: &cmds::WatchProcess,
+    ) -> Result<cmpl::ThreadExit, Error> {
+        let proc = process_for_id(info.process_id).context(error::MiscSnafu {
+            reason: "find process to watch",
+            code: Some(ErrorCode::InvalidId),
+        })?;
+
+        Ok(proc.exit_code().await)
     }
 
     /// Execute a single command on the process, returning the resulting completion.
@@ -325,6 +335,7 @@ impl Process {
                 .spawn_child(info, cmd.id, recv_qu)
                 .await
                 .map(Into::into),
+            CmdKind::WatchProcess(info) => self.watch_process(info).await.map(Into::into),
             CmdKind::KillProcess(info) => kill_process(info).await.map(Into::into),
             kind => Err(Error::Misc {
                 reason: alloc::format!(

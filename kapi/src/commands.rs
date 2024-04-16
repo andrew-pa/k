@@ -112,6 +112,19 @@ pub struct SpawnProcess {
 }
 impl_into_kind!(SpawnProcess);
 
+/// Request a completion to be sent when a process exits.
+/// This command will only complete when the last thread in the process exits, and the completion
+/// will contain the exit code for that last thread.
+/// If the process has already exited when this command is processed, then TODO
+/// [Completion Type][crate::completions::ThreadExit]
+#[repr(C)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WatchProcess {
+    /// The ID of the process to watch.
+    pub process_id: ProcessId,
+}
+impl_into_kind!(WatchProcess);
+
 /// Kill a process. This will cause all threads in the process to exit immediately.
 /// [Completion Type][crate::completions::Success]
 #[repr(C)]
@@ -144,6 +157,7 @@ pub enum Kind {
     WatchThread(WatchThread),
 
     SpawnProcess(SpawnProcess),
+    WatchProcess(WatchProcess),
     KillProcess(KillProcess),
 }
 

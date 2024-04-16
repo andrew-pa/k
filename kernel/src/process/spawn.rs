@@ -22,14 +22,19 @@ fn load_segment(
         })?;
 
     log::trace!(
-        "\tpage aligned p_vaddr = {page_aligned_vaddr}, alignment_offset = {page_alignment_offset:x}, physical address = {}, page count = {page_count}",
-        dest_memory_segment.physical_address()
+        "\tpage aligned p_vaddr = {page_aligned_vaddr}, alignment_offset = {page_alignment_offset:x}, physical buffer = {:?}, page count = {page_count}",
+        dest_memory_segment
     );
 
     let src_start = seg.p_offset as usize;
     let src_end = src_start + (seg.p_filesz as usize);
     let dest_end = page_alignment_offset + seg.p_filesz as usize;
     log::trace!("copying {src_start}..{src_end} to {page_alignment_offset}..{dest_end}");
+    log::trace!(
+        "dst={} src={:?}",
+        dest_memory_segment.virtual_address(),
+        src_data.as_ptr() as *mut u8
+    );
     if src_end > src_start {
         dest_memory_segment.as_bytes_mut()[page_alignment_offset..dest_end]
             .copy_from_slice(&src_data[src_start..src_end]);
@@ -257,6 +262,7 @@ pub async fn spawn_process(
         send_queues,
         recv_queues,
         address_space_allocator: Mutex::new(address_space_allocator),
+        exit_state: Default::default(),
     });
     processes().push(proc.clone());
 
