@@ -3,6 +3,14 @@
 
 use kapi::system_calls::{current_process_id, current_thread_id, exit, yield_now, KernelLogger};
 
+fn fib(n: usize) -> usize {
+    if n < 2 {
+        1
+    } else {
+        fib(n - 1) + fib(n - 2)
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn _start(
     _send_qu_addr: usize,
@@ -21,6 +29,9 @@ pub extern "C" fn _start(
         current_process_id(),
         current_thread_id()
     );
+
+    // make sure that the stack is setup correctly
+    assert_eq!(fib(10), 89);
 
     if params_size > 0 {
         let p = params_addr as *const u8;

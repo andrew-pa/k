@@ -146,7 +146,7 @@ pub async fn finish_boot(opts: BootOptions<'_>) {
         .unwrap();
 
     log::info!("spawning init process");
-    let init_proc = process::spawn_process(opts.init_process_path, None, None::<fn(_)>)
+    let init_proc = process::spawn_process(opts.init_process_path, None, |_| ())
         .await
         .expect("spawn init process");
 

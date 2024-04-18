@@ -189,7 +189,7 @@ fn fail_invalid_parameter_ptr(send_qu: &Queue<Command>, recv_qu: &Queue<Completi
             kind: SpawnProcess {
                 binary_path: Path::from("/volumes/root/bin/test_process"),
                 parameters: Buffer {
-                    data: 0xffff_aaaa_bbbb_cccc as *const u8,
+                    data: 0x0000_aaaa_bbbb_cccc as *const u8,
                     len: 1004,
                 },
                 send_completion_on_main_thread_exit: false,

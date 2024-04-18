@@ -88,7 +88,7 @@ impl Process {
         Ok((qu, cmpl::NewQueue { id, start: addr.0 }))
     }
 
-    async fn create_completion_queue(
+    pub async fn create_completion_queue(
         &self,
         info: &cmds::CreateCompletionQueue,
     ) -> Result<cmpl::NewQueue, Error> {
@@ -97,7 +97,7 @@ impl Process {
         Ok(nq)
     }
 
-    async fn create_submission_queue(
+    pub async fn create_submission_queue(
         &self,
         info: &cmds::CreateSubmissionQueue,
     ) -> Result<cmpl::NewQueue, Error> {
@@ -159,7 +159,7 @@ impl Process {
             self.clone(),
             tid,
             VirtualAddress(info.entry_point as usize),
-            initial_stack_pointer,
+            initial_stack_pointer.add(stack_page_count * PAGE_SIZE),
             ThreadPriority::Normal,
             Registers::from_args(&[info.user_data as usize]),
         ));
@@ -239,24 +239,20 @@ impl Process {
             .transpose()?;
 
         // spawn process
-        let proc = spawn_process(
-            binary_path,
-            params_buf,
-            Some(|proc: Arc<Process>| {
-                // watch for exit if requested
-                if info.send_completion_on_main_thread_exit {
-                    crate::tasks::spawn(proc.exit_code().map(move |ec| {
-                        if let Some(rq) = recv_qu.upgrade() {
-                            // TODO: deal with queue overflow
-                            let _ = rq.post(Completion {
-                                response_to_id: cmd_id,
-                                kind: ec.into(),
-                            });
-                        }
-                    }));
-                }
-            }),
-        )
+        let proc = spawn_process(binary_path, params_buf, |proc: Arc<Process>| {
+            // watch for exit if requested
+            if info.send_completion_on_main_thread_exit {
+                crate::tasks::spawn(proc.exit_code().map(move |ec| {
+                    if let Some(rq) = recv_qu.upgrade() {
+                        // TODO: deal with queue overflow
+                        let _ = rq.post(Completion {
+                            response_to_id: cmd_id,
+                            kind: ec.into(),
+                        });
+                    }
+                }));
+            }
+        })
         .await?;
 
         Ok(cmpl::NewProcess { id: proc.id })
