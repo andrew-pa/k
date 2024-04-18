@@ -67,15 +67,17 @@ pub fn current_thread_id() -> ThreadId {
 /// Allocate more memory in the process address space. The address will be page aligned, and the
 /// size will be rounded up to the next page. The valid pointer to the start of the range and the
 /// actual size in bytes is returned.
+///
+/// If there is no memory remaining (or another error occurs), the pointer returned will be null and the length will be zero.
 #[inline]
 pub fn heap_allocate(size_in_bytes: usize) -> (*mut (), usize) {
     unsafe {
         let mut p: *mut () = null_mut();
         let mut s: usize = 0;
         asm!(
-            "mov x0, {p}",
-            "mov x1, {s}",
-            "mov x2, {is}",
+            "mov x0, {is}",
+            "mov x1, {p}",
+            "mov x2, {s}",
             "svc #20",
             is = in(reg) size_in_bytes,
             p = in(reg) addr_of_mut!(p),

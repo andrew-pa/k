@@ -167,7 +167,6 @@ pub fn block_on<O, F: Future<Output = O>>(task: F) -> O {
     loop {
         match task.as_mut().poll(&mut context) {
             Poll::Ready(v) => {
-                log::trace!("end of block on");
                 return v;
             }
             Poll::Pending => {

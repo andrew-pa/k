@@ -131,39 +131,6 @@ impl Process {
         }
     }
 
-    /// Map more memory into the process. This memory may not be physically continuous, but will be
-    /// virtually continuous in the process's address space.
-    async fn alloc_memory(&self, mut page_count: usize) -> Result<VirtualAddress, Error> {
-        let vaddr = self
-            .address_space_allocator
-            .lock()
-            .await
-            .alloc(page_count)
-            .context(MemorySnafu {
-                reason: "allocate virtual addresses for memory region in process",
-            })?;
-        let mut vstart = vaddr;
-        let options = PageTableEntryOptions {
-            read_only: false,
-            el0_access: true,
-        };
-        while page_count > 0 {
-            let (paddr, size) = physical_memory_allocator()
-                .try_alloc_contig(page_count)
-                .context(MemorySnafu {
-                    reason: "allocate physical memory for process",
-                })?;
-            self.page_tables
-                .map_range(paddr, vstart, size, true, &options)
-                .context(MemorySnafu {
-                    reason: "map physical memory into process address space",
-                })?;
-            page_count -= size;
-            vstart = vstart.add(size);
-        }
-        Ok(vaddr)
-    }
-
     async fn spawn_thread(
         self: &Arc<Process>,
         info: &cmds::SpawnThread,

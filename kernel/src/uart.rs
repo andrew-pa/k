@@ -26,8 +26,10 @@ const DISABLED_MODULES: &[&str] = &[
     "kernel::memory::paging",
     "kernel::memory::heap",
     "kernel::memory::physical_memory_allocator",
+    "kernel::memory::virtual_address_allocator",
     "kernel::process::thread::scheduler",
     "kernel::exception",
+    "kernel::exception::handlers",
 ];
 
 impl log::Log for DebugUartLogger {

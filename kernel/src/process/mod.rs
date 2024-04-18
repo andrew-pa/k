@@ -2,6 +2,7 @@
 //! Contains the thread scheduler and system message dispatch infrastructure.
 use crate::{
     ds::lists::ConcurrentLinkedList,
+    error::Error,
     exception::Registers,
     memory::{
         paging::{PageTable, PageTableEntryOptions},
@@ -162,6 +163,40 @@ impl Process {
             state: self.exit_state.clone(),
         }
     }
+
+    /// Map more memory into the process. This memory may not be physically continuous, but will be
+    /// virtually continuous in the process's address space.
+    async fn alloc_memory(&self, mut page_count: usize) -> Result<VirtualAddress, Error> {
+        use crate::error::*;
+        let vaddr = self
+            .address_space_allocator
+            .lock()
+            .await
+            .alloc(page_count)
+            .context(MemorySnafu {
+                reason: "allocate virtual addresses for memory region in process",
+            })?;
+        let mut vstart = vaddr;
+        let options = PageTableEntryOptions {
+            read_only: false,
+            el0_access: true,
+        };
+        while page_count > 0 {
+            let (paddr, size) = physical_memory_allocator()
+                .try_alloc_contig(page_count)
+                .context(MemorySnafu {
+                    reason: "allocate physical memory for process",
+                })?;
+            self.page_tables
+                .map_range(paddr, vstart, size, true, &options)
+                .context(MemorySnafu {
+                    reason: "map physical memory into process address space",
+                })?;
+            page_count -= size;
+            vstart = vstart.add(size);
+        }
+        Ok(vaddr)
+    }
 }
 
 impl Drop for Process {
@@ -190,9 +225,11 @@ pub fn process_for_id(id: ProcessId) -> Option<Arc<Process>> {
 pub fn register_system_call_handlers() {
     use kapi::system_calls::SystemCallNumber;
     let h = crate::exception::system_call_handlers();
+
     h.insert_blocking(SystemCallNumber::Exit as u16, |_id, _proc, thread, regs| {
         thread.exit(kapi::completions::ThreadExit::Normal(regs.x[0] as u16));
     });
+
     h.insert_blocking(
         SystemCallNumber::GetCurrentProcessId as u16,
         |_id, proc, _thread, regs| {
@@ -203,6 +240,7 @@ pub fn register_system_call_handlers() {
             }
         },
     );
+
     h.insert_blocking(
         SystemCallNumber::GetCurrentThreadId as u16,
         |_id, _proc, thread, regs| {
@@ -213,12 +251,14 @@ pub fn register_system_call_handlers() {
             }
         },
     );
+
     h.insert_blocking(
         SystemCallNumber::Yield as u16,
         |_id, _proc, _thread, _regs| {
             scheduler().schedule_next_thread();
         },
     );
+
     h.insert_blocking(SystemCallNumber::WaitForMessage as u16, |_id, _proc, thread, _regs| {
         thread.set_state(ThreadState::Waiting);
         // TODO: where do we check for messages to resume execution?
@@ -226,4 +266,46 @@ pub fn register_system_call_handlers() {
         // TODO: perhaps each thread should have its own channel, or we should otherwise do something about that?
         // scheduler().schedule_next_thread();
     });
+
+    h.insert_blocking(
+        SystemCallNumber::HeapAllocate as u16,
+        |_id, proc, thread, regs| {
+            let page_count = regs.x[0].div_ceil(PAGE_SIZE);
+            let res_ptr = regs.x[1] as *mut VirtualAddress;
+            let res_size = regs.x[2] as *mut usize;
+            crate::tasks::block_on(async move {
+                // log::trace!("{res_ptr:?},{res_size:?} .. {page_count}");
+                match proc.alloc_memory(page_count).await {
+                    Ok(addr) => unsafe {
+                        res_ptr.write(addr);
+                        res_size.write(page_count * PAGE_SIZE);
+                    },
+                    Err(e) => {
+                        log::error!(
+                            "[pid {}, tid {}] error allocating heap memory:\n{}",
+                            proc.id,
+                            thread.id,
+                            snafu::Report::from_error(&e)
+                        );
+                        unsafe {
+                            res_ptr.write(VirtualAddress(0));
+                            res_size.write(0);
+                        }
+                    }
+                }
+            })
+        },
+    );
+
+    h.insert_blocking(
+        SystemCallNumber::HeapFree as u16,
+        |_id, proc, _thread, regs| {
+            let ptr = VirtualAddress(regs.x[0]);
+            let size = regs.x[1].div_ceil(PAGE_SIZE);
+            proc.page_tables.unmap_range_custom(ptr, size, |region| {
+                physical_memory_allocator().free_pages(region.base_phys_addr, region.page_count);
+            });
+            proc.address_space_allocator.lock_blocking().free(ptr, size);
+        },
+    );
 }

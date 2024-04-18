@@ -9,7 +9,7 @@ use smallvec::SmallVec;
 
 use crate::{
     ds::maps::CHashMap,
-    exception::{self, InterruptId},
+    exception::{self, InterruptGuard, InterruptId},
 };
 
 use super::queue::{Command, Completion, CompletionQueue};
@@ -26,6 +26,7 @@ impl Future for CompletionFuture {
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         use PendingCompletion::*;
+        let _ig = InterruptGuard::disable_interrupts_until_drop();
         // log::trace!("polling NVMe completion future for {}", self.cmd_id);
         let pc = self.pending_completions.remove_blocking(&self.cmd_id);
         // TODO: if we recieve an interrupt here and pc == None, will we ever get the
@@ -101,7 +102,7 @@ fn handle_interrupt(
             // log::debug!("pending completion?");
             *pc = match &*pc {
                 Waiting(w) => {
-                    log::debug!("waking future for NVMe command id {}", cmp.id);
+                    // log::debug!("waking future for NVMe command id {}", cmp.id);
                     w.wake_by_ref();
                     Ready(cmp)
                 },

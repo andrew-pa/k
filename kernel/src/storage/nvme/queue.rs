@@ -67,7 +67,7 @@ impl<'sq> Command<'sq> {
         unsafe {
             self.parent.tail_doorbell.write_volatile(self.parent.tail);
         }
-        log::trace!("submitted!");
+        // log::trace!("submitted!");
         self.extra_data_ptr_buffers
     }
 

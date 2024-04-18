@@ -468,6 +468,19 @@ impl PageTable {
     ///
     /// TODO: This does not yet free the memory used up by now empty page tables.
     pub fn unmap_range(&self, virt_start: VirtualAddress, page_count: usize) {
+        self.unmap_range_custom(virt_start, page_count, |_| ())
+    }
+
+    /// Clear the page table of a mapping starting at `virt_start`, calling `process_region` for
+    /// each unmapped region before it is unmapped.
+    ///
+    /// TODO: This does not yet free the memory used up by now empty page tables.
+    pub fn unmap_range_custom(
+        &self,
+        virt_start: VirtualAddress,
+        page_count: usize,
+        mut process_region: impl FnMut(MappedRegion),
+    ) {
         // prevent deadlocks with interrupt handlers
         let _interrupt_guard = InterruptGuard::disable_interrupts_until_drop();
         // lock the table until we're finished manipulating it
@@ -489,6 +502,13 @@ impl PageTable {
                     table = existing_table;
                 } else {
                     assert_ne!(block_size, 0);
+                    if let Some(base_phys_addr) = tr[i].base_address(lvl) {
+                        process_region(MappedRegion {
+                            base_virt_addr: page_addr,
+                            base_phys_addr,
+                            page_count: block_size,
+                        });
+                    }
                     tr[i] = PageTableEntry::invalid();
                     page_index += block_size;
                     break;
