@@ -20,9 +20,14 @@ use self::path::{Component, Components};
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub))]
 pub enum RegistryError {
-    NotFound { path: PathBuf },
+    #[snafu(display("path not found: {path}"))]
+    NotFound {
+        path: PathBuf,
+    },
     Unsupported,
-    HandlerAlreadyRegistered { name: String },
+    HandlerAlreadyRegistered {
+        name: String,
+    },
     InvalidPath,
 }
 
@@ -61,7 +66,7 @@ impl Node {
         name: &str,
         handler: Box<dyn RegistryHandler>,
     ) -> Result<(), RegistryError> {
-        log::trace!("{}.{name}", prefix.as_path());
+        // log::trace!("{}.{name}", prefix.as_path());
         use Node::*;
         match (prefix.next(), self) {
             (Some(Component::Name(s)), Directory(children)) => children

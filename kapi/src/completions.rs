@@ -43,6 +43,10 @@ pub enum ErrorCode {
     InvalidId,
     /// A size was provided that is invalid for the operation.
     InvalidSize,
+    /// The provided user space pointer was invalid.
+    InvalidPointer,
+    /// A string was provided that was not valid UTF-8.
+    InvalidUtf8,
 
     /// The object was still in use when its destruction was requested.
     InUse,
@@ -106,8 +110,19 @@ pub enum ThreadExit {
     Normal(u16),
     /// The thread tried to access an address that was unmapped in the address space.
     PageFault,
+    /// The thread was forcibly caused to exit by another process.
+    Killed,
 }
 impl_into_kind!(ThreadExit);
+
+/// Response to a [crate::commands::SpawnProcess] command.
+#[repr(C)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewProcess {
+    /// The ID of the new process.
+    pub id: ProcessId,
+}
+impl_into_kind!(NewProcess);
 
 /// Type of completion and any resulting values returned by the command.
 #[repr(u16)]
@@ -123,6 +138,7 @@ pub enum Kind {
     NewQueue(NewQueue),
     NewThread(NewThread),
     ThreadExit(ThreadExit),
+    NewProcess(NewProcess),
     /// The command failed to complete successfully.
     Err(ErrorCode),
 }

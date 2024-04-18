@@ -4,12 +4,14 @@ use kapi::{
     commands::{self as cmds, Kind as CmdKind},
     completions::{self as cmpl, ErrorCode, Kind as CmplKind},
     queue::QueueId,
+    PATH_MAX_LEN,
 };
 use snafu::ensure;
 
 use crate::{
     error::{self, Error, InnerSnafu, MemorySnafu},
     process::*,
+    registry::Path,
 };
 
 impl Process {
@@ -86,7 +88,7 @@ impl Process {
         Ok((qu, cmpl::NewQueue { id, start: addr.0 }))
     }
 
-    async fn create_completion_queue(
+    pub async fn create_completion_queue(
         &self,
         info: &cmds::CreateCompletionQueue,
     ) -> Result<cmpl::NewQueue, Error> {
@@ -95,7 +97,7 @@ impl Process {
         Ok(nq)
     }
 
-    async fn create_submission_queue(
+    pub async fn create_submission_queue(
         &self,
         info: &cmds::CreateSubmissionQueue,
     ) -> Result<cmpl::NewQueue, Error> {
@@ -129,39 +131,6 @@ impl Process {
         }
     }
 
-    /// Map more memory into the process. This memory may not be physically continuous, but will be
-    /// virtually continuous in the process's address space.
-    async fn alloc_memory(&self, mut page_count: usize) -> Result<VirtualAddress, Error> {
-        let vaddr = self
-            .address_space_allocator
-            .lock()
-            .await
-            .alloc(page_count)
-            .context(MemorySnafu {
-                reason: "allocate virtual addresses for memory region in process",
-            })?;
-        let mut vstart = vaddr;
-        let options = PageTableEntryOptions {
-            read_only: false,
-            el0_access: true,
-        };
-        while page_count > 0 {
-            let (paddr, size) = physical_memory_allocator()
-                .try_alloc_contig(page_count)
-                .context(MemorySnafu {
-                    reason: "allocate physical memory for process",
-                })?;
-            self.page_tables
-                .map_range(paddr, vstart, size, true, &options)
-                .context(MemorySnafu {
-                    reason: "map physical memory into process address space",
-                })?;
-            page_count -= size;
-            vstart = vstart.add(size);
-        }
-        Ok(vaddr)
-    }
-
     async fn spawn_thread(
         self: &Arc<Process>,
         info: &cmds::SpawnThread,
@@ -190,7 +159,7 @@ impl Process {
             self.clone(),
             tid,
             VirtualAddress(info.entry_point as usize),
-            initial_stack_pointer,
+            initial_stack_pointer.add(stack_page_count * PAGE_SIZE),
             ThreadPriority::Normal,
             Registers::from_args(&[info.user_data as usize]),
         ));
@@ -225,6 +194,82 @@ impl Process {
         Ok(thread.exit_code().await)
     }
 
+    async fn spawn_child(
+        self: &Arc<Process>,
+        info: &cmds::SpawnProcess,
+        cmd_id: u16,
+        recv_qu: Weak<OwnedQueue<Completion>>,
+    ) -> Result<cmpl::NewProcess, Error> {
+        // convert info.binary_path into a kernel Path
+        let mut path_buf = [0u8; PATH_MAX_LEN];
+        self.page_tables
+            .mapped_copy_from(
+                info.binary_path.text.into(),
+                &mut path_buf[0..info.binary_path.len],
+            )
+            .context(error::MemorySnafu {
+                reason: "invalid path slice",
+            })?;
+        let binary_path = Path::from_bytes(&path_buf[0..info.binary_path.len])
+            .context(error::Utf8Snafu { reason: "path" })?;
+
+        let params_buf = (info.parameters.len > 0)
+            .then(|| {
+                let mut buf = PhysicalBuffer::alloc_zeroed(
+                    info.parameters.len.div_ceil(PAGE_SIZE),
+                    &PageTableEntryOptions {
+                        read_only: false,
+                        el0_access: true,
+                    },
+                )
+                .context(MemorySnafu {
+                    reason: "allocate buffer for process parameters",
+                })?;
+                self.page_tables
+                    .mapped_copy_from(
+                        info.parameters.data.into(),
+                        &mut buf.as_bytes_mut()[0..info.parameters.len],
+                    )
+                    .context(MemorySnafu {
+                        reason: "copy process parameters into new process",
+                    })?;
+                log::trace!("created parameter buffer {:?} -> {buf:?}", info.parameters);
+                Ok((buf, info.parameters.len))
+            })
+            .transpose()?;
+
+        // spawn process
+        let proc = spawn_process(binary_path, params_buf, |proc: Arc<Process>| {
+            // watch for exit if requested
+            if info.send_completion_on_main_thread_exit {
+                crate::tasks::spawn(proc.exit_code().map(move |ec| {
+                    if let Some(rq) = recv_qu.upgrade() {
+                        // TODO: deal with queue overflow
+                        let _ = rq.post(Completion {
+                            response_to_id: cmd_id,
+                            kind: ec.into(),
+                        });
+                    }
+                }));
+            }
+        })
+        .await?;
+
+        Ok(cmpl::NewProcess { id: proc.id })
+    }
+
+    async fn watch_process(
+        self: &Arc<Process>,
+        info: &cmds::WatchProcess,
+    ) -> Result<cmpl::ThreadExit, Error> {
+        let proc = process_for_id(info.process_id).context(error::MiscSnafu {
+            reason: "find process to watch",
+            code: Some(ErrorCode::InvalidId),
+        })?;
+
+        Ok(proc.exit_code().await)
+    }
+
     /// Execute a single command on the process, returning the resulting completion.
     pub async fn dispatch_command(
         self: &Arc<Process>,
@@ -249,15 +294,24 @@ impl Process {
                 .await
                 .map(Into::into),
             CmdKind::WatchThread(info) => self.watch_thread(info).await.map(Into::into),
+            CmdKind::SpawnProcess(info) => self
+                .spawn_child(info, cmd.id, recv_qu)
+                .await
+                .map(Into::into),
+            CmdKind::WatchProcess(info) => self.watch_process(info).await.map(Into::into),
+            CmdKind::KillProcess(info) => kill_process(info).await.map(Into::into),
             kind => Err(Error::Misc {
-                reason: alloc::format!("received unknown command: {}", kind.discriminant()),
+                reason: alloc::format!(
+                    "received unknown command: {:?}",
+                    core::mem::discriminant(kind)
+                ),
                 code: Some(ErrorCode::UnknownCommand),
             }),
         };
 
         let kind = res.unwrap_or_else(|e| {
             log::error!(
-                "[pid {}] error occurred processing {cmd:?}: {}",
+                "[pid {}] error occurred processing {cmd:?}:\n{}",
                 self.id,
                 snafu::Report::from_error(&e)
             );
@@ -269,4 +323,22 @@ impl Process {
             kind,
         }
     }
+}
+
+async fn kill_process(info: &cmds::KillProcess) -> Result<cmpl::Success, Error> {
+    let process = process_for_id(info.process_id).context(error::MiscSnafu {
+        reason: "find process to kill",
+        code: Some(ErrorCode::InvalidId),
+    })?;
+
+    let threads = {
+        let t = process.threads.lock().await;
+        t.clone()
+    };
+
+    for thread in threads {
+        thread.exit(cmpl::ThreadExit::Killed);
+    }
+
+    Ok(cmpl::Success)
 }

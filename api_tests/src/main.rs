@@ -87,6 +87,9 @@ fn cmd_test(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
     }
 }
 
+// TODO: new test that sends lots of messages to make sure that queue wrapping works correctly
+
+mod processes;
 mod queues;
 mod threads;
 
@@ -122,7 +125,12 @@ pub extern "C" fn _start(
     );
 
     test_runner(
-        &[&[&cmd_invalid, &cmd_test], queues::TESTS, threads::TESTS],
+        &[
+            &[&cmd_invalid, &cmd_test],
+            queues::TESTS,
+            threads::TESTS,
+            processes::TESTS,
+        ],
         &send_qu,
         &recv_qu,
     );

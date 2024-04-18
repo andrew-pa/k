@@ -1,5 +1,6 @@
 //! Asynchronous commands that can be submitted to the kernel from user-space via a [crate::queue::Queue].
-use crate::{queue::QueueId, ThreadId};
+
+use crate::{queue::QueueId, Buffer, Path, ProcessId, ThreadId};
 
 macro_rules! impl_into_kind {
     ($t:ident) => {
@@ -90,10 +91,49 @@ impl_into_kind!(SpawnThread);
 #[repr(C)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WatchThread {
-    /// The thread to watch.
+    /// The ID of the thread to watch.
     pub thread_id: ThreadId,
 }
 impl_into_kind!(WatchThread);
+
+/// Spawn a new process.
+/// [Completion Type][crate::completions::NewProcess]
+#[repr(C)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpawnProcess {
+    /// Path to executable binary on the file system, in ELF format.
+    pub binary_path: Path,
+    /// Additional parameters to provide to the process.
+    /// The buffer will be copied into the process' address space.
+    pub parameters: Buffer,
+    /// If true, an additional completion will be sent when the main thread of this process exits.
+    /// [Completion Type][crate::completions::ThreadExit]
+    pub send_completion_on_main_thread_exit: bool,
+}
+impl_into_kind!(SpawnProcess);
+
+/// Request a completion to be sent when a process exits.
+/// This command will only complete when the last thread in the process exits, and the completion
+/// will contain the exit code for that last thread.
+/// If the process has already exited when this command is processed, then TODO
+/// [Completion Type][crate::completions::ThreadExit]
+#[repr(C)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WatchProcess {
+    /// The ID of the process to watch.
+    pub process_id: ProcessId,
+}
+impl_into_kind!(WatchProcess);
+
+/// Kill a process. This will cause all threads in the process to exit immediately.
+/// [Completion Type][crate::completions::Success]
+#[repr(C)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KillProcess {
+    /// The ID of the process to kill.
+    pub process_id: ProcessId,
+}
+impl_into_kind!(KillProcess);
 
 /// Type of command and any required parameters.
 ///
@@ -112,18 +152,13 @@ pub enum Kind {
     CreateCompletionQueue(CreateCompletionQueue),
     CreateSubmissionQueue(CreateSubmissionQueue),
     DestroyQueue(DestroyQueue),
+
     SpawnThread(SpawnThread),
     WatchThread(WatchThread),
-}
 
-impl Kind {
-    /// Get the enum discriminant value that identifies this command.
-    pub fn discriminant(&self) -> u16 {
-        // SAFETY: Because `Self` is marked `repr(u16)`, its layout is a `repr(C)` `union`
-        // between `repr(C)` structs, each of which has the `u16` discriminant as its first
-        // field, so we can read the discriminant without offsetting the pointer.
-        unsafe { *<*const _>::from(self).cast::<u16>() }
-    }
+    SpawnProcess(SpawnProcess),
+    WatchProcess(WatchProcess),
+    KillProcess(KillProcess),
 }
 
 /// A command that can be sent to the kernel.
@@ -133,5 +168,6 @@ pub struct Command {
     /// The type of the command.
     pub kind: Kind,
     /// The ID number for this command that will be repeated in completions that are associated with it.
+    // TODO: this should probably be a u32
     pub id: u16,
 }

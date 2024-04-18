@@ -4,7 +4,7 @@ use core::{cell::OnceCell, ops::Range, ptr::NonNull, sync::atomic::AtomicBool};
 
 use bitfield::bitfield;
 use smallvec::SmallVec;
-use snafu::{ResultExt, Snafu};
+use snafu::{ensure, OptionExt, ResultExt, Snafu};
 use spin::Mutex;
 
 use crate::exception::InterruptGuard;
@@ -166,18 +166,27 @@ impl PageTableEntryOptions {
 /// Errors arising from page table mapping operations.
 #[derive(Debug, Snafu)]
 pub enum MapError {
+    #[snafu(display("Range already mapped. start={virt_start}, page_count={page_count}, collision address={collision}"))]
     RangeAlreadyMapped {
         virt_start: VirtualAddress,
         page_count: usize,
         collision: VirtualAddress,
     },
+    #[snafu(display("Bad virtual address {virt_start}: {reason}"))]
     MapRangeBadVirtualBase {
         reason: &'static str,
         virt_start: VirtualAddress,
     },
+    #[snafu(display("Insufficent map space for {page_count}, start={virt_start}"))]
     InsufficentMapSpace {
         page_count: usize,
         virt_start: VirtualAddress,
+    },
+    InvalidTag,
+    #[snafu(display("Copy from unmapped region. last valid address={last_valid:?}, {remaining_bytes} bytes remaining in copy"))]
+    CopyFromUnmapped {
+        last_valid: Option<VirtualAddress>,
+        remaining_bytes: usize,
     },
 }
 
@@ -463,6 +472,19 @@ impl PageTable {
     ///
     /// TODO: This does not yet free the memory used up by now empty page tables.
     pub fn unmap_range(&self, virt_start: VirtualAddress, page_count: usize) {
+        self.unmap_range_custom(virt_start, page_count, |_| ())
+    }
+
+    /// Clear the page table of a mapping starting at `virt_start`, calling `process_region` for
+    /// each unmapped region before it is unmapped.
+    ///
+    /// TODO: This does not yet free the memory used up by now empty page tables.
+    pub fn unmap_range_custom(
+        &self,
+        virt_start: VirtualAddress,
+        page_count: usize,
+        mut process_region: impl FnMut(MappedRegion),
+    ) {
         // prevent deadlocks with interrupt handlers
         let _interrupt_guard = InterruptGuard::disable_interrupts_until_drop();
         // lock the table until we're finished manipulating it
@@ -484,6 +506,13 @@ impl PageTable {
                     table = existing_table;
                 } else {
                     assert_ne!(block_size, 0);
+                    if let Some(base_phys_addr) = tr[i].base_address(lvl) {
+                        process_region(MappedRegion {
+                            base_virt_addr: page_addr,
+                            base_phys_addr,
+                            page_count: block_size,
+                        });
+                    }
                     tr[i] = PageTableEntry::invalid();
                     page_index += block_size;
                     break;
@@ -536,6 +565,91 @@ impl PageTable {
         unreachable!("table ref in level 3 table")
     }
 
+    /// Copy the data residing in physical memory mapped in the range `src_start..src_start+dst.len()` in the page table to `dst`.
+    /// This uses the canonical physical to virtual mapping to read each page.
+    /// The whole range must be mapped, or an error will occur.
+    pub fn mapped_copy_from(
+        &self,
+        src_start: VirtualAddress,
+        dst: &mut [u8],
+    ) -> Result<(), MemoryError> {
+        let (tag, i0, i1, i2, i3, po) = src_start.to_parts();
+
+        if !matches!((self.high_addresses, tag), (true, 0xffff) | (false, 0x0)) {
+            return InvalidTagSnafu.fail().context(MapSnafu);
+        }
+
+        let mut i = PageTableIter::starting_at(self, [i0, i1, i2, i3]);
+
+        let first = i
+            .next()
+            .context(CopyFromUnmappedSnafu {
+                last_valid: None,
+                remaining_bytes: dst.len(),
+            })
+            .context(MapSnafu)?;
+
+        // the first region in the table before the starting address is actually a totally
+        // different part of memory means that the entire region is unmapped/invalid.
+        if first.base_virt_addr.add(po) != src_start {
+            return Err(MemoryError::Map {
+                source: MapError::CopyFromUnmapped {
+                    last_valid: None,
+                    remaining_bytes: dst.len(),
+                },
+            });
+        }
+
+        let mut offset = (first.page_count * PAGE_SIZE - po).min(dst.len());
+        log::trace!(
+            "first copy {}..{offset} -> 0..{offset} ({:?})",
+            first.base_phys_addr,
+            first
+        );
+        unsafe {
+            dst[0..offset].copy_from_slice(core::slice::from_raw_parts(
+                first.base_phys_addr.to_virtual_canonical().add(po).as_ptr(),
+                offset,
+            ));
+        }
+        let mut next_start = first.base_virt_addr.add(first.page_count * PAGE_SIZE);
+        for region in i {
+            log::trace!("next {region:?} (offset={offset})");
+            if dst.len() - offset == 0 {
+                // we copied the entire buffer so we're done
+                return Ok(());
+            }
+
+            if region.base_virt_addr != next_start {
+                // there was a break in the continuous virtual addresses so we hit an unmapped
+                // region in the requested copy region
+                break;
+            }
+
+            let len = (region.page_count * PAGE_SIZE).min(dst.len() - offset);
+
+            let region_slice = unsafe {
+                core::slice::from_raw_parts(
+                    region.base_phys_addr.to_virtual_canonical().as_ptr(),
+                    len,
+                )
+            };
+
+            log::trace!("copy {}..{len} -> {offset}..{len}", region.base_phys_addr);
+            dst[offset..offset + len].copy_from_slice(region_slice);
+
+            next_start = region.base_virt_addr.add(region.page_count * PAGE_SIZE);
+            offset += len;
+        }
+
+        Err(MemoryError::Map {
+            source: MapError::CopyFromUnmapped {
+                last_valid: Some(next_start),
+                remaining_bytes: dst.len() - offset,
+            },
+        })
+    }
+
     /// Iterate over the mapped regions in this page table.
     pub fn iter(&self) -> PageTableIter {
         PageTableIter::new(self)
@@ -581,15 +695,19 @@ pub struct PageTableIter<'a> {
 
 impl<'a> PageTableIter<'a> {
     fn new(pt: &'a PageTable) -> Self {
+        Self::starting_at(pt, [0, 0, 0, 0])
+    }
+
+    fn starting_at(pt: &'a PageTable, indices: [usize; 4]) -> Self {
         let interrupt_guard = InterruptGuard::disable_interrupts_until_drop();
         let table_lock_guard = pt.level0_table.lock();
         let mut s = PageTableIter {
-            stack: smallvec::smallvec![(unsafe { table_lock_guard.as_ref() }, 0)],
+            stack: smallvec::smallvec![(unsafe { table_lock_guard.as_ref() }, indices[0])],
             table_lock_guard,
             interrupt_guard,
             tag: if pt.high_addresses { 0xffff } else { 0x0000 },
         };
-        s.follow_tree();
+        s.follow_tree(&indices[1..]);
         s
     }
 
@@ -613,14 +731,15 @@ impl<'a> PageTableIter<'a> {
         }
     }
 
-    fn follow_tree(&mut self) {
+    fn follow_tree(&mut self, indices: &[usize]) {
+        let mut i = indices.iter();
         while let Some(p) = self
             .current_entry()
             .filter(|e| e.valid())
             .and_then(|e| e.table_ref(self.lvl()))
         {
             unsafe {
-                self.stack.push((p.as_ref(), 0));
+                self.stack.push((p.as_ref(), *i.next().unwrap()));
             }
         }
     }
@@ -654,7 +773,7 @@ impl<'a> PageTableIter<'a> {
                 self.stack.pop().unwrap();
                 self.next_entry();
             }
-            self.follow_tree();
+            self.follow_tree(&[0, 0, 0]);
         }
     }
 
@@ -862,6 +981,67 @@ pub fn kernel_table() -> KernelTableGuard {
     unsafe {
         KernelTableGuard {
             table: KERNEL_TABLE.get().expect("kernel page table initialized"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::memory::{PhysicalBuffer, PAGE_SIZE};
+
+    use super::kernel_table;
+
+    #[test_case]
+    fn mapped_copy_small() {
+        let test_data = b"mapped_copy_from test";
+
+        let mut buf =
+            PhysicalBuffer::alloc(1, &Default::default()).expect("allocate physical memory");
+        buf.as_bytes_mut()[0..21].copy_from_slice(test_data);
+
+        let mut dst = [0u8; 21];
+        kernel_table()
+            .mapped_copy_from(buf.virtual_address(), &mut dst)
+            .expect("do copy");
+
+        assert_eq!(&dst, test_data);
+    }
+
+    #[test_case]
+    fn mapped_copy_big() {
+        let mut buf =
+            PhysicalBuffer::alloc_zeroed(2, &Default::default()).expect("allocate physical memory");
+        for i in buf.as_bytes_mut() {
+            *i = 42;
+        }
+
+        let mut dst = [0u8; 2 * PAGE_SIZE];
+        kernel_table()
+            .mapped_copy_from(buf.virtual_address(), &mut dst)
+            .expect("do copy");
+
+        for i in dst {
+            assert_eq!(i, 42);
+        }
+    }
+
+    #[test_case]
+    fn mapped_copy_unaligned() {
+        let mut buf =
+            PhysicalBuffer::alloc_zeroed(2, &Default::default()).expect("allocate physical memory");
+        for (i, b) in buf.as_bytes_mut().iter_mut().enumerate() {
+            *b = (i % 256) as u8;
+        }
+
+        let mut dst = [0u8; 2 * PAGE_SIZE - 32];
+        kernel_table()
+            .mapped_copy_from(buf.virtual_address().add(16), &mut dst)
+            .expect("do copy");
+
+        let mut x = 16;
+        for i in dst {
+            assert_eq!(i, x);
+            x = x.wrapping_add(1);
         }
     }
 }

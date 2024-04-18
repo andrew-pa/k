@@ -2,6 +2,7 @@
 //! Contains the thread scheduler and system message dispatch infrastructure.
 use crate::{
     ds::lists::ConcurrentLinkedList,
+    error::Error,
     exception::Registers,
     memory::{
         paging::{PageTable, PageTableEntryOptions},
@@ -17,6 +18,7 @@ use core::{
     num::NonZeroU32,
     sync::atomic::{AtomicU16, AtomicU32},
 };
+use futures::Future;
 use kapi::{commands::Command, completions::Completion};
 use smallvec::SmallVec;
 use snafu::{OptionExt, ResultExt};
@@ -35,6 +37,46 @@ use thread::*;
 use interface::OwnedQueue;
 
 pub use kapi::ProcessId;
+
+/// A struct to manage an observable thread exit state.
+#[derive(Default)]
+struct ExitState {
+    /// The exit code this process/thread exited with (if it has exited).
+    code: Once<kapi::completions::ThreadExit>,
+    /// Future wakers for futures waiting on exit code.
+    wakers: spin::Mutex<SmallVec<[core::task::Waker; 1]>>,
+}
+
+impl ExitState {
+    fn set(&self, val: kapi::completions::ThreadExit) {
+        self.code.call_once(|| val);
+        for w in self.wakers.lock().drain(..) {
+            w.wake();
+        }
+    }
+}
+
+/// A future that resolves when an [ExitState] gets set.
+struct ExitFuture {
+    state: Arc<ExitState>,
+}
+
+impl Future for ExitFuture {
+    type Output = kapi::completions::ThreadExit;
+
+    fn poll(
+        self: core::pin::Pin<&mut Self>,
+        cx: &mut core::task::Context<'_>,
+    ) -> core::task::Poll<Self::Output> {
+        match self.state.code.poll() {
+            Some(c) => core::task::Poll::Ready(c.clone()),
+            None => {
+                self.state.wakers.lock().push(cx.waker().clone());
+                core::task::Poll::Pending
+            }
+        }
+    }
+}
 
 /// A user-space process.
 ///
@@ -60,6 +102,9 @@ pub struct Process {
     // TODO: these queues don't need to be owned, because the process implicitly owns
     // all the mapped memory in its page tables by default.
     recv_queues: ConcurrentLinkedList<Arc<OwnedQueue<Completion>>>,
+    /// The exit state for the whole process, which will be the same as the *last* thread to exit
+    /// in the process.
+    exit_state: Arc<ExitState>,
 }
 
 crate::assert_sync!(Process);
@@ -110,6 +155,48 @@ impl Process {
 
         thread.exit(kapi::completions::ThreadExit::PageFault);
     }
+
+    /// Create a future that will resolve with the value of the exit code when the last thread in
+    /// the process exits.
+    pub fn exit_code(&self) -> impl Future<Output = kapi::completions::ThreadExit> {
+        ExitFuture {
+            state: self.exit_state.clone(),
+        }
+    }
+
+    /// Map more memory into the process. This memory may not be physically continuous, but will be
+    /// virtually continuous in the process's address space.
+    async fn alloc_memory(&self, mut page_count: usize) -> Result<VirtualAddress, Error> {
+        use crate::error::*;
+        let vaddr = self
+            .address_space_allocator
+            .lock()
+            .await
+            .alloc(page_count)
+            .context(MemorySnafu {
+                reason: "allocate virtual addresses for memory region in process",
+            })?;
+        let mut vstart = vaddr;
+        let options = PageTableEntryOptions {
+            read_only: false,
+            el0_access: true,
+        };
+        while page_count > 0 {
+            let (paddr, size) = physical_memory_allocator()
+                .try_alloc_contig(page_count)
+                .context(MemorySnafu {
+                    reason: "allocate physical memory for process",
+                })?;
+            self.page_tables
+                .map_range(paddr, vstart, size, true, &options)
+                .context(MemorySnafu {
+                    reason: "map physical memory into process address space",
+                })?;
+            page_count -= size;
+            vstart = vstart.add(size * PAGE_SIZE);
+        }
+        Ok(vaddr)
+    }
 }
 
 impl Drop for Process {
@@ -138,9 +225,11 @@ pub fn process_for_id(id: ProcessId) -> Option<Arc<Process>> {
 pub fn register_system_call_handlers() {
     use kapi::system_calls::SystemCallNumber;
     let h = crate::exception::system_call_handlers();
+
     h.insert_blocking(SystemCallNumber::Exit as u16, |_id, _proc, thread, regs| {
         thread.exit(kapi::completions::ThreadExit::Normal(regs.x[0] as u16));
     });
+
     h.insert_blocking(
         SystemCallNumber::GetCurrentProcessId as u16,
         |_id, proc, _thread, regs| {
@@ -151,6 +240,7 @@ pub fn register_system_call_handlers() {
             }
         },
     );
+
     h.insert_blocking(
         SystemCallNumber::GetCurrentThreadId as u16,
         |_id, _proc, thread, regs| {
@@ -161,12 +251,14 @@ pub fn register_system_call_handlers() {
             }
         },
     );
+
     h.insert_blocking(
         SystemCallNumber::Yield as u16,
         |_id, _proc, _thread, _regs| {
             scheduler().schedule_next_thread();
         },
     );
+
     h.insert_blocking(SystemCallNumber::WaitForMessage as u16, |_id, _proc, thread, _regs| {
         thread.set_state(ThreadState::Waiting);
         // TODO: where do we check for messages to resume execution?
@@ -174,4 +266,46 @@ pub fn register_system_call_handlers() {
         // TODO: perhaps each thread should have its own channel, or we should otherwise do something about that?
         // scheduler().schedule_next_thread();
     });
+
+    h.insert_blocking(
+        SystemCallNumber::HeapAllocate as u16,
+        |_id, proc, thread, regs| {
+            let page_count = regs.x[0].div_ceil(PAGE_SIZE);
+            let res_ptr = regs.x[1] as *mut VirtualAddress;
+            let res_size = regs.x[2] as *mut usize;
+            crate::tasks::block_on(async move {
+                // log::trace!("{res_ptr:?},{res_size:?} .. {page_count}");
+                match proc.alloc_memory(page_count).await {
+                    Ok(addr) => unsafe {
+                        res_ptr.write(addr);
+                        res_size.write(page_count * PAGE_SIZE);
+                    },
+                    Err(e) => {
+                        log::error!(
+                            "[pid {}, tid {}] error allocating heap memory:\n{}",
+                            proc.id,
+                            thread.id,
+                            snafu::Report::from_error(&e)
+                        );
+                        unsafe {
+                            res_ptr.write(VirtualAddress(0));
+                            res_size.write(0);
+                        }
+                    }
+                }
+            })
+        },
+    );
+
+    h.insert_blocking(
+        SystemCallNumber::HeapFree as u16,
+        |_id, proc, _thread, regs| {
+            let ptr = VirtualAddress(regs.x[0]);
+            let size = regs.x[1].div_ceil(PAGE_SIZE);
+            proc.page_tables.unmap_range_custom(ptr, size, |region| {
+                physical_memory_allocator().free_pages(region.base_phys_addr, region.page_count);
+            });
+            proc.address_space_allocator.lock_blocking().free(ptr, size);
+        },
+    );
 }

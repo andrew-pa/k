@@ -145,6 +145,10 @@ impl Path {
     pub fn as_str(&self) -> &str {
         &self.s
     }
+
+    pub fn from_bytes(bytes: &[u8]) -> Result<&Self, core::str::Utf8Error> {
+        core::str::from_utf8(bytes).map(Self::new)
+    }
 }
 
 impl Display for Path {
@@ -195,6 +199,12 @@ impl Deref for PathBuf {
 
     fn deref(&self) -> &Self::Target {
         self.borrow()
+    }
+}
+
+impl Display for PathBuf {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{}", &self.s)
     }
 }
 

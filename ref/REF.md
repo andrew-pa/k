@@ -6,6 +6,7 @@
 - [ARMv8 Programming Guide](https://developer.arm.com/documentation/den0024)
 - [GIC Architecture Specification](https://developer.arm.com/documentation/ihi0069/)
 - [Devicetree Specification](https://github.com/devicetree-org/devicetree-specification)
+- [Linux ARM64 Boot Specification](https://www.kernel.org/doc/Documentation/arm64/booting.txt)
 
 ## Devices
 

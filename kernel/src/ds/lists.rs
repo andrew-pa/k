@@ -89,7 +89,8 @@ impl<T> ConcurrentLinkedList<T> {
         }
     }
 
-    /// Removes the first element in the list that matches the predicate and returns it.
+    /// Removes the first element in the list that matches the predicate.
+    /// Returns true if the element was found.
     pub fn remove(&self, predicate: impl Fn(&T) -> bool) -> bool {
         // check the head and remove it if it matches the predicate
         let mut head_ptr = self.head.load(Ordering::Acquire);

@@ -13,10 +13,10 @@ use crossbeam_utils::{Backoff, CachePadded};
 
 /// An ID that uniquely identifies a queue relative to the process it is in.
 pub type QueueId = NonZeroU16;
-/// The ID of the first send queue (created by the kernel) for each process.
-pub const FIRST_SEND_QUEUE_ID: QueueId = unsafe { NonZeroU16::new_unchecked(1) };
 /// The ID of the first receve queue (created by the kernel) for each process.
-pub const FIRST_RECV_QUEUE_ID: QueueId = unsafe { NonZeroU16::new_unchecked(2) };
+pub const FIRST_RECV_QUEUE_ID: QueueId = unsafe { NonZeroU16::new_unchecked(1) };
+/// The ID of the first send queue (created by the kernel) for each process.
+pub const FIRST_SEND_QUEUE_ID: QueueId = unsafe { NonZeroU16::new_unchecked(2) };
 
 /// A slot in the queue.
 struct Slot<T> {

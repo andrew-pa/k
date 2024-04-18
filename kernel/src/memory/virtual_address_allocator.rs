@@ -10,7 +10,7 @@ use super::{MemoryError, VirtualAddress, PAGE_SIZE};
 const START_ADDRESS: VirtualAddress = VirtualAddress(0xffff_0001_0000_0000);
 const TOTAL_SIZE: usize = 0x0100_0000_0000 / PAGE_SIZE; //1TiB in pages
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 struct FreeBlock {
     address: VirtualAddress,
     size: usize,
@@ -101,6 +101,7 @@ impl VirtualAddressAllocator {
 
     /// Allocate a range of virtual addresses from the free pool, returning their starting address.
     pub fn alloc(&mut self, page_count: usize) -> Result<VirtualAddress, MemoryError> {
+        log::trace!("trying to allocate {page_count}");
         let mut cur = self.free_list.cursor_front_mut();
         while let Some(block) = cur.current() {
             if block.size >= page_count {
@@ -132,16 +133,13 @@ impl VirtualAddressAllocator {
                 // the block we're freeing is immediately before this block
                 block.address = address;
                 block.size += page_count;
+                return;
             } else if address == back {
                 // the block we're freeing is immediately after this block
                 block.size += page_count;
-            } else if block.address > address {
-                // insert new free block to maintain sorted order
-                cur.insert_before(FreeBlock {
-                    address,
-                    size: page_count,
-                });
                 return;
+            } else if block.address > address {
+                break;
             }
             cur.move_next();
         }

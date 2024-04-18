@@ -2,7 +2,7 @@ use alloc::format;
 use elf::segment::ProgramHeader;
 use kapi::queue::{FIRST_RECV_QUEUE_ID, FIRST_SEND_QUEUE_ID};
 
-use crate::error::{self, Error};
+use crate::error::{self, Error, MemorySnafu};
 
 use super::*;
 
@@ -12,10 +12,6 @@ fn load_segment(
     pt: &mut PageTable,
     address_space_allocator: &mut VirtualAddressAllocator,
 ) -> Result<(), Error> {
-    // TODO: we are doing this wrong. the init ELF file seems to make the alignment_offset end up
-    // being the running total size of all segments so far, causing each new segment to have to
-    // allocate padding space the size of all previous segments. This is obviously unnecessary.
-
     log::trace!("mapping segment {seg:x?}");
     let page_aligned_vaddr = VirtualAddress((seg.p_vaddr as usize) & !(PAGE_SIZE - 1));
     let page_alignment_offset = (seg.p_vaddr as usize) & (PAGE_SIZE - 1);
@@ -26,14 +22,19 @@ fn load_segment(
         })?;
 
     log::trace!(
-        "\tpage aligned p_vaddr = {page_aligned_vaddr}, alignment_offset = {page_alignment_offset:x}, physical address = {}, page count = {page_count}",
-        dest_memory_segment.physical_address()
+        "\tpage aligned p_vaddr = {page_aligned_vaddr}, alignment_offset = {page_alignment_offset:x}, physical buffer = {:?}, page count = {page_count}",
+        dest_memory_segment
     );
 
     let src_start = seg.p_offset as usize;
     let src_end = src_start + (seg.p_filesz as usize);
     let dest_end = page_alignment_offset + seg.p_filesz as usize;
     log::trace!("copying {src_start}..{src_end} to {page_alignment_offset}..{dest_end}");
+    log::trace!(
+        "dst={} src={:?}",
+        dest_memory_segment.virtual_address(),
+        src_data.as_ptr() as *mut u8
+    );
     if src_end > src_start {
         dest_memory_segment.as_bytes_mut()[page_alignment_offset..dest_end]
             .copy_from_slice(&src_data[src_start..src_end]);
@@ -64,62 +65,12 @@ fn load_segment(
     Ok(())
 }
 
-/// Make a channel available to the process via mapped memory.
-/// The submission and completion queues will be layed out consecutively in memory, and mapping will be created immediately.
-/// Returns the base address and the total length in bytes of the mapped region for the submission and completion queues, respectively.
-pub fn attach_queues(
-    send_qu: &OwnedQueue<Command>,
-    recv_qu: &OwnedQueue<Completion>,
-    page_tables: &mut PageTable,
-    address_space_allocator: &mut VirtualAddressAllocator,
-) -> Result<(VirtualAddress, usize, VirtualAddress, usize), Error> {
-    let total_len = send_qu.buffer.len() + recv_qu.buffer.len();
-    let num_pages = total_len.div_ceil(PAGE_SIZE);
-    let send_base_addr = address_space_allocator
-        .alloc(num_pages)
-        .context(error::MemorySnafu {
-            reason: "allocate in process address space for channel",
-        })?;
-    let recv_base_addr = send_base_addr.add(send_qu.buffer.len());
-    let map_opts = PageTableEntryOptions {
-        read_only: false,
-        el0_access: true,
-    };
-    page_tables
-        .map_range(
-            send_qu.buffer.physical_address(),
-            send_base_addr,
-            send_qu.buffer.page_count(),
-            true,
-            &map_opts,
-        )
-        .context(error::MemorySnafu {
-            reason: "map process send queue",
-        })?;
-    page_tables
-        .map_range(
-            recv_qu.buffer.physical_address(),
-            recv_base_addr,
-            recv_qu.buffer.page_count(),
-            true,
-            &map_opts,
-        )
-        .context(error::MemorySnafu {
-            reason: "map process recv queue",
-        })?;
-    Ok((
-        send_base_addr,
-        send_qu.capacity(),
-        recv_base_addr,
-        recv_qu.capacity(),
-    ))
-}
-
 /// Creates a new process from a binary loaded from a path in the registry.
 /// Supports ELF binaries.
 pub async fn spawn_process(
     binary_path: impl AsRef<crate::registry::Path>,
-    before_launch: Option<impl FnOnce(Arc<Process>)>,
+    parameter_buffer: Option<(PhysicalBuffer, usize)>,
+    before_launch: impl FnOnce(Arc<Process>),
 ) -> Result<Arc<Process>, Error> {
     use crate::registry::registry;
 
@@ -160,6 +111,7 @@ pub async fn spawn_process(
     let mut address_space_allocator =
         VirtualAddressAllocator::new(VirtualAddress(PAGE_SIZE), 0x0000_ffff_ffff_ffff / PAGE_SIZE);
 
+    // load segments from ELF binary into memory
     let segments = bin.segments().context(error::MiscSnafu {
         reason: "expected binary to have at least one segment",
         code: Some(kapi::completions::ErrorCode::BadFormat),
@@ -178,74 +130,81 @@ pub async fn spawn_process(
         )?;
     }
 
-    // create process stack
-    // TODO: this should be a parameter
-    let stack_page_count = 512;
-    let stack_vaddr = VirtualAddress(0x0000_ffff_0000_0000);
-    let stack_buf = {
-        physical_memory_allocator()
-            .alloc_contig(stack_page_count)
-            .context(error::MemorySnafu {
-                reason: "allocate process stack segment",
-            })?
+    let (params_addr, params_size) = if let Some((buf, actual_size)) = parameter_buffer {
+        let (phy, page_count) = buf.unmap();
+        let addr = address_space_allocator
+            .alloc(page_count)
+            .context(MemorySnafu {
+                reason: "allocate virtual addresses for process parameters",
+            })?;
+        pt.map_range(
+            phy,
+            addr,
+            page_count,
+            true,
+            &PageTableEntryOptions {
+                read_only: false,
+                el0_access: true,
+            },
+        )
+        .context(error::MemorySnafu {
+            reason: "map process parameters",
+        })?;
+        (addr, actual_size)
+    } else {
+        (VirtualAddress(0), 0)
     };
-    log::trace!("stack buffer @ {stack_buf}");
-    pt.map_range(
-        stack_buf,
-        stack_vaddr,
-        stack_page_count,
-        true,
-        &PageTableEntryOptions {
-            read_only: false,
-            el0_access: true,
-        },
-    )
-    .context(error::MemorySnafu {
-        reason: "map proces stack",
-    })?;
-    address_space_allocator
-        .reserve(stack_vaddr, stack_page_count)
-        .expect("user process VA allocations should not overlap, and the page table should check");
-
-    // create process communication queues
-    let send_qu = OwnedQueue::new(FIRST_SEND_QUEUE_ID, 2).context(error::MemorySnafu {
-        reason: "allocate first send queue",
-    })?;
-    let recv_qu = Arc::new(OwnedQueue::new(FIRST_RECV_QUEUE_ID, 2).context(
-        error::MemorySnafu {
-            reason: "allocate first receive queue",
-        },
-    )?);
-    let (send_qu_addr, send_qu_size, recv_qu_addr, recv_qu_size) =
-        attach_queues(&send_qu, &recv_qu, &mut pt, &mut address_space_allocator)?;
-    let send_queues = ConcurrentLinkedList::default();
-    send_queues.push((Arc::new(send_qu), recv_qu.clone()));
-    let recv_queues = ConcurrentLinkedList::default();
-    recv_queues.push(recv_qu);
-
-    // log::debug!("process page table: {pt:?}");
 
     // create process structure
     let proc = Arc::new(Process {
         id: pid,
         page_tables: pt,
         threads: Default::default(),
-        next_queue_id: AtomicU16::new((FIRST_RECV_QUEUE_ID.saturating_add(1)).into()),
-        send_queues,
-        recv_queues,
+        next_queue_id: AtomicU16::new(FIRST_RECV_QUEUE_ID.into()), //AtomicU16::new((FIRST_RECV_QUEUE_ID.saturating_add(1)).into()),
+        send_queues: Default::default(),
+        recv_queues: Default::default(),
         address_space_allocator: Mutex::new(address_space_allocator),
+        exit_state: Default::default(),
     });
     processes().push(proc.clone());
 
+    // create initial queues for process
+    const FIRST_QUEUE_SIZE: usize = 64;
+    let recv_qu = proc
+        .create_completion_queue(&kapi::commands::CreateCompletionQueue {
+            size: FIRST_QUEUE_SIZE,
+        })
+        .await?;
+    assert_eq!(recv_qu.id, FIRST_RECV_QUEUE_ID);
+    let send_qu = proc
+        .create_submission_queue(&kapi::commands::CreateSubmissionQueue {
+            size: FIRST_QUEUE_SIZE,
+            associated_completion_queue: recv_qu.id,
+        })
+        .await?;
+    assert_eq!(send_qu.id, FIRST_SEND_QUEUE_ID);
+    log::trace!("created first queues for process: {send_qu:?}/{recv_qu:?}");
+
+    // create main thread's stack
+    // TODO: this should be a parameter
+    let stack_page_count = 512;
+    let stack_vaddr = proc.alloc_memory(stack_page_count).await?;
+
     // create main thread
     let tid = next_thread_id();
-    let start_regs =
-        Registers::from_args(&[send_qu_addr.0, send_qu_size, recv_qu_addr.0, recv_qu_size]);
+    let start_regs = Registers::from_args(&[
+        send_qu.start,
+        FIRST_QUEUE_SIZE,
+        recv_qu.start,
+        FIRST_QUEUE_SIZE,
+        params_addr.0,
+        params_size,
+    ]);
     let main_thread = Arc::new(Thread::user_thread(
         proc.clone(),
         tid,
         VirtualAddress(bin.ehdr.e_entry as usize),
-        stack_vaddr.add((stack_page_count * PAGE_SIZE) - 64),
+        stack_vaddr.add(stack_page_count * PAGE_SIZE),
         ThreadPriority::Normal,
         start_regs,
     ));
@@ -254,11 +213,9 @@ pub async fn spawn_process(
 
     // run any custom code before the process is eligible to be scheduled but after it has been created.
     // this allows the caller to attach resources that requires .awaiting etc.
-    if let Some(b) = before_launch {
-        b(proc.clone());
-    }
+    before_launch(proc.clone());
 
-    // schedule thread 0 for process
+    // schedule the process' main thread
     thread::scheduler::scheduler().add_thread(main_thread);
 
     Ok(proc)

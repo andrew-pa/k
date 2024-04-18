@@ -12,7 +12,7 @@ pub fn logging(log_level: log::LevelFilter) {
 }
 
 fn default_init_process_path() -> &'static str {
-    "/fat/init"
+    "/volumes/root/bin/init"
 }
 
 /// Kernel "command line" parameters.
@@ -141,10 +141,12 @@ pub async fn finish_boot(opts: BootOptions<'_>) {
             .unwrap()
     };
     log::info!("mount FAT filesystem");
-    fs::fat::mount(Path::new("/fat"), bs).await.unwrap();
+    fs::fat::mount(Path::new("/volumes/root"), bs)
+        .await
+        .unwrap();
 
     log::info!("spawning init process");
-    let init_proc = process::spawn_process(opts.init_process_path, None::<fn(_)>)
+    let init_proc = process::spawn_process(opts.init_process_path, None, |_| ())
         .await
         .expect("spawn init process");
 
@@ -165,5 +167,6 @@ pub async fn finish_boot(opts: BootOptions<'_>) {
     qemu_exit::AArch64::new().exit(match ec {
         kapi::completions::ThreadExit::Normal(c) => c.into(),
         kapi::completions::ThreadExit::PageFault => 0x1_0000,
+        kapi::completions::ThreadExit::Killed => 0x1_0001,
     });
 }
