@@ -166,20 +166,24 @@ impl PageTableEntryOptions {
 /// Errors arising from page table mapping operations.
 #[derive(Debug, Snafu)]
 pub enum MapError {
+    #[snafu(display("Range already mapped. start={virt_start}, page_count={page_count}, collision address={collision}"))]
     RangeAlreadyMapped {
         virt_start: VirtualAddress,
         page_count: usize,
         collision: VirtualAddress,
     },
+    #[snafu(display("Bad virtual address {virt_start}: {reason}"))]
     MapRangeBadVirtualBase {
         reason: &'static str,
         virt_start: VirtualAddress,
     },
+    #[snafu(display("Insufficent map space for {page_count}, start={virt_start}"))]
     InsufficentMapSpace {
         page_count: usize,
         virt_start: VirtualAddress,
     },
     InvalidTag,
+    #[snafu(display("Copy from unmapped region. last valid address={last_valid:?}, {remaining_bytes} bytes remaining in copy"))]
     CopyFromUnmapped {
         last_valid: Option<VirtualAddress>,
         remaining_bytes: usize,

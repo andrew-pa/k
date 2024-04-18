@@ -193,7 +193,7 @@ impl Process {
                     reason: "map physical memory into process address space",
                 })?;
             page_count -= size;
-            vstart = vstart.add(size);
+            vstart = vstart.add(size * PAGE_SIZE);
         }
         Ok(vaddr)
     }

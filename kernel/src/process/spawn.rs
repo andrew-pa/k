@@ -130,35 +130,6 @@ pub async fn spawn_process(
         )?;
     }
 
-    // create stack for main thread
-    // TODO: this should be a parameter
-    let stack_page_count = 512;
-    let stack_vaddr = VirtualAddress(0x0000_ffff_0000_0000);
-    let stack_buf = {
-        physical_memory_allocator()
-            .alloc_contig(stack_page_count)
-            .context(error::MemorySnafu {
-                reason: "allocate process stack segment",
-            })?
-    };
-    log::trace!("stack buffer @ {stack_buf}");
-    pt.map_range(
-        stack_buf,
-        stack_vaddr,
-        stack_page_count,
-        true,
-        &PageTableEntryOptions {
-            read_only: false,
-            el0_access: true,
-        },
-    )
-    .context(error::MemorySnafu {
-        reason: "map process stack",
-    })?;
-    address_space_allocator
-        .reserve(stack_vaddr, stack_page_count)
-        .expect("user process VA allocations should not overlap, and the page table should check");
-
     let (params_addr, params_size) = if let Some((buf, actual_size)) = parameter_buffer {
         let (phy, page_count) = buf.unmap();
         let addr = address_space_allocator
@@ -213,6 +184,11 @@ pub async fn spawn_process(
         .await?;
     assert_eq!(send_qu.id, FIRST_SEND_QUEUE_ID);
     log::trace!("created first queues for process: {send_qu:?}/{recv_qu:?}");
+
+    // create main thread's stack
+    // TODO: this should be a parameter
+    let stack_page_count = 512;
+    let stack_vaddr = proc.alloc_memory(stack_page_count).await?;
 
     // create main thread
     let tid = next_thread_id();
