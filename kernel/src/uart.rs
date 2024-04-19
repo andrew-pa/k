@@ -41,21 +41,20 @@ fn color_for_level(lvl: log::Level) -> &'static str {
 /// A logger that writes to the debug UART.
 pub struct DebugUartLogger;
 
-/// Modules that have Trace/Debug level logging disabled because they are very noisy
+/// Modules that have Trace/Debug level logging disabled because they are very noisy.
+/// All submodules will also be muted.
 const DISABLED_MODULES: &[&str] = &[
-    "kernel::memory::paging",
-    "kernel::memory::heap",
-    "kernel::memory::physical_memory_allocator",
-    "kernel::memory::virtual_address_allocator",
+    "kernel::memory",
     "kernel::process::thread::scheduler",
     "kernel::exception",
-    "kernel::exception::handlers",
 ];
 
 impl log::Log for DebugUartLogger {
     fn enabled(&self, metadata: &log::Metadata) -> bool {
         if metadata.level() > log::Level::Info {
-            DISABLED_MODULES.iter().all(|m| *m != metadata.target())
+            DISABLED_MODULES
+                .iter()
+                .all(|m| !metadata.target().starts_with(m))
         } else {
             true
         }
