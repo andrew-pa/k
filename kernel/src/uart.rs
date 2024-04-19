@@ -2,9 +2,19 @@
 
 use core::fmt::Write;
 
+const DEBUG_UART_ADDRESS: usize = 0xffff_0000_0900_0000;
+
 /// A very simple UART driver for debugging.
 pub struct DebugUart {
     pub base: *mut u8,
+}
+
+impl Default for DebugUart {
+    fn default() -> Self {
+        Self {
+            base: DEBUG_UART_ADDRESS as *mut u8,
+        }
+    }
 }
 
 impl Write for DebugUart {
@@ -15,6 +25,16 @@ impl Write for DebugUart {
             }
         }
         Ok(())
+    }
+}
+
+fn color_for_level(lvl: log::Level) -> &'static str {
+    match lvl {
+        log::Level::Error => "31",
+        log::Level::Warn => "33",
+        log::Level::Info => "32",
+        log::Level::Debug => "34",
+        log::Level::Trace => "35",
     }
 }
 
@@ -47,10 +67,15 @@ impl log::Log for DebugUartLogger {
         }
 
         //WARN: this is currently NOT thread safe!
-        let mut uart = DebugUart {
-            base: 0xffff_0000_0900_0000 as *mut u8,
-        };
-        write!(uart, "[{:<5} {} T", record.level(), crate::timer::counter()).unwrap();
+        let mut uart = DebugUart::default();
+        write!(
+            uart,
+            "[\x1b[{}m{:<5}\x1b[0m {} T",
+            color_for_level(record.level()),
+            record.level(),
+            crate::timer::counter()
+        )
+        .unwrap();
         if let Some(tid) = crate::process::thread::scheduler::try_current_thread_id() {
             write!(uart, "{tid}").unwrap();
         } else {

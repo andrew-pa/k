@@ -124,7 +124,7 @@ pub struct TimerProperties {
     pub interrupt: crate::exception::InterruptId,
 }
 
-impl TimerProperties{
+impl TimerProperties {
     /// Locate and parse timer properties in a device tree blob.
     /// Panics if the timer node could not be found.
     pub fn from_device_tree(device_tree: &DeviceTree) -> TimerProperties {

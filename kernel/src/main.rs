@@ -133,9 +133,7 @@ pub extern "C" fn kmain(dtb_addr: PhysicalAddress) -> ! {
 #[allow(unreachable_code)]
 pub fn panic_handler(info: &core::panic::PanicInfo) -> ! {
     use core::fmt::Write;
-    let mut uart = uart::DebugUart {
-        base: 0xffff_0000_0900_0000 as *mut u8,
-    };
+    let mut uart = uart::DebugUart::default();
     let _ = uart.write_fmt(format_args!("\npanic! {info}\n"));
     qemu_exit::aarch64::AArch64::new().exit_failure();
     // prevent anything from getting scheduled after a kernel panic
