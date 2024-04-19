@@ -54,7 +54,7 @@ pub fn find_boot_options<'a>(dt: &'a DeviceTree) -> BootOptions<'a> {
 ///
 /// The timer will trigger as soon as interrupts are enabled.
 pub fn configure_time_slicing(dt: &DeviceTree) {
-    let props = timer::find_timer_properties(dt);
+    let props = timer::TimerProperties::from_device_tree(dt);
     log::debug!("timer properties = {props:?}");
     let timer_irq = props.interrupt;
 
