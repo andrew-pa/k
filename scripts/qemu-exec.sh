@@ -6,7 +6,7 @@ boot_args="$2"
 # make $@ everything after $2
 shift 2
 
-./qemu/.build/qemu-system-aarch64 -machine virt -cpu cortex-a57 -nographic \
+./qemu/build/qemu-system-aarch64 -machine virt -cpu cortex-a57 -nographic \
     -bios ./u-boot/.build/u-boot.bin -semihosting \
     -drive if=none,file=fat:rw:$boot_dir,id=kboot,format=raw \
     -device nvme,drive=kboot,serial=foo "$@" \

@@ -14,7 +14,7 @@ $(UBOOT_BIN)/u-boot.bin $(UBOOT_BIN)/tools/mkimage:
 	CROSS_COMPILE=aarch64-linux-gnu- $(MAKE) -C ./u-boot O=./.build -j all
 
 ## QEMU
-QEMU_BIN := ./qemu/.build
+QEMU_BIN := ./qemu/build
 QEMU := $(QEMU_BIN)/qemu-system-aarch64
 
 #? Build QEMU.

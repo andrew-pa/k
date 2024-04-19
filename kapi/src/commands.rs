@@ -48,11 +48,11 @@ pub struct CreateCompletionQueue {
 impl_into_kind!(CreateCompletionQueue);
 
 /// Destroy a queue.
+/// [Completion Type][crate::completions::Kind::Success].
 ///
 /// Any pending messages will be ignored. If there were in-flight messages, they may still complete
 /// but (TODO: where should they go?).
 /// Submission queues must be destroyed before their associated completion queue.
-/// [Completion Type][crate::completions::Kind::Success].
 #[repr(C)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DestroyQueue {
