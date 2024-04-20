@@ -4,7 +4,6 @@ use futures::FutureExt;
 use kapi::{
     commands::{self as cmds, Kind as CmdKind},
     completions::{self as cmpl, ErrorCode, Kind as CmplKind},
-    queue::QueueId,
     PATH_MAX_LEN,
 };
 use snafu::ensure;

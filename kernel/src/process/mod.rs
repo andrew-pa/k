@@ -92,7 +92,6 @@ pub struct Process {
     /// Allocator for the virtual address space of the process.
     address_space_allocator: Mutex<VirtualAddressAllocator>,
     /// The next free queue ID.
-    #[allow(dead_code)]
     next_queue_id: AtomicU16,
     /// The send (user space to kernel) queues associated with this process, and their associated
     /// receive queue.
