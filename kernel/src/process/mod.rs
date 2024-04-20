@@ -5,9 +5,10 @@ use crate::{
     error::Error,
     exception::Registers,
     memory::{
+        self,
         paging::{PageTable, PageTableEntryOptions},
-        physical_memory_allocator, PhysicalBuffer, VirtualAddress, VirtualAddressAllocator,
-        PAGE_SIZE,
+        physical_memory_allocator, virtual_address_allocator, PhysicalBuffer, VirtualAddress,
+        VirtualAddressAllocator, PAGE_SIZE,
     },
     tasks::locks::Mutex,
 };
@@ -163,9 +164,16 @@ impl Process {
         }
     }
 
-    /// Map more memory into the process. This memory may not be physically continuous, but will be
-    /// virtually continuous in the process's address space.
-    async fn alloc_memory(&self, mut page_count: usize) -> Result<VirtualAddress, Error> {
+    /// Map more memory into the process.
+    /// This memory may not be physically continuous, but will be virtually continuous.
+    ///
+    /// If `share_with_kernel` is true, then the memory will also be mapped into the kernel's
+    /// address space and the kernel base address will be returned as the second value.
+    async fn alloc_memory(
+        &self,
+        mut page_count: usize,
+        share_with_kernel: bool,
+    ) -> Result<(VirtualAddress, Option<VirtualAddress>), Error> {
         use crate::error::*;
         let vaddr = self
             .address_space_allocator
@@ -175,11 +183,17 @@ impl Process {
             .context(MemorySnafu {
                 reason: "allocate virtual addresses for memory region in process",
             })?;
-        let mut vstart = vaddr;
+        let kvaddr = share_with_kernel
+            .then(|| virtual_address_allocator().alloc(page_count))
+            .transpose()
+            .context(MemorySnafu {
+                reason: "allocate virtual addresses for memory region in kernel",
+            })?;
         let options = PageTableEntryOptions {
             read_only: false,
             el0_access: true,
         };
+        let mut offset = 0;
         while page_count > 0 {
             let (paddr, size) = physical_memory_allocator()
                 .try_alloc_contig(page_count)
@@ -187,14 +201,35 @@ impl Process {
                     reason: "allocate physical memory for process",
                 })?;
             self.page_tables
-                .map_range(paddr, vstart, size, true, &options)
+                .map_range(paddr, vaddr.add(offset), size, true, &options)
                 .context(MemorySnafu {
-                    reason: "map physical memory into process address space",
+                    reason: "map new memory into process address space",
                 })?;
+            if let Some(kvaddr) = kvaddr.as_ref() {
+                memory::paging::kernel_table()
+                    .map_range(paddr, kvaddr.add(offset), size, true, &options)
+                    .context(MemorySnafu {
+                        reason: "map new memory into kernel address space",
+                    })?
+            }
+            offset += size * PAGE_SIZE;
             page_count -= size;
-            vstart = vstart.add(size * PAGE_SIZE);
         }
-        Ok(vaddr)
+        Ok((vaddr, kvaddr))
+    }
+
+    /// Free memory allocated by [Self::alloc_memory], both physical and virtual.
+    ///
+    /// This function does *not* unmap the memory from the kernel address space if the region was
+    /// allocated with `share_with_kernel` set to true!
+    fn free_memory(&self, ptr: VirtualAddress, page_count: usize) {
+        self.page_tables
+            .unmap_range_custom(ptr, page_count, |region| {
+                physical_memory_allocator().free_pages(region.base_phys_addr, region.page_count);
+            });
+        self.address_space_allocator
+            .lock_blocking()
+            .free(ptr, page_count);
     }
 
     /// Get the next free queue ID in this process.
@@ -312,8 +347,8 @@ pub fn register_system_call_handlers() {
             let res_size = regs.x[2] as *mut usize;
             crate::tasks::block_on(async move {
                 // log::trace!("{res_ptr:?},{res_size:?} .. {page_count}");
-                match proc.alloc_memory(page_count).await {
-                    Ok(addr) => unsafe {
+                match proc.alloc_memory(page_count, false).await {
+                    Ok((addr, _)) => unsafe {
                         res_ptr.write(addr);
                         res_size.write(page_count * PAGE_SIZE);
                     },
@@ -339,10 +374,7 @@ pub fn register_system_call_handlers() {
         |_id, proc, _thread, regs| {
             let ptr = VirtualAddress(regs.x[0]);
             let size = regs.x[1].div_ceil(PAGE_SIZE);
-            proc.page_tables.unmap_range_custom(ptr, size, |region| {
-                physical_memory_allocator().free_pages(region.base_phys_addr, region.page_count);
-            });
-            proc.address_space_allocator.lock_blocking().free(ptr, size);
+            proc.free_memory(ptr, size);
         },
     );
 }

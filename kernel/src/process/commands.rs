@@ -115,19 +115,22 @@ impl Process {
 
         let stack_page_count = info.stack_size.div_ceil(PAGE_SIZE);
 
-        let initial_stack_pointer =
-            self.alloc_memory(stack_page_count)
-                .await
-                .context(InnerSnafu {
-                    reason: "allocate thread stack",
-                })?;
+        // TODO: free this memory when the threads exit!
+        let initial_stack_pointer = self
+            .alloc_memory(stack_page_count, false)
+            .await
+            .context(InnerSnafu {
+                reason: "allocate thread stack",
+            })?
+            .0;
 
         let tid = thread::next_thread_id();
         let thread = Arc::new(Thread::user_thread(
             self.clone(),
             tid,
             VirtualAddress(info.entry_point as usize),
-            initial_stack_pointer.add(stack_page_count * PAGE_SIZE),
+            initial_stack_pointer,
+            stack_page_count,
             ThreadPriority::Normal,
             Registers::from_args(&[info.user_data as usize]),
         ));
