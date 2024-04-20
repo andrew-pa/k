@@ -1,3 +1,4 @@
+//! [kapi::queue::Queue] with owned backing memory.
 use core::ptr::NonNull;
 
 use kapi::queue::{queue_size_in_bytes, Queue, QueueId};
@@ -17,7 +18,7 @@ pub struct OwnedQueue<T> {
 }
 
 impl<T> OwnedQueue<T> {
-    /// Allocate and Initialize a new queue backed by memory.
+    /// Allocate and initialize a new queue backed by memory.
     pub fn new(id: QueueId, capacity: usize) -> Result<OwnedQueue<T>, MemoryError> {
         let size_in_pages = queue_size_in_bytes::<T>(capacity).div_ceil(PAGE_SIZE);
 

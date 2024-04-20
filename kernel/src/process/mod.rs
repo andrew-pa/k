@@ -19,22 +19,22 @@ use core::{
     sync::atomic::{AtomicU16, AtomicU32},
 };
 use futures::Future;
-use kapi::{commands::Command, completions::Completion};
+use kapi::{commands::Command, completions::Completion, queue::QueueId};
 use smallvec::SmallVec;
 use snafu::{OptionExt, ResultExt};
 use spin::Once;
 
 pub mod thread;
+use thread::*;
 pub use thread::{scheduler::scheduler, threads, Thread, ThreadId};
 
-pub mod interface;
+mod owned_queue;
+use owned_queue::OwnedQueue;
+
+mod commands;
 
 mod spawn;
 pub use spawn::spawn_process;
-
-use thread::*;
-
-use interface::OwnedQueue;
 
 pub use kapi::ProcessId;
 
@@ -197,6 +197,39 @@ impl Process {
         }
         Ok(vaddr)
     }
+
+    /// Get the next free queue ID in this process.
+    ///
+    /// If all the queue IDs have already been used, an error is returned.
+    fn next_queue_id(&self) -> Result<QueueId, Error> {
+        // the complexity here is because once `next_queue_id` becomes zero, it needs to stay zero
+        // to prevent reusing IDs.
+        let mut id = self
+            .next_queue_id
+            .load(core::sync::atomic::Ordering::Acquire);
+        loop {
+            if id == 0 {
+                return Err(Error::Misc {
+                    reason: "ran out of queue IDs for process".into(),
+                    code: Some(kapi::completions::ErrorCode::OutOfIds),
+                });
+            }
+            match self.next_queue_id.compare_exchange_weak(
+                id,
+                id.wrapping_add(1),
+                core::sync::atomic::Ordering::Acquire,
+                core::sync::atomic::Ordering::Relaxed,
+            ) {
+                Ok(_) => {
+                    return Ok(unsafe {
+                        // SAFETY: we just checked `id` to see if it was zero above.
+                        QueueId::new_unchecked(id)
+                    });
+                }
+                Err(x) => id = x,
+            }
+        }
+    }
 }
 
 impl Drop for Process {
@@ -208,8 +241,12 @@ impl Drop for Process {
     }
 }
 
+/// The global process table.
+///
+/// Processes that are in the table are "live" and can be referred to using their ID by user-space.
 static PROCESSES: Once<ConcurrentLinkedList<Arc<Process>>> = Once::new();
 
+/// The global PID counter.
 static NEXT_PID: AtomicU32 = AtomicU32::new(1);
 
 /// The global table of processes by ID.
@@ -217,6 +254,7 @@ pub fn processes() -> &'static ConcurrentLinkedList<Arc<Process>> {
     PROCESSES.call_once(Default::default)
 }
 
+/// Retrieve a process by its ID.
 pub fn process_for_id(id: ProcessId) -> Option<Arc<Process>> {
     processes().iter().find(|p| p.id == id).cloned()
 }

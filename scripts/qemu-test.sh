@@ -4,7 +4,7 @@ scratch_disk=/tmp/k_scratch_disk.qcow2
 cd ..
 echo $PWD
 if [ ! -f $scratch_disk ]; then
-    ./qemu/.build/qemu-img create -f qcow2 $scratch_disk 1M
+    ./qemu/build/qemu-img create -f qcow2 $scratch_disk 1M
 fi
 img_name=$(echo $1 | sha256sum | cut -d ' ' -f 1).img
 echo $1 "->" $img_name

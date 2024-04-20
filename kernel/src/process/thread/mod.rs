@@ -1,3 +1,4 @@
+//! Threads represent a single path of execution within a process.
 use core::sync::atomic::{AtomicU32, AtomicU8, Ordering};
 
 use alloc::sync::Arc;

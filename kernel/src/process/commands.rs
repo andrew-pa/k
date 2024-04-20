@@ -1,3 +1,4 @@
+//! Handlers and dispatch for user-space commands.
 use alloc::sync::Weak;
 use futures::FutureExt;
 use kapi::{
@@ -14,40 +15,8 @@ use crate::{
     registry::Path,
 };
 
+/// Implementation of user-space commands.
 impl Process {
-    /// Get the next free queue ID in this process.
-    ///
-    /// If all the queue IDs have already been used, an error is returned.
-    fn next_queue_id(&self) -> Result<QueueId, Error> {
-        // the complexity here is because once `next_queue_id` becomes zero, it needs to stay zero
-        // to prevent reusing IDs.
-        let mut id = self
-            .next_queue_id
-            .load(core::sync::atomic::Ordering::Acquire);
-        loop {
-            if id == 0 {
-                return Err(Error::Misc {
-                    reason: "ran out of queue IDs for process".into(),
-                    code: Some(ErrorCode::OutOfIds),
-                });
-            }
-            match self.next_queue_id.compare_exchange_weak(
-                id,
-                id.wrapping_add(1),
-                core::sync::atomic::Ordering::Acquire,
-                core::sync::atomic::Ordering::Relaxed,
-            ) {
-                Ok(_) => {
-                    return Ok(unsafe {
-                        // SAFETY: we just checked `id` to see if it was zero above.
-                        QueueId::new_unchecked(id)
-                    });
-                }
-                Err(x) => id = x,
-            }
-        }
-    }
-
     async fn create_queue<T>(
         &self,
         num_elements: usize,
