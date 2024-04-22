@@ -1,4 +1,6 @@
 //! Handlers and dispatch for user-space commands.
+use core::ptr::NonNull;
+
 use alloc::sync::Weak;
 use futures::FutureExt;
 use kapi::{
@@ -14,12 +16,14 @@ use crate::{
     registry::Path,
 };
 
+use self::memory::paging::kernel_table;
+
 /// Implementation of user-space commands.
 impl Process {
     async fn create_queue<T>(
         &self,
         num_elements: usize,
-    ) -> Result<(OwnedQueue<T>, cmpl::NewQueue), Error> {
+    ) -> Result<(UserQueue<T>, cmpl::NewQueue), Error> {
         if num_elements == 0 {
             return Err(Error::Misc {
                 reason: "queue must have at least a capacity of 1, got 0".into(),
@@ -28,32 +32,40 @@ impl Process {
         }
 
         let id = self.next_queue_id()?;
-        let qu = OwnedQueue::<T>::new(id, num_elements).context(error::MemorySnafu {
-            reason: "allocate backing memory for queue",
-        })?;
-        let addr = self
-            .address_space_allocator
-            .lock()
-            .await
-            .alloc(qu.buffer.page_count())
-            .context(error::MemorySnafu {
-                reason: "allocate address space for queue",
-            })?;
-        self.page_tables
-            .map_range(
-                qu.buffer.physical_address(),
-                addr,
-                qu.buffer.page_count(),
-                true,
-                &PageTableEntryOptions {
-                    read_only: false,
-                    el0_access: true,
-                },
+
+        let page_count = kapi::queue::queue_size_in_bytes::<T>(num_elements).div_ceil(PAGE_SIZE);
+
+        let (user_base_address, kernel_base_address) = self.alloc_memory(page_count, true).await?;
+
+        let kernel_base_address = kernel_base_address.unwrap();
+
+        log::trace!("creating queue user:{user_base_address}, kernel:{kernel_base_address}");
+
+        let queue = unsafe {
+            Queue::new(
+                id,
+                NonNull::new(kernel_base_address.as_ptr())
+                    .expect("allocated memory for queue is non-null"),
+                num_elements,
             )
-            .context(error::MemorySnafu {
-                reason: "map queue into process address space",
-            })?;
-        Ok((qu, cmpl::NewQueue { id, start: addr.0 }))
+        };
+
+        unsafe {
+            queue.initialize();
+        }
+
+        let qu = UserQueue {
+            queue,
+            user_base_address,
+        };
+
+        Ok((
+            qu,
+            cmpl::NewQueue {
+                id,
+                start: user_base_address.0,
+            },
+        ))
     }
 
     pub async fn create_completion_queue(
@@ -93,9 +105,25 @@ impl Process {
                 code: Some(ErrorCode::InUse),
             })
         } else {
-            self.recv_queues.remove(|q| q.id == info.id);
-            self.send_queues.remove(|(q, _)| q.id == info.id);
-            Ok(cmpl::Success)
+            let q = self
+                .recv_queues
+                .remove_cloned(|q| q.id == info.id)
+                .map(|q| q.memory_region())
+                .or(self
+                    .send_queues
+                    .remove_cloned(|(q, _)| q.id == info.id)
+                    .map(|(q, _)| q.memory_region()));
+            match q {
+                Some((user_addr, kernel_addr, page_count)) => {
+                    self.free_memory(user_addr, page_count);
+                    kernel_table().unmap_range(kernel_addr, page_count);
+                    Ok(cmpl::Success)
+                }
+                None => Err(Error::Misc {
+                    reason: "queue ID unknown".into(),
+                    code: Some(ErrorCode::InvalidId),
+                }),
+            }
         }
     }
 
@@ -103,7 +131,7 @@ impl Process {
         self: &Arc<Process>,
         info: &cmds::SpawnThread,
         cmd_id: u16,
-        recv_qu: Weak<OwnedQueue<Completion>>,
+        recv_qu: Weak<UserQueue<Completion>>,
     ) -> Result<cmpl::NewThread, Error> {
         ensure!(
             info.stack_size > 0,
@@ -169,7 +197,7 @@ impl Process {
         self: &Arc<Process>,
         info: &cmds::SpawnProcess,
         cmd_id: u16,
-        recv_qu: Weak<OwnedQueue<Completion>>,
+        recv_qu: Weak<UserQueue<Completion>>,
     ) -> Result<cmpl::NewProcess, Error> {
         // convert info.binary_path into a kernel Path
         let mut path_buf = [0u8; PATH_MAX_LEN];
@@ -245,7 +273,7 @@ impl Process {
     pub async fn dispatch_command(
         self: &Arc<Process>,
         cmd: Command,
-        recv_qu: Weak<OwnedQueue<Completion>>,
+        recv_qu: Weak<UserQueue<Completion>>,
     ) -> Completion {
         let res = match &cmd.kind {
             CmdKind::Test(cmds::Test { arg }) => Ok(cmpl::Test {

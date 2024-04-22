@@ -133,6 +133,11 @@ impl<T> Queue<T> {
         self.capacity
     }
 
+    /// Get an opaque pointer to the start of the queue.
+    pub fn root_address(&self) -> NonNull<()> {
+        self.counter_ptr.cast()
+    }
+
     fn push_or_else<F>(&self, mut value: T, f: F) -> Result<(), T>
     where
         F: Fn(T, usize, usize, &Slot<T>) -> Result<T, T>,

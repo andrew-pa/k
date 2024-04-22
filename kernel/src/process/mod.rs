@@ -20,7 +20,11 @@ use core::{
     sync::atomic::{AtomicU16, AtomicU32},
 };
 use futures::Future;
-use kapi::{commands::Command, completions::Completion, queue::QueueId};
+use kapi::{
+    commands::Command,
+    completions::Completion,
+    queue::{Queue, QueueId},
+};
 use smallvec::SmallVec;
 use snafu::{OptionExt, ResultExt};
 use spin::Once;
@@ -28,9 +32,6 @@ use spin::Once;
 pub mod thread;
 use thread::*;
 pub use thread::{scheduler::scheduler, threads, Thread, ThreadId};
-
-mod owned_queue;
-use owned_queue::OwnedQueue;
 
 mod commands;
 
@@ -79,6 +80,43 @@ impl Future for ExitFuture {
     }
 }
 
+/// A single synchronized queue that is shared with a process.
+pub struct UserQueue<T> {
+    queue: Queue<T>,
+    user_base_address: VirtualAddress,
+}
+
+impl<T> UserQueue<T> {
+    /// Returns the user and kernel addresses of the start of the queue, as well as the number of pages that the queue takes up.
+    fn memory_region(&self) -> (VirtualAddress, VirtualAddress, usize) {
+        (
+            self.user_base_address,
+            self.root_address().as_ptr().into(),
+            kapi::queue::queue_size_in_bytes::<T>(self.capacity()).div_ceil(PAGE_SIZE),
+        )
+    }
+}
+
+impl<T> core::ops::Deref for UserQueue<T> {
+    type Target = Queue<T>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.queue
+    }
+}
+
+impl<T> core::fmt::Debug for UserQueue<T> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("OwnedQueue")
+            .field("id", &self.queue.id)
+            .field("capacity", &self.queue.capacity())
+            .finish()
+    }
+}
+
+crate::assert_send!(kapi::commands::Command);
+crate::assert_send!(kapi::completions::Completion);
+
 /// A user-space process.
 ///
 /// A process is a collection of threads that share the same address space and system resources.
@@ -97,11 +135,11 @@ pub struct Process {
     /// The send (user space to kernel) queues associated with this process, and their associated
     /// receive queue.
     #[allow(clippy::type_complexity)]
-    send_queues: ConcurrentLinkedList<(Arc<OwnedQueue<Command>>, Arc<OwnedQueue<Completion>>)>,
+    send_queues: ConcurrentLinkedList<(Arc<UserQueue<Command>>, Arc<UserQueue<Completion>>)>,
     /// The receive (kernel to user space) queues associated with this process.
     // TODO: these queues don't need to be owned, because the process implicitly owns
     // all the mapped memory in its page tables by default.
-    recv_queues: ConcurrentLinkedList<Arc<OwnedQueue<Completion>>>,
+    recv_queues: ConcurrentLinkedList<Arc<UserQueue<Completion>>>,
     /// The exit state for the whole process, which will be the same as the *last* thread to exit
     /// in the process.
     exit_state: Arc<ExitState>,
@@ -169,6 +207,7 @@ impl Process {
     ///
     /// If `share_with_kernel` is true, then the memory will also be mapped into the kernel's
     /// address space and the kernel base address will be returned as the second value.
+    // TODO: zero pages?
     async fn alloc_memory(
         &self,
         mut page_count: usize,
@@ -215,6 +254,7 @@ impl Process {
             offset += size * PAGE_SIZE;
             page_count -= size;
         }
+        log::trace!("allocated {offset} bytes at {vaddr} ({kvaddr:?})");
         Ok((vaddr, kvaddr))
     }
 
@@ -223,6 +263,7 @@ impl Process {
     /// This function does *not* unmap the memory from the kernel address space if the region was
     /// allocated with `share_with_kernel` set to true!
     fn free_memory(&self, ptr: VirtualAddress, page_count: usize) {
+        log::trace!("freeing {page_count} pages at {ptr}");
         self.page_tables
             .unmap_range_custom(ptr, page_count, |region| {
                 physical_memory_allocator().free_pages(region.base_phys_addr, region.page_count);
@@ -268,6 +309,19 @@ impl Process {
 
 impl Drop for Process {
     fn drop(&mut self) {
+        // clean up the kernel mapping for all the queues in this process
+        // it's possible (but unlikely) that the queues could get used after this, but it will result in a page
+        // fault if it does happen.
+        for (qu, _) in self.send_queues.iter() {
+            let (_, addr, page_count) = qu.memory_region();
+            virtual_address_allocator().free(addr, page_count);
+        }
+
+        for qu in self.recv_queues.iter() {
+            let (_, addr, page_count) = qu.memory_region();
+            virtual_address_allocator().free(addr, page_count);
+        }
+
         for mapped_region in self.page_tables.iter() {
             physical_memory_allocator()
                 .free_pages(mapped_region.base_phys_addr, mapped_region.page_count);
