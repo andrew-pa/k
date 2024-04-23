@@ -5,9 +5,10 @@ use crate::{
     error::Error,
     exception::Registers,
     memory::{
+        self,
         paging::{PageTable, PageTableEntryOptions},
-        physical_memory_allocator, PhysicalBuffer, VirtualAddress, VirtualAddressAllocator,
-        PAGE_SIZE,
+        physical_memory_allocator, virtual_address_allocator, PhysicalBuffer, VirtualAddress,
+        VirtualAddressAllocator, PAGE_SIZE,
     },
     tasks::locks::Mutex,
 };
@@ -19,22 +20,23 @@ use core::{
     sync::atomic::{AtomicU16, AtomicU32},
 };
 use futures::Future;
-use kapi::{commands::Command, completions::Completion};
+use kapi::{
+    commands::Command,
+    completions::Completion,
+    queue::{Queue, QueueId},
+};
 use smallvec::SmallVec;
 use snafu::{OptionExt, ResultExt};
 use spin::Once;
 
 pub mod thread;
+use thread::*;
 pub use thread::{scheduler::scheduler, threads, Thread, ThreadId};
 
-pub mod interface;
+mod commands;
 
 mod spawn;
 pub use spawn::spawn_process;
-
-use thread::*;
-
-use interface::OwnedQueue;
 
 pub use kapi::ProcessId;
 
@@ -78,6 +80,43 @@ impl Future for ExitFuture {
     }
 }
 
+/// A single synchronized queue that is shared with a process.
+pub struct UserQueue<T> {
+    queue: Queue<T>,
+    user_base_address: VirtualAddress,
+}
+
+impl<T> UserQueue<T> {
+    /// Returns the user and kernel addresses of the start of the queue, as well as the number of pages that the queue takes up.
+    fn memory_region(&self) -> (VirtualAddress, VirtualAddress, usize) {
+        (
+            self.user_base_address,
+            self.root_address().as_ptr().into(),
+            kapi::queue::queue_size_in_bytes::<T>(self.capacity()).div_ceil(PAGE_SIZE),
+        )
+    }
+}
+
+impl<T> core::ops::Deref for UserQueue<T> {
+    type Target = Queue<T>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.queue
+    }
+}
+
+impl<T> core::fmt::Debug for UserQueue<T> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("OwnedQueue")
+            .field("id", &self.queue.id)
+            .field("capacity", &self.queue.capacity())
+            .finish()
+    }
+}
+
+crate::assert_send!(kapi::commands::Command);
+crate::assert_send!(kapi::completions::Completion);
+
 /// A user-space process.
 ///
 /// A process is a collection of threads that share the same address space and system resources.
@@ -92,16 +131,15 @@ pub struct Process {
     /// Allocator for the virtual address space of the process.
     address_space_allocator: Mutex<VirtualAddressAllocator>,
     /// The next free queue ID.
-    #[allow(dead_code)]
     next_queue_id: AtomicU16,
     /// The send (user space to kernel) queues associated with this process, and their associated
     /// receive queue.
     #[allow(clippy::type_complexity)]
-    send_queues: ConcurrentLinkedList<(Arc<OwnedQueue<Command>>, Arc<OwnedQueue<Completion>>)>,
+    send_queues: ConcurrentLinkedList<(Arc<UserQueue<Command>>, Arc<UserQueue<Completion>>)>,
     /// The receive (kernel to user space) queues associated with this process.
     // TODO: these queues don't need to be owned, because the process implicitly owns
     // all the mapped memory in its page tables by default.
-    recv_queues: ConcurrentLinkedList<Arc<OwnedQueue<Completion>>>,
+    recv_queues: ConcurrentLinkedList<Arc<UserQueue<Completion>>>,
     /// The exit state for the whole process, which will be the same as the *last* thread to exit
     /// in the process.
     exit_state: Arc<ExitState>,
@@ -164,9 +202,17 @@ impl Process {
         }
     }
 
-    /// Map more memory into the process. This memory may not be physically continuous, but will be
-    /// virtually continuous in the process's address space.
-    async fn alloc_memory(&self, mut page_count: usize) -> Result<VirtualAddress, Error> {
+    /// Map more memory into the process.
+    /// This memory may not be physically continuous, but will be virtually continuous.
+    ///
+    /// If `share_with_kernel` is true, then the memory will also be mapped into the kernel's
+    /// address space and the kernel base address will be returned as the second value.
+    // TODO: zero pages?
+    async fn alloc_memory(
+        &self,
+        mut page_count: usize,
+        share_with_kernel: bool,
+    ) -> Result<(VirtualAddress, Option<VirtualAddress>), Error> {
         use crate::error::*;
         let vaddr = self
             .address_space_allocator
@@ -176,11 +222,17 @@ impl Process {
             .context(MemorySnafu {
                 reason: "allocate virtual addresses for memory region in process",
             })?;
-        let mut vstart = vaddr;
+        let kvaddr = share_with_kernel
+            .then(|| virtual_address_allocator().alloc(page_count))
+            .transpose()
+            .context(MemorySnafu {
+                reason: "allocate virtual addresses for memory region in kernel",
+            })?;
         let options = PageTableEntryOptions {
             read_only: false,
             el0_access: true,
         };
+        let mut offset = 0;
         while page_count > 0 {
             let (paddr, size) = physical_memory_allocator()
                 .try_alloc_contig(page_count)
@@ -188,19 +240,88 @@ impl Process {
                     reason: "allocate physical memory for process",
                 })?;
             self.page_tables
-                .map_range(paddr, vstart, size, true, &options)
+                .map_range(paddr, vaddr.add(offset), size, true, &options)
                 .context(MemorySnafu {
-                    reason: "map physical memory into process address space",
+                    reason: "map new memory into process address space",
                 })?;
+            if let Some(kvaddr) = kvaddr.as_ref() {
+                memory::paging::kernel_table()
+                    .map_range(paddr, kvaddr.add(offset), size, true, &options)
+                    .context(MemorySnafu {
+                        reason: "map new memory into kernel address space",
+                    })?
+            }
+            offset += size * PAGE_SIZE;
             page_count -= size;
-            vstart = vstart.add(size * PAGE_SIZE);
         }
-        Ok(vaddr)
+        log::trace!("allocated {offset} bytes at {vaddr} ({kvaddr:?})");
+        Ok((vaddr, kvaddr))
+    }
+
+    /// Free memory allocated by [Self::alloc_memory], both physical and virtual.
+    ///
+    /// This function does *not* unmap the memory from the kernel address space if the region was
+    /// allocated with `share_with_kernel` set to true!
+    fn free_memory(&self, ptr: VirtualAddress, page_count: usize) {
+        log::trace!("freeing {page_count} pages at {ptr}");
+        self.page_tables
+            .unmap_range_custom(ptr, page_count, |region| {
+                physical_memory_allocator().free_pages(region.base_phys_addr, region.page_count);
+            });
+        self.address_space_allocator
+            .lock_blocking()
+            .free(ptr, page_count);
+    }
+
+    /// Get the next free queue ID in this process.
+    ///
+    /// If all the queue IDs have already been used, an error is returned.
+    fn next_queue_id(&self) -> Result<QueueId, Error> {
+        // the complexity here is because once `next_queue_id` becomes zero, it needs to stay zero
+        // to prevent reusing IDs.
+        let mut id = self
+            .next_queue_id
+            .load(core::sync::atomic::Ordering::Acquire);
+        loop {
+            if id == 0 {
+                return Err(Error::Misc {
+                    reason: "ran out of queue IDs for process".into(),
+                    code: Some(kapi::completions::ErrorCode::OutOfIds),
+                });
+            }
+            match self.next_queue_id.compare_exchange_weak(
+                id,
+                id.wrapping_add(1),
+                core::sync::atomic::Ordering::Acquire,
+                core::sync::atomic::Ordering::Relaxed,
+            ) {
+                Ok(_) => {
+                    return Ok(unsafe {
+                        // SAFETY: we just checked `id` to see if it was zero above.
+                        QueueId::new_unchecked(id)
+                    });
+                }
+                Err(x) => id = x,
+            }
+        }
     }
 }
 
 impl Drop for Process {
     fn drop(&mut self) {
+        // clean up the kernel mapping for all the queues in this process
+        // it's possible (but unlikely) that the queues could get used after this, but it will result in a page
+        // fault if it does happen.
+        for (qu, _) in self.send_queues.iter() {
+            let (_, addr, page_count) = qu.memory_region();
+            virtual_address_allocator().free(addr, page_count);
+        }
+
+        for qu in self.recv_queues.iter() {
+            let (_, addr, page_count) = qu.memory_region();
+            virtual_address_allocator().free(addr, page_count);
+        }
+
         for mapped_region in self.page_tables.iter() {
             physical_memory_allocator()
                 .free_pages(mapped_region.base_phys_addr, mapped_region.page_count);
@@ -208,8 +329,12 @@ impl Drop for Process {
     }
 }
 
+/// The global process table.
+///
+/// Processes that are in the table are "live" and can be referred to using their ID by user-space.
 static PROCESSES: Once<ConcurrentLinkedList<Arc<Process>>> = Once::new();
 
+/// The global PID counter.
 static NEXT_PID: AtomicU32 = AtomicU32::new(1);
 
 /// The global table of processes by ID.
@@ -217,6 +342,7 @@ pub fn processes() -> &'static ConcurrentLinkedList<Arc<Process>> {
     PROCESSES.call_once(Default::default)
 }
 
+/// Retrieve a process by its ID.
 pub fn process_for_id(id: ProcessId) -> Option<Arc<Process>> {
     processes().iter().find(|p| p.id == id).cloned()
 }
@@ -275,8 +401,8 @@ pub fn register_system_call_handlers() {
             let res_size = regs.x[2] as *mut usize;
             crate::tasks::block_on(async move {
                 // log::trace!("{res_ptr:?},{res_size:?} .. {page_count}");
-                match proc.alloc_memory(page_count).await {
-                    Ok(addr) => unsafe {
+                match proc.alloc_memory(page_count, false).await {
+                    Ok((addr, _)) => unsafe {
                         res_ptr.write(addr);
                         res_size.write(page_count * PAGE_SIZE);
                     },
@@ -302,10 +428,7 @@ pub fn register_system_call_handlers() {
         |_id, proc, _thread, regs| {
             let ptr = VirtualAddress(regs.x[0]);
             let size = regs.x[1].div_ceil(PAGE_SIZE);
-            proc.page_tables.unmap_range_custom(ptr, size, |region| {
-                physical_memory_allocator().free_pages(region.base_phys_addr, region.page_count);
-            });
-            proc.address_space_allocator.lock_blocking().free(ptr, size);
+            proc.free_memory(ptr, size);
         },
     );
 }

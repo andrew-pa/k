@@ -56,7 +56,7 @@ jobs:
         id: cache-bindep-qemu
         uses: actions/cache@v4
         with:
-          path: ./qemu/.build
+          path: ./qemu/build
           key: ${{runner.os}}-bindep-${{ steps.submodules-cache-key.outputs.gcc_version_hash }}-${{ steps.submodules-cache-key.outputs.qemu_commit }}
 
       - name: Cache U-boot build

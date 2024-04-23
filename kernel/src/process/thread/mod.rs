@@ -1,3 +1,4 @@
+//! Threads represent a single path of execution within a process.
 use core::sync::atomic::{AtomicU32, AtomicU8, Ordering};
 
 use alloc::sync::Arc;
@@ -10,7 +11,10 @@ use bytemuck::Contiguous;
 use crate::{
     ds::lists::ConcurrentLinkedList,
     exception::Registers,
-    memory::{PhysicalBuffer, VirtualAddress},
+    memory::{
+        paging::kernel_table, physical_memory_allocator, virtual_address_allocator, PhysicalBuffer,
+        VirtualAddress,
+    },
 };
 
 use super::Process;
@@ -73,6 +77,11 @@ pub struct Thread {
     priority: AtomicU8,
     exec_state: Mutex<ExecutionState>,
     exit_state: Arc<super::ExitState>,
+    /// The base address of the stack for this thread.
+    /// This address is relative to the parent's address space.
+    stack_start: VirtualAddress,
+    /// The length in pages of this thread's stack.
+    stack_page_count: usize,
 }
 
 crate::assert_sync!(Thread);
@@ -103,6 +112,9 @@ pub fn threads() -> &'static ConcurrentLinkedList<Arc<Thread>> {
                 sp: VirtualAddress(0),
             }),
             exit_state: Default::default(),
+            // TODO: we don't know these values, but we probably should?!
+            stack_start: VirtualAddress(0),
+            stack_page_count: 0,
         }));
         ths
     })
@@ -156,14 +168,8 @@ impl ExecutionState {
 
 impl Thread {
     /// Create a new kernel space thread from a entry point function and stack buffer.
-    ///
-    /// # Safety
-    /// For now, the caller must ensure the stack memory lives as long as the thread.
-    pub unsafe fn kernel_thread(id: ThreadId, start: fn() -> !, stack: &PhysicalBuffer) -> Self {
-        // TODO: the stack needs to stick around for the entire runtime of the thread, but right
-        // now since we only have a borrow the caller could then immediately drop the stack buffer
-        // and cause the thread to use unallocated memory as stack.
-        Thread {
+    pub fn kernel_thread(id: ThreadId, start: fn() -> !, stack: PhysicalBuffer) -> Self {
+        let t = Thread {
             id,
             parent: None,
             state: ThreadState::Running.into_integer().into(),
@@ -172,10 +178,15 @@ impl Thread {
                 register_state: Registers::default(),
                 program_status: SavedProgramStatus::initial_for_el1(),
                 pc: (start as *const ()).into(),
-                sp: stack.virtual_address().add(stack.len() - 16),
+                sp: stack.virtual_address().add(stack.len()),
             }),
             exit_state: Default::default(),
-        }
+            stack_start: stack.virtual_address(),
+            stack_page_count: stack.page_count(),
+        };
+        // the thread takes ownership of the physical and virtual memory of the stack
+        core::mem::forget(stack);
+        t
     }
 
     /// Create a new user space thread running in EL0.
@@ -183,7 +194,8 @@ impl Thread {
         proc: Arc<Process>,
         tid: ThreadId,
         entry_point: VirtualAddress,
-        initial_stack_pointer: VirtualAddress,
+        stack_base_address: VirtualAddress,
+        stack_page_count: usize,
         priority: ThreadPriority,
         start_registers: Registers,
     ) -> Self {
@@ -196,9 +208,11 @@ impl Thread {
                 register_state: start_registers,
                 program_status: SavedProgramStatus::initial_for_el0(),
                 pc: entry_point,
-                sp: initial_stack_pointer,
+                sp: stack_base_address.add(stack_page_count * crate::memory::PAGE_SIZE),
             }),
             exit_state: Default::default(),
+            stack_start: stack_base_address,
+            stack_page_count,
         }
     }
 
@@ -220,14 +234,22 @@ impl Thread {
         let proc_if_last_thread = if let Some(p) = self.parent.as_ref() {
             let mut ts = p.threads.lock_blocking();
             ts.retain(|t| t.id != self.id);
+
+            // free the stack, while we're here
+            p.free_memory(self.stack_start, self.stack_page_count);
+
             ts.is_empty().then_some(p)
         } else {
+            // this is a kernel thread (no parent), so we need to free the kernel memory that holds our stack
+            kernel_table().unmap_range_custom(self.stack_start, self.stack_page_count, |region| {
+                physical_memory_allocator().free_pages(region.base_phys_addr, region.page_count);
+            });
+            virtual_address_allocator().free(self.stack_start, self.stack_page_count);
+
             None
         };
 
         self.exit_state.set(exit_code.clone());
-
-        // TODO: we're currently leaking the stack for this thread if we allocated it
 
         if let Some(proc) = proc_if_last_thread {
             // this thread was the last, so the process itself is now dead.

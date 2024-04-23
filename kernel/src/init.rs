@@ -54,7 +54,7 @@ pub fn find_boot_options<'a>(dt: &'a DeviceTree) -> BootOptions<'a> {
 ///
 /// The timer will trigger as soon as interrupts are enabled.
 pub fn configure_time_slicing(dt: &DeviceTree) {
-    let props = timer::find_timer_properties(dt);
+    let props = timer::TimerProperties::from_device_tree(dt);
     log::debug!("timer properties = {props:?}");
     let timer_irq = props.interrupt;
 
@@ -117,18 +117,11 @@ pub fn spawn_task_executor_thread() {
         .expect("allocate task exec thread stack");
     log::debug!("task stack = {task_stack:x?}");
 
-    unsafe {
-        process::thread::spawn_thread(Arc::new(process::Thread::kernel_thread(
-            process::thread::TASK_THREAD,
-            tasks::run_executor,
-            &task_stack,
-        )));
-    }
-
-    // the task executor thread should continue to run while the kernel is running so we prevent
-    // the stack's memory from being freed by forgetting it
-    // TODO: if we need to resize the stack we need to keep track of this?
-    core::mem::forget(task_stack);
+    process::thread::spawn_thread(Arc::new(process::Thread::kernel_thread(
+        process::thread::TASK_THREAD,
+        tasks::run_executor,
+        task_stack,
+    )));
 }
 
 /// This finishes the boot process, executing the asynchronous tasks required to mount the root filesystem and spawn the `init` process.

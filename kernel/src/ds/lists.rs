@@ -192,6 +192,75 @@ impl<T> ConcurrentLinkedList<T> {
     }
 }
 
+impl<T: Clone> ConcurrentLinkedList<T> {
+    /// Removes the first element in the list that matches the predicate.
+    /// Returns a clone of the element if the element was found.
+    pub fn remove_cloned(&self, predicate: impl Fn(&T) -> bool) -> Option<T> {
+        // check the head and remove it if it matches the predicate
+        let mut head_ptr = self.head.load(Ordering::Acquire);
+        loop {
+            match unsafe { head_ptr.as_ref() } {
+                Some(head) => {
+                    if predicate(&head.data) {
+                        let next = head.next.load(Ordering::Acquire);
+                        match self.head.compare_exchange(
+                            head_ptr,
+                            next,
+                            Ordering::Release,
+                            Ordering::Relaxed,
+                        ) {
+                            Ok(_) => {
+                                let old_head = unsafe { Box::from_raw(head_ptr) };
+                                let v = old_head.data.clone();
+                                self.push_pending_deletion(old_head);
+                                return Some(v);
+                            }
+                            Err(new_head) => {
+                                head_ptr = new_head;
+                                continue;
+                            }
+                        }
+                    } else {
+                        break;
+                    }
+                }
+                None => return None,
+            }
+        }
+
+        // process the rest of the list
+        // this is a pointer to the next field of the previous node that contains current_ptr (points to current)
+        let mut prev_ptr = addr_of!(self.head);
+        let mut current_ptr = unsafe { (*prev_ptr).load(Ordering::Acquire) };
+
+        while let Some(current) = unsafe { current_ptr.as_ref() } {
+            if predicate(&current.data) {
+                let next = current.next.load(Ordering::Acquire);
+                let prev = unsafe { prev_ptr.as_ref().expect("prev ptr is non-null") };
+                match prev.compare_exchange(current_ptr, next, Ordering::Release, Ordering::Relaxed)
+                {
+                    Ok(_) => unsafe {
+                        let cbox = Box::from_raw(current_ptr);
+                        let v = cbox.data.clone();
+                        self.push_pending_deletion(cbox);
+                        return Some(v);
+                    },
+                    Err(_) => {
+                        // reload the current pointer and retry because someone else
+                        // modified the node before we did
+                        current_ptr = prev.load(Ordering::Acquire);
+                    }
+                }
+            } else {
+                prev_ptr = addr_of!(current.next);
+                current_ptr = current.next.load(Ordering::Acquire);
+            }
+        }
+
+        None
+    }
+}
+
 impl<'p, T> Iterator for Iter<'p, T> {
     type Item = &'p T;
 
@@ -225,6 +294,7 @@ impl<T> Drop for ConcurrentLinkedList<T> {
             }
             current = next;
         }
+        self.free_pool();
     }
 }
 

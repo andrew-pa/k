@@ -188,7 +188,7 @@ pub async fn spawn_process(
     // create main thread's stack
     // TODO: this should be a parameter
     let stack_page_count = 512;
-    let stack_vaddr = proc.alloc_memory(stack_page_count).await?;
+    let stack_vaddr = proc.alloc_memory(stack_page_count, false).await?.0;
 
     // create main thread
     let tid = next_thread_id();
@@ -204,7 +204,8 @@ pub async fn spawn_process(
         proc.clone(),
         tid,
         VirtualAddress(bin.ehdr.e_entry as usize),
-        stack_vaddr.add(stack_page_count * PAGE_SIZE),
+        stack_vaddr,
+        stack_page_count,
         ThreadPriority::Normal,
         start_regs,
     ));

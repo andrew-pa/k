@@ -14,7 +14,7 @@ $(UBOOT_BIN)/u-boot.bin $(UBOOT_BIN)/tools/mkimage:
 	CROSS_COMPILE=aarch64-linux-gnu- $(MAKE) -C ./u-boot O=./.build -j all
 
 ## QEMU
-QEMU_BIN := ./qemu/.build
+QEMU_BIN := ./qemu/build
 QEMU := $(QEMU_BIN)/qemu-system-aarch64
 
 #? Build QEMU.
@@ -54,12 +54,14 @@ run: build-all $(QEMU) $(UBOOT_BIN)/u-boot.bin #? Boots the system inside QEMU.
 debug: build-all $(QEMU) $(UBOOT_BIN)/u-boot.bin #? Run with QEMU in debug mode. Waits for GDB to attach before continuing.
 	./scripts/qemu-exec.sh $(BUILD_DIR) '{}' '-s -S'
 
-test: build-all $(QEMU) $(UBOOT_BIN)/u-boot.bin $(UBOOT_BIN)/tools/mkimage #? Run unit tests.
+unit-test: build-all $(QEMU) $(UBOOT_BIN)/u-boot.bin $(UBOOT_BIN)/tools/mkimage #? Run unit tests.
 	mkdir -p $(BUILD_DIR)
 	cargo test -p kernel
 
 api-test: build-all $(QEMU) $(UBOOT_BIN)/u-boot.bin #? Boots system inside QEMU and runs API tests.
 	./scripts/qemu-exec.sh $(BUILD_DIR) '{"init_process_path":"/volumes/root/bin/api_tests"}'
+
+test: unit-test api-test
 
 # Rule to extract documentation comments for each rule in the Makefile
 # Comments are `#?` after the rule head.
