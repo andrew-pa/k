@@ -21,12 +21,15 @@
 extern crate alloc;
 
 use alloc::boxed::Box;
-use core::arch::global_asm;
+use byteorder::ByteOrder;
 use memory::PhysicalAddress;
 use qemu_exit::QEMUExit as _;
 
+use crate::platform::intrinsics;
+
 pub mod ds;
 pub mod error;
+pub mod platform;
 pub mod registry;
 
 pub mod exception;
@@ -36,16 +39,49 @@ pub mod tasks;
 
 pub mod bus;
 pub mod storage;
-pub mod timer;
-pub mod uart;
 
 pub mod fs;
 
 pub mod init;
 
-pub mod intrinsics;
+extern "C" {
+    fn _secondary_start();
+}
 
-global_asm!(include_str!("start.S"));
+fn write_char(c: char) {
+    unsafe {
+        core::arch::asm!(
+            "movk x1, #0xffff, lsl 48",
+            "mov x1, 0x09000000",
+            "mov x0, {c:x}",
+            "str x0, [x1]",
+            c = in(reg) c as u32
+        );
+    }
+}
+
+fn fib(n: usize) -> usize {
+    if n < 2 {
+        1
+    } else {
+        fib(n - 1) + fib(n - 2)
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn secondary_entry_point(context_id: usize) -> ! {
+    unsafe {
+        exception::install_exception_vector_table();
+    }
+    log::info!("Hello from different CPU! {context_id:x}");
+    log::debug!(
+        "MPIDR = {:x} {:x}; EL={}",
+        intrinsics::read_mpidr(),
+        intrinsics::current_cpu_id(),
+        intrinsics::read_current_el()
+    );
+    intrinsics::halt();
+}
 
 /// The main entry point for the kernel.
 ///
@@ -77,6 +113,16 @@ pub extern "C" fn kmain(dtb_addr: PhysicalAddress) -> ! {
     // See u-boot/arch/arm/lib/bootm.c:boot_jump_linux(...).
     log::trace!("reading device tree blob at {dtb_addr}");
     let dt = unsafe { ds::dtb::DeviceTree::at_address(dtb_addr.to_virtual_canonical()) };
+    dt.log();
+
+    let mut x: usize;
+    unsafe {
+        core::arch::asm!(
+            "mrs {val}, CPACR_EL1",
+            val = out(reg) x
+        );
+    }
+    log::trace!("CPACR={:b}", x >> 15);
 
     memory::init_physical_memory_allocator(&dt);
     memory::paging::init_kernel_page_table();
@@ -85,6 +131,7 @@ pub extern "C" fn kmain(dtb_addr: PhysicalAddress) -> ! {
 
     memory::init_virtual_address_allocator();
     exception::init_interrupts(&dt);
+    init::smp_start(&dt);
     process::thread::scheduler::init_scheduler();
     tasks::init_executor();
     registry::init_registry();
@@ -97,6 +144,7 @@ pub extern "C" fn kmain(dtb_addr: PhysicalAddress) -> ! {
     init::pcie(&dt);
 
     let dt = Box::leak(Box::new(dt));
+    #[allow(unused)] // the test block confuses the analyzer
     let opts = init::find_boot_options(dt);
 
     #[cfg(test)]
@@ -132,8 +180,12 @@ pub extern "C" fn kmain(dtb_addr: PhysicalAddress) -> ! {
 #[allow(unreachable_code)]
 pub fn panic_handler(info: &core::panic::PanicInfo) -> ! {
     use core::fmt::Write;
-    let mut uart = uart::DebugUart::default();
-    let _ = uart.write_fmt(format_args!("\npanic! {info}\n"));
+    let cpu_id = intrinsics::current_cpu_id();
+    let mut uart = platform::uart::DebugUart::default();
+    let _ = writeln!(
+        &mut uart,
+        "\n\x1b[91;1mpanic on cpu #{cpu_id}!\x1b[0m {info}"
+    );
     qemu_exit::aarch64::AArch64::new().exit_failure();
     // prevent anything from getting scheduled after a kernel panic
     intrinsics::halt();
@@ -151,9 +203,7 @@ where
 {
     fn run(&self) {
         use core::fmt::Write;
-        let mut uart = uart::DebugUart {
-            base: 0xffff_0000_0900_0000 as *mut u8,
-        };
+        let mut uart = platform::uart::DebugUart::default();
         write!(&mut uart, "{}...\t", core::any::type_name::<T>()).unwrap();
         self();
         writeln!(&mut uart, "ok").unwrap();

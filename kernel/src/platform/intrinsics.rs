@@ -2,6 +2,8 @@
 
 use crate::exception;
 
+use super::CpuId;
+
 /// Wait for an interrupt to occur. The function returns after an interrupt is triggered.
 ///
 /// This uses the `wfi` instruction once.
@@ -42,6 +44,24 @@ pub fn read_mair() -> usize {
         );
     }
     x >> 2
+}
+
+/// Read the MPIDR register.
+pub fn read_mpidr() -> usize {
+    let mut x: usize;
+    unsafe {
+        core::arch::asm!(
+            "mrs {val}, MPIDR_EL1",
+            val = out(reg) x
+        );
+    }
+    x
+}
+
+/// Get the current CPU ID value.
+pub fn current_cpu_id() -> CpuId {
+    // mask out the U (bit 30) and MT (bit 24) bits to leave only the affinity levels
+    read_mpidr() & 0x0000_00ff_00ff_ffff
 }
 
 /// Read the stack pointer select register.

@@ -1,4 +1,6 @@
-//! Driver for PL011 UART that is provided by QEMU, implemented as a [log::Log].
+//! Driver for PL011 UART.
+//!
+//! The driver is provided as a [log::Log] implementation.
 
 use core::fmt::Write;
 
@@ -45,8 +47,8 @@ pub struct DebugUartLogger;
 /// All submodules will also be muted.
 const DISABLED_MODULES: &[&str] = &[
     "kernel::memory",
-    "kernel::process::thread::scheduler",
-    "kernel::exception",
+    // "kernel::process::thread::scheduler",
+    // "kernel::exception",
 ];
 
 impl log::Log for DebugUartLogger {
@@ -69,10 +71,10 @@ impl log::Log for DebugUartLogger {
         let mut uart = DebugUart::default();
         write!(
             uart,
-            "[\x1b[{}m{:<5}\x1b[0m {} T",
+            "[\x1b[{}m{:<5} \x1b[90m{}\x1b[0m T",
             color_for_level(record.level()),
             record.level(),
-            crate::timer::counter()
+            super::timer::counter()
         )
         .unwrap();
         if let Some(tid) = crate::process::thread::scheduler::try_current_thread_id() {

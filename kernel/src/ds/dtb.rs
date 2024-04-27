@@ -164,6 +164,15 @@ pub struct StringList<'dt> {
     current_offset: usize,
 }
 
+impl<'dt> StringList<'dt> {
+    pub fn new(data: &'dt [u8]) -> Self {
+        Self {
+            data,
+            current_offset: 0,
+        }
+    }
+}
+
 impl DeviceTree<'_> {
     /// Create a [`DeviceTree`] struct that represents a device tree blob at some virtual address.
     ///
@@ -323,10 +332,7 @@ impl<'dt> Iterator for Cursor<'dt> {
                         "#size-cells" => {
                             Some(StandardProperty::SizeCells(BigEndian::read_u32(data)))
                         }
-                        "compatible" => Some(StandardProperty::Compatible(StringList {
-                            data,
-                            current_offset: 0,
-                        })),
+                        "compatible" => Some(StandardProperty::Compatible(StringList::new(data))),
                         _ => None,
                     };
                     return Some(StructureItem::Property {

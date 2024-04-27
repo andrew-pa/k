@@ -57,10 +57,15 @@ _start:
 .global _secondary_start
 
 _secondary_start:
+    /* context is our stack pointer */
     mov sp, x0
 
     /* save context value */
     mov x3, x0
+
+    /* enable vector instructions */
+    mov x0, 0x300000
+    msr CPACR_EL1, x0
 
     adr x0, _kernel_page_table_root
 
@@ -79,11 +84,6 @@ _secondary_start:
     orr x0, x0, #1
     msr SCTLR_EL1, x0
     isb
-
-    mov x1, 0x09000000
-    movk x1, #0xffff, lsl 48
-    mov x0, #0x37
-    str x0, [x1]
 
     /* start the kernel, now running in the correct spot in virtual memory */
     mov x0, x3
