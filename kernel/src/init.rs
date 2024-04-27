@@ -1,18 +1,23 @@
 //! Initialization routines that are called during the boot process by `kmain` to setup the system.
+use self::platform::uart::DebugUartLogger;
+
 use super::*;
 use crate::{
     ds::dtb::DeviceTree,
-    memory::VirtualAddress,
+    memory::{VirtualAddress, PAGE_SIZE},
     platform::{timer, CpuId},
     registry::Path,
 };
 use alloc::sync::Arc;
 use byteorder::BigEndian;
 use hashbrown::HashMap;
+use spin::once::Once;
 
-/// Configure logging using [log] and the [uart::DebugUartLogger].
+static LOGGER: Once<DebugUartLogger> = Once::new();
+
+/// Configure logging using [log] and the [platform::uart::DebugUartLogger].
 pub fn logging(log_level: log::LevelFilter) {
-    log::set_logger(&platform::uart::DebugUartLogger).expect("set logger");
+    log::set_logger(LOGGER.call_once(DebugUartLogger::default)).expect("set logger");
     log::set_max_level(log_level);
     log::info!("starting kernel!");
 }
@@ -118,7 +123,7 @@ pub fn pcie(dt: &DeviceTree) {
 
 /// Bring up the rest of the CPUs in the system (if present).
 pub fn smp_start(dt: &DeviceTree) {
-    log::info!("starting up remaining SMP cores");
+    log::info!("starting up remaining CPU cores for SMP");
     let psci = platform::psci::Psci::new(dt);
     log::debug!("PSCI implementation: {psci:x?}");
 
@@ -127,11 +132,15 @@ pub fn smp_start(dt: &DeviceTree) {
 
     // Called for each discovered CPU in the device tree to enable that CPU.
     let power_on_cpu = move |cpu_block_name: &str, cpu_id: CpuId, cpu_enable_method: &[u8]| {
-        if cpu_id != boot_cpu_id {
-            match cpu_enable_method {
+        log::trace!(
+            "powering on CPU {cpu_block_name} (id: {cpu_id}, enable method: {})",
+            core::str::from_utf8(cpu_enable_method).unwrap_or("?")
+        );
+        match cpu_enable_method {
                 b"psci\0" if psci.is_some() => {
-                    let stack = memory::PhysicalBuffer::alloc(8, &Default::default()).unwrap();
-                    match psci.as_ref().unwrap().cpu_on(cpu_id, entry_point_address, stack.virtual_address().0) {
+                    // use a 4MiB stack, just like the first core (see link.ld).
+                    let stack = memory::PhysicalBuffer::alloc(4 * 1024 * 1024 / PAGE_SIZE, &Default::default()).unwrap();
+                    match psci.as_ref().unwrap().cpu_on(cpu_id, entry_point_address, stack.virtual_address().0 + stack.len()) {
                         Ok(()) => {
                             log::trace!("successfully powered on CPU #{cpu_id}");
                             // TODO: ostensibly if we turn off the CPU we need to delete the stack, but otherwise it lives forever
@@ -142,7 +151,6 @@ pub fn smp_start(dt: &DeviceTree) {
                 },
                 _ => log::warn!("CPU {cpu_block_name} (id = {cpu_id}) has unknown or unsupported enable method: {:?}", ds::dtb::StringList::new(cpu_enable_method))
             }
-        }
     };
 
     // Iterate over the device tree and find each CPU node, then identify the CPU ID and enable method properties.
@@ -164,7 +172,9 @@ pub fn smp_start(dt: &DeviceTree) {
                 if let Some(cpu_block_name) = cpu_block_name.take() {
                     match (cpu_id.take(), cpu_enable_method.take()) {
                         (Some(cpu_id), Some(cpu_enable_method)) => {
-                            power_on_cpu(cpu_block_name, cpu_id, cpu_enable_method)
+                            if cpu_id != boot_cpu_id {
+                                power_on_cpu(cpu_block_name, cpu_id, cpu_enable_method)
+                            }
                         }
                         _ => {
                             log::warn!("device tree contained incomplete CPU block {cpu_block_name}: CPU ID = {cpu_id:?}, CPU enable method = {cpu_enable_method:?}");
@@ -186,6 +196,8 @@ pub fn smp_start(dt: &DeviceTree) {
             _ => {}
         }
     }
+
+    log::debug!("SMP startup finished!");
 }
 
 /// Spawn the task executor thread as a kernel thread.

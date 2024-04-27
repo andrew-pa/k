@@ -13,7 +13,7 @@ SECTIONS {
         __bss_end = . ;
     }
     .stack (NOLOAD) : {
-        . += 8M ;
+        . += 4M ;
         . = ALIGN(16);
         __stack_start = . ;
     }

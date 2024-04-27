@@ -25,7 +25,7 @@ use byteorder::ByteOrder;
 use memory::PhysicalAddress;
 use qemu_exit::QEMUExit as _;
 
-use crate::platform::intrinsics;
+use crate::platform::intrinsics::{self, current_cpu_id};
 
 pub mod ds;
 pub mod error;
@@ -48,37 +48,14 @@ extern "C" {
     fn _secondary_start();
 }
 
-fn write_char(c: char) {
-    unsafe {
-        core::arch::asm!(
-            "movk x1, #0xffff, lsl 48",
-            "mov x1, 0x09000000",
-            "mov x0, {c:x}",
-            "str x0, [x1]",
-            c = in(reg) c as u32
-        );
-    }
-}
-
-fn fib(n: usize) -> usize {
-    if n < 2 {
-        1
-    } else {
-        fib(n - 1) + fib(n - 2)
-    }
-}
-
 #[no_mangle]
 pub extern "C" fn secondary_entry_point(context_id: usize) -> ! {
     unsafe {
         exception::install_exception_vector_table();
     }
-    log::info!("Hello from different CPU! {context_id:x}");
-    log::debug!(
-        "MPIDR = {:x} {:x}; EL={}",
-        intrinsics::read_mpidr(),
-        intrinsics::current_cpu_id(),
-        intrinsics::read_current_el()
+    log::info!(
+        "secondary CPU #{} start (context_id = {context_id:x})",
+        current_cpu_id()
     );
     intrinsics::halt();
 }

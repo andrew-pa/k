@@ -4,12 +4,16 @@
 
 use core::fmt::Write;
 
+use super::intrinsics;
+
 const DEBUG_UART_ADDRESS: usize = 0xffff_0000_0900_0000;
 
 /// A very simple UART driver for debugging.
 pub struct DebugUart {
     pub base: *mut u8,
 }
+
+unsafe impl Send for DebugUart {}
 
 impl Default for DebugUart {
     fn default() -> Self {
@@ -41,7 +45,13 @@ fn color_for_level(lvl: log::Level) -> &'static str {
 }
 
 /// A logger that writes to the debug UART.
-pub struct DebugUartLogger;
+pub struct DebugUartLogger {}
+
+impl Default for DebugUartLogger {
+    fn default() -> Self {
+        Self {}
+    }
+}
 
 /// Modules that have Trace/Debug level logging disabled because they are very noisy.
 /// All submodules will also be muted.
@@ -67,14 +77,14 @@ impl log::Log for DebugUartLogger {
             return;
         }
 
-        //WARN: this is currently NOT thread safe!
         let mut uart = DebugUart::default();
         write!(
             uart,
-            "[\x1b[{}m{:<5} \x1b[90m{}\x1b[0m T",
+            "[\x1b[{}m{:<5} \x1b[90m{}\x1b[0m C{}T",
             color_for_level(record.level()),
             record.level(),
-            super::timer::counter()
+            super::timer::counter(),
+            intrinsics::current_cpu_id(),
         )
         .unwrap();
         if let Some(tid) = crate::process::thread::scheduler::try_current_thread_id() {
