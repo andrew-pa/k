@@ -57,8 +57,8 @@ impl Default for DebugUartLogger {
 /// All submodules will also be muted.
 const DISABLED_MODULES: &[&str] = &[
     "kernel::memory",
-    // "kernel::process::thread::scheduler",
-    // "kernel::exception",
+    "kernel::process::thread::scheduler",
+    "kernel::exception",
 ];
 
 impl log::Log for DebugUartLogger {
