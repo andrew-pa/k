@@ -36,7 +36,7 @@ fn handle_system_call(proc: Arc<Process>, thread: Arc<Thread>, regs: &mut Regist
 #[no_mangle]
 unsafe extern "C" fn handle_synchronous_exception(regs: *mut Registers, esr: usize, far: usize) {
     let esr = ExceptionSyndromeRegister(esr as u64);
-    let ec = ExceptionClass(esr.ec());
+    let ec = esr.ec();
 
     if !ec.is_system_call()
         && !ec.is_user_space_data_page_fault()

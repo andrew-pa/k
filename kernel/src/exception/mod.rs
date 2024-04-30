@@ -304,12 +304,18 @@ bitfield! {
     struct ExceptionSyndromeRegister(u64);
     u8;
     iss2, _: 36, 32;
-    ec, _: 31, 26;
+    u8, into ExceptionClass, ec, _: 31, 26;
     il, _: 25, 25;
     u32, iss, _: 24, 0;
 }
 
 struct ExceptionClass(u8);
+
+impl From<u8> for ExceptionClass {
+    fn from(value: u8) -> Self {
+        Self(value)
+    }
+}
 
 impl ExceptionClass {
     #[inline]
@@ -320,6 +326,16 @@ impl ExceptionClass {
     #[inline]
     fn is_user_space_data_page_fault(&self) -> bool {
         self.0 == 0b100100
+    }
+
+    #[inline]
+    fn is_kernel_data_page_fault(&self) -> bool {
+        self.0 == 0b100101
+    }
+
+    #[inline]
+    fn is_data_abort(&self) -> bool {
+        self.is_user_space_data_page_fault() || self.is_kernel_data_page_fault()
     }
 
     #[inline]
@@ -351,7 +367,7 @@ impl core::fmt::Debug for ExceptionClass {
     }
 }
 
-fn dfsc_description(code: u8) -> &'static str {
+fn data_abort_dfsc_description(code: u8) -> &'static str {
     match code {
         0b000000 => "Address size fault, level 0 of translation or translation table base register",
         0b000001 => "Address size fault, level 1",
@@ -403,7 +419,7 @@ impl Display for ExceptionSyndromeRegister {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("ESR")
             .field("ISS2", &format_args!("0x{:x}", self.iss2()))
-            .field("EC", &ExceptionClass(self.ec()))
+            .field("EC", &self.ec())
             .field("IL", &self.il())
             .field(
                 "ISS",
@@ -411,8 +427,8 @@ impl Display for ExceptionSyndromeRegister {
                     "0x{:x}=0b{:b} \"{}\"",
                     self.iss(),
                     self.iss(),
-                    if self.ec() == 0b10_0101 {
-                        dfsc_description((self.iss() & 0b11_1111) as u8)
+                    if self.ec().is_data_abort() {
+                        data_abort_dfsc_description((self.iss() & 0b11_1111) as u8)
                     } else {
                         ""
                     }
