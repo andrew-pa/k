@@ -133,7 +133,7 @@ impl VirtualAddress {
         self.0 as *mut T
     }
 
-    /// Convert this virtual address into a physical address, assuming the "canonical" mapping.
+    /// Convert this virtual address into a physical address, assuming the "canonical" mapping (ie the mapping the kernel `text` section is mapped under).
     ///
     /// This function *assumes* that we have identity mapped memory starting at 0xffff_0000_0000_0000 and that this physical address is part of the range of memory that has been identity mapped at boot.
     /// This is currently a 4GiB region starting at p:0x4000_0000 (see `start.S`).

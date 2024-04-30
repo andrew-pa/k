@@ -5,6 +5,7 @@
 // TODO: physical vs virtual timers?
 
 use bitfield::bitfield;
+use spin::once::Once;
 
 use core::arch::asm;
 
@@ -146,4 +147,14 @@ impl TimerProperties {
             interrupt: interrupt.expect("found timer interrupt"),
         }
     }
+}
+
+static TIMER_PROPS: Once<TimerProperties> = Once::new();
+
+pub fn init(device_tree: &DeviceTree) {
+    TIMER_PROPS.call_once(|| TimerProperties::from_device_tree(device_tree));
+}
+
+pub fn properties() -> &'static TimerProperties {
+    TIMER_PROPS.get().expect("timer properties discovered")
 }

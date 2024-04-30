@@ -189,6 +189,7 @@ pub async fn spawn_process(
     // TODO: this should be a parameter
     let stack_page_count = 512;
     let stack_vaddr = proc.alloc_memory(stack_page_count, false).await?.0;
+    log::trace!("process stack at {stack_vaddr}");
 
     // create main thread
     let tid = next_thread_id();

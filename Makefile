@@ -16,6 +16,7 @@ $(UBOOT_BIN)/u-boot.bin $(UBOOT_BIN)/tools/mkimage:
 ## QEMU
 QEMU_BIN := ./qemu/build
 QEMU := $(QEMU_BIN)/qemu-system-aarch64
+QEMU_OPTS := 
 
 #? Build QEMU.
 $(QEMU):
@@ -49,17 +50,17 @@ $(BUILD_DIR)/bin/test_process: build-rust $(TARGET_DIR)/test_process
 
 # QEMU Run/Test/Debug
 run: build-all $(QEMU) $(UBOOT_BIN)/u-boot.bin #? Boots the system inside QEMU.
-	./scripts/qemu-exec.sh $(BUILD_DIR) '{"init_process_path":"/volumes/root/bin/init"}'
+	./scripts/qemu-exec.sh $(BUILD_DIR) '{"init_process_path":"/volumes/root/bin/init"}' $(QEMU_OPTS)
 
 debug: build-all $(QEMU) $(UBOOT_BIN)/u-boot.bin #? Run with QEMU in debug mode. Waits for GDB to attach before continuing.
-	./scripts/qemu-exec.sh $(BUILD_DIR) '{}' '-s -S'
+	./scripts/qemu-exec.sh $(BUILD_DIR) '{}' -s -S $(QEMU_OPTS)
 
 unit-test: build-all $(QEMU) $(UBOOT_BIN)/u-boot.bin $(UBOOT_BIN)/tools/mkimage #? Run unit tests.
 	mkdir -p $(BUILD_DIR)
 	cargo test -p kernel
 
 api-test: build-all $(QEMU) $(UBOOT_BIN)/u-boot.bin #? Boots system inside QEMU and runs API tests.
-	./scripts/qemu-exec.sh $(BUILD_DIR) '{"init_process_path":"/volumes/root/bin/api_tests"}'
+	./scripts/qemu-exec.sh $(BUILD_DIR) '{"init_process_path":"/volumes/root/bin/api_tests"}' $(QEMU_OPTS)
 
 test: unit-test api-test
 

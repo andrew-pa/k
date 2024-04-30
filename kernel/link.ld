@@ -12,6 +12,11 @@ SECTIONS {
         *(.bss .bss.*)
         __bss_end = . ;
     }
+    .stack (NOLOAD) : {
+        . += 4M ;
+        . = ALIGN(16);
+        __stack_start = . ;
+    }
     __kernel_end = . ;
 }
 ENTRY(_start)

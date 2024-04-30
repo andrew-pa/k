@@ -1,12 +1,23 @@
 //! Initialization routines that are called during the boot process by `kmain` to setup the system.
-use super::*;
-use crate::{ds::dtb::DeviceTree, registry::Path};
-use alloc::sync::Arc;
-use hashbrown::HashMap;
+use self::platform::uart::DebugUartLogger;
 
-/// Configure logging using [log] and the [uart::DebugUartLogger].
+use super::*;
+use crate::{
+    ds::dtb::DeviceTree,
+    memory::{VirtualAddress, PAGE_SIZE},
+    platform::{timer, CpuId},
+    registry::Path,
+};
+use alloc::sync::Arc;
+use byteorder::BigEndian;
+use hashbrown::HashMap;
+use spin::once::Once;
+
+static LOGGER: Once<DebugUartLogger> = Once::new();
+
+/// Configure logging using [log] and the [platform::uart::DebugUartLogger].
 pub fn logging(log_level: log::LevelFilter) {
-    log::set_logger(&uart::DebugUartLogger).expect("set logger");
+    log::set_logger(LOGGER.call_once(DebugUartLogger::default)).expect("set logger");
     log::set_max_level(log_level);
     log::info!("starting kernel!");
 }
@@ -53,9 +64,8 @@ pub fn find_boot_options<'a>(dt: &'a DeviceTree) -> BootOptions<'a> {
 /// Configure time slicing interrupts and initialize the system timer.
 ///
 /// The timer will trigger as soon as interrupts are enabled.
-pub fn configure_time_slicing(dt: &DeviceTree) {
-    let props = timer::TimerProperties::from_device_tree(dt);
-    log::debug!("timer properties = {props:?}");
+pub fn configure_time_slicing() {
+    let props = timer::properties();
     let timer_irq = props.interrupt;
 
     {
@@ -108,6 +118,85 @@ pub fn pcie(dt: &DeviceTree) {
         storage::nvme::init_nvme_over_pcie as bus::pcie::DriverInitFn,
     );
     bus::pcie::init(dt, &pcie_drivers);
+}
+
+/// Bring up the rest of the CPUs in the system (if present).
+pub fn smp_start(dt: &DeviceTree) {
+    log::info!("starting up remaining CPU cores for SMP");
+    let psci = platform::psci::Psci::new(dt);
+    log::debug!("PSCI implementation: {psci:x?}");
+
+    let entry_point_address = VirtualAddress(_secondary_start as usize).to_physical_canonical();
+    let boot_cpu_id = intrinsics::current_cpu_id();
+
+    // Called for each discovered CPU in the device tree to enable that CPU.
+    let power_on_cpu = move |cpu_block_name: &str, cpu_id: CpuId, cpu_enable_method: &[u8]| {
+        log::trace!(
+            "powering on CPU {cpu_block_name} (id: {cpu_id}, enable method: {})",
+            core::str::from_utf8(cpu_enable_method).unwrap_or("?")
+        );
+        match cpu_enable_method {
+                b"psci\0" if psci.is_some() => {
+                    // use a 4MiB stack, just like the first core (see link.ld).
+                    let stack = memory::PhysicalBuffer::alloc(4 * 1024 * 1024 / PAGE_SIZE, &Default::default()).unwrap();
+                    match psci.as_ref().unwrap().cpu_on(cpu_id, entry_point_address, stack.virtual_address().0 + stack.len()) {
+                        Ok(()) => {
+                            log::trace!("successfully powered on CPU #{cpu_id}");
+                            // TODO: ostensibly if we turn off the CPU we need to delete the stack, but otherwise it lives forever
+                            core::mem::forget(stack);
+                        },
+                        Err(e) => { log::error!("failed to power on CPU #{cpu_id} ({cpu_block_name}): {e}"); },
+                    }
+                },
+                _ => log::warn!("CPU {cpu_block_name} (id = {cpu_id}) has unknown or unsupported enable method: {:?}", ds::dtb::StringList::new(cpu_enable_method))
+            }
+    };
+
+    // Iterate over the device tree and find each CPU node, then identify the CPU ID and enable method properties.
+    // Once the node has been processed, the CPU is powered on using `power_on_cpu(...)`.
+    let dti = dt
+        .iter_structure()
+        .skip_while(|i| !matches!(i, ds::dtb::StructureItem::StartNode("cpus")));
+    let mut cpu_block_name = None;
+    let mut cpu_id = None;
+    let mut cpu_enable_method: Option<&[u8]> = None;
+    for i in dti {
+        match i {
+            ds::dtb::StructureItem::StartNode(s) => {
+                if s.starts_with("cpu@") {
+                    cpu_block_name = Some(s);
+                }
+            }
+            ds::dtb::StructureItem::EndNode => {
+                if let Some(cpu_block_name) = cpu_block_name.take() {
+                    match (cpu_id.take(), cpu_enable_method.take()) {
+                        (Some(cpu_id), Some(cpu_enable_method)) => {
+                            if cpu_id != boot_cpu_id {
+                                power_on_cpu(cpu_block_name, cpu_id, cpu_enable_method)
+                            }
+                        }
+                        _ => {
+                            log::warn!("device tree contained incomplete CPU block {cpu_block_name}: CPU ID = {cpu_id:?}, CPU enable method = {cpu_enable_method:?}");
+                        }
+                    }
+                }
+            }
+            ds::dtb::StructureItem::Property { name, data, .. } if cpu_block_name.is_some() => {
+                match name {
+                    "reg" => {
+                        cpu_id = Some(BigEndian::read_u32(data) as usize);
+                    }
+                    "enable-method" => {
+                        cpu_enable_method = Some(data);
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    }
+
+    log::debug!("SMP startup finished!");
 }
 
 /// Spawn the task executor thread as a kernel thread.
