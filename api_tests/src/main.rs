@@ -7,7 +7,6 @@
 #![feature(allocator_api)]
 #![feature(custom_test_frameworks)]
 #![feature(iter_array_chunks)]
-#![feature(non_null_convenience)]
 
 use core::ptr::NonNull;
 

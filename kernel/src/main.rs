@@ -13,7 +13,6 @@
 #![feature(linked_list_cursors)]
 #![feature(custom_test_frameworks)]
 #![feature(iter_array_chunks)]
-#![feature(non_null_convenience)]
 #![feature(error_in_core)]
 #![feature(str_from_raw_parts)]
 #![test_runner(crate::test_runner)]

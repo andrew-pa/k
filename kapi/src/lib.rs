@@ -1,6 +1,5 @@
 //! API definitions and helpers for interacting with the kernel from user space.
 #![no_std]
-#![feature(non_null_convenience)]
 #![deny(missing_docs)]
 
 use core::num::NonZeroU32;
