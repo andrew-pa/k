@@ -43,6 +43,7 @@ impl AllocatedBlockHeader {
     }
 }
 
+/// The actual "contents" of a free block.
 #[derive(Debug)]
 struct FreeBlockHeader {
     size: usize,
@@ -50,6 +51,7 @@ struct FreeBlockHeader {
     prev: *mut FreeBlockHeader,
 }
 
+/// A free block description.
 #[derive(Debug)]
 struct FreeBlock {
     address: VirtualAddress,
@@ -65,6 +67,11 @@ enum BlockAdjacency {
 }
 
 impl FreeBlock {
+    fn new(address: VirtualAddress, size: usize) -> Self {
+        assert_eq!(address.align_offset(core::mem::align_of::<FreeBlockHeader>()), 0, "the address in a free block description must be capable of being a pointer to an actual free block. address = {address}, size = {size}");
+        Self { address, size }
+    }
+
     fn check_adjacency(&self, other: &FreeBlock) -> BlockAdjacency {
         if self.address.add(self.size) == other.address {
             BlockAdjacency::Before
@@ -129,10 +136,9 @@ impl FreeList {
 impl<'a> FreeListCursor<'a> {
     fn current(&self) -> Option<FreeBlock> {
         unsafe {
-            self.current.as_ref().map(|pb| FreeBlock {
-                address: VirtualAddress::from(self.current),
-                size: pb.size,
-            })
+            self.current
+                .as_ref()
+                .map(|pb| FreeBlock::new(VirtualAddress::from(self.current), pb.size))
         }
     }
 
@@ -173,10 +179,7 @@ impl<'a> FreeListCursor<'a> {
                         }
                     }
                 }
-                FreeBlock {
-                    address: VirtualAddress::from(removed_block_p),
-                    size: removed_block.size,
-                }
+                FreeBlock::new(VirtualAddress::from(removed_block_p), removed_block.size)
             })
         }
     }
@@ -416,10 +419,7 @@ impl KernelGlobalAlloc {
         log::trace!("increasing heap size by {}b", num_new_pages * PAGE_SIZE);
         free_list.increase_size(num_new_pages * PAGE_SIZE);
         drop(free_list);
-        self.add_free_block(FreeBlock {
-            address: old_heap_end,
-            size: num_new_pages * PAGE_SIZE,
-        });
+        self.add_free_block(FreeBlock::new(old_heap_end, num_new_pages * PAGE_SIZE));
     }
 
     fn log_heap_info(&self, level: log::Level) {
@@ -434,7 +434,7 @@ impl KernelGlobalAlloc {
             let mut free_size = 0;
             let mut cur = free_list.cursor();
             while let Some(cur_block) = cur.current() {
-                log::log!(level, "{:?}", cur_block);
+                log::log!(level, "\t{:?}", cur_block);
                 free_size += cur_block.size;
                 cur.move_next();
             }
@@ -454,33 +454,39 @@ unsafe impl GlobalAlloc for KernelGlobalAlloc {
         // find and remove a free block that is >= size
         if let Some(block) = self.find_suitable_free_block(&layout) {
             // make it allocated, returning any extra back to the free list
-            let padding = block
+            let padding_before = block
                 .address
                 .add(size_of::<AllocatedBlockHeader>())
                 .align_offset(layout.align());
-            log::trace!("found block {block:?}, required padding = {padding}",);
-            let req_block_size = (layout.size() + size_of::<AllocatedBlockHeader>() + padding)
-                // we can't make a block any smaller than this or freeing the block
-                // will overwrite the next block
-                .max(size_of::<FreeBlockHeader>());
+            let mut req_block_size =
+                (size_of::<AllocatedBlockHeader>() + padding_before + layout.size())
+                    // we can't make a block any smaller than this or freeing the block
+                    // will overwrite the next block
+                    .max(size_of::<FreeBlockHeader>());
+            // make sure that we pad the address of the any remainder block to the correct alignment
+            req_block_size += block
+                .address
+                .add(req_block_size)
+                .align_offset(core::mem::align_of::<FreeBlockHeader>());
+            log::trace!("found block {block:?}, required padding before = {padding_before}, required block size = {req_block_size}");
             let actual_block_size = if block.size - req_block_size > size_of::<FreeBlockHeader>() {
                 // put back the unused part of the block at the end
-                self.add_free_block(FreeBlock {
-                    address: block.address.add(req_block_size),
-                    size: block.size - req_block_size,
-                });
+                self.add_free_block(FreeBlock::new(
+                    block.address.add(req_block_size),
+                    block.size - req_block_size,
+                ));
                 req_block_size
             } else {
                 // use the whole block
                 block.size
             };
             assert!(actual_block_size >= size_of::<FreeBlockHeader>());
-            let padded_address = block.address.add(padding);
+            let padded_address = block.address.add(padding_before);
             // write the allocated block header
             let header: *mut AllocatedBlockHeader = padded_address.as_ptr();
             unsafe {
                 *header.as_mut().expect("p not null") =
-                    AllocatedBlockHeader::new(actual_block_size, padding);
+                    AllocatedBlockHeader::new(actual_block_size, padding_before);
             }
             // return ptr to new allocated block
             let data = padded_address
@@ -525,10 +531,7 @@ unsafe impl GlobalAlloc for KernelGlobalAlloc {
                 "{layout:?}.size <= block_size@{block_size}"
             );
         }
-        self.add_free_block(FreeBlock {
-            address: block_address,
-            size: block_size,
-        });
+        self.add_free_block(FreeBlock::new(block_address, block_size));
         self.log_heap_info(log::Level::Trace);
     }
 }
