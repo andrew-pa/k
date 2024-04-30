@@ -57,7 +57,8 @@ pub extern "C" fn secondary_entry_point(context_id: usize) -> ! {
         "secondary CPU #{} start (context_id = {context_id:x})",
         current_cpu_id()
     );
-    intrinsics::halt();
+
+    idle_loop()
 }
 
 /// The main entry point for the kernel.
@@ -92,15 +93,6 @@ pub extern "C" fn kmain(dtb_addr: PhysicalAddress) -> ! {
     let dt = unsafe { ds::dtb::DeviceTree::at_address(dtb_addr.to_virtual_canonical()) };
     dt.log();
 
-    let mut x: usize;
-    unsafe {
-        core::arch::asm!(
-            "mrs {val}, CPACR_EL1",
-            val = out(reg) x
-        );
-    }
-    log::trace!("CPACR={:b}", x >> 15);
-
     memory::init_physical_memory_allocator(&dt);
     memory::paging::init_kernel_page_table();
 
@@ -108,12 +100,12 @@ pub extern "C" fn kmain(dtb_addr: PhysicalAddress) -> ! {
 
     memory::init_virtual_address_allocator();
     exception::init_interrupts(&dt);
-    init::smp_start(&dt);
     process::thread::scheduler::init_scheduler();
     tasks::init_executor();
     registry::init_registry();
 
-    init::configure_time_slicing(&dt);
+    platform::timer::init(&dt);
+    init::configure_time_slicing();
     init::register_system_call_handlers();
 
     log::info!("kernel systems initialized");
@@ -139,6 +131,13 @@ pub extern "C" fn kmain(dtb_addr: PhysicalAddress) -> ! {
 
     init::spawn_task_executor_thread();
 
+    init::smp_start(dt);
+
+    idle_loop()
+}
+
+/// Enables interrupts and then waits for them to occur forever.
+fn idle_loop() -> ! {
     log::trace!("enabling interrupts");
     unsafe {
         exception::write_interrupt_mask(exception::InterruptMask::all_enabled());

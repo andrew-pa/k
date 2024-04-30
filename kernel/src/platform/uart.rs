@@ -45,13 +45,8 @@ fn color_for_level(lvl: log::Level) -> &'static str {
 }
 
 /// A logger that writes to the debug UART.
+#[derive(Default)]
 pub struct DebugUartLogger {}
-
-impl Default for DebugUartLogger {
-    fn default() -> Self {
-        Self {}
-    }
-}
 
 /// Modules that have Trace/Debug level logging disabled because they are very noisy.
 /// All submodules will also be muted.
@@ -80,7 +75,7 @@ impl log::Log for DebugUartLogger {
         let mut uart = DebugUart::default();
         write!(
             uart,
-            "[\x1b[{}m{:<5} \x1b[90m{}\x1b[0m C{}T",
+            "[\x1b[{}m{:<5} \x1b[90m{}\x1b[0m C{} T",
             color_for_level(record.level()),
             record.level(),
             super::timer::counter(),

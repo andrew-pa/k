@@ -64,9 +64,8 @@ pub fn find_boot_options<'a>(dt: &'a DeviceTree) -> BootOptions<'a> {
 /// Configure time slicing interrupts and initialize the system timer.
 ///
 /// The timer will trigger as soon as interrupts are enabled.
-pub fn configure_time_slicing(dt: &DeviceTree) {
-    let props = timer::TimerProperties::from_device_tree(dt);
-    log::debug!("timer properties = {props:?}");
+pub fn configure_time_slicing() {
+    let props = timer::properties();
     let timer_irq = props.interrupt;
 
     {
@@ -155,13 +154,13 @@ pub fn smp_start(dt: &DeviceTree) {
 
     // Iterate over the device tree and find each CPU node, then identify the CPU ID and enable method properties.
     // Once the node has been processed, the CPU is powered on using `power_on_cpu(...)`.
-    let mut dti = dt
+    let dti = dt
         .iter_structure()
         .skip_while(|i| !matches!(i, ds::dtb::StructureItem::StartNode("cpus")));
     let mut cpu_block_name = None;
     let mut cpu_id = None;
     let mut cpu_enable_method: Option<&[u8]> = None;
-    while let Some(i) = dti.next() {
+    for i in dti {
         match i {
             ds::dtb::StructureItem::StartNode(s) => {
                 if s.starts_with("cpu@") {

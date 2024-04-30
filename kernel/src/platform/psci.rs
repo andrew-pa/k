@@ -8,10 +8,7 @@ use bytemuck::Contiguous;
 use byteorder::{BigEndian, ByteOrder};
 use snafu::Snafu;
 
-use crate::{
-    ds::dtb::DeviceTree,
-    memory::{PhysicalAddress, VirtualAddress},
-};
+use crate::{ds::dtb::DeviceTree, memory::PhysicalAddress};
 
 use super::CpuId;
 
