@@ -1,7 +1,7 @@
 //! Asynchronous results that can be received in user-space from the kernel via a [crate::queue::Queue].
 use bytemuck::Contiguous;
 
-use crate::{queue::QueueId, ProcessId, ThreadId};
+use crate::{queue::QueueId, FileHandle, ProcessId, ThreadId};
 
 macro_rules! impl_into_kind {
     ($t:ident) => {
@@ -124,6 +124,24 @@ pub struct NewProcess {
 }
 impl_into_kind!(NewProcess);
 
+/// Response to a [crate::commands::CreateFile] command.
+#[repr(C)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenedFileHandle {
+    /// The newly opened handle.
+    pub handle: FileHandle,
+    /// The size of the file in bytes.
+    pub size: usize,
+}
+
+/// Response to a [crate::commands::ReadFile] or [crate::commands::WriteFile] command.
+#[repr(C)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BytesProcessed {
+    /// Actual number of bytes read or written.
+    pub num_bytes: usize,
+}
+
 /// Type of completion and any resulting values returned by the command.
 #[repr(u16)]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -139,6 +157,7 @@ pub enum Kind {
     NewThread(NewThread),
     ThreadExit(ThreadExit),
     NewProcess(NewProcess),
+    OpenedFileHandle(OpenedFileHandle),
     /// The command failed to complete successfully.
     Err(ErrorCode),
 }

@@ -9,6 +9,8 @@ use core::ptr::null;
 pub type ProcessId = NonZeroU32;
 /// The system-wide unique ID of a thread.
 pub type ThreadId = u32;
+/// The process-unique ID of an open file.
+pub type FileHandle = NonZeroU32;
 
 pub mod commands;
 pub mod completions;
