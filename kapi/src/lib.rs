@@ -3,7 +3,7 @@
 #![deny(missing_docs)]
 
 use core::num::NonZeroU32;
-use core::ptr::null;
+use core::ptr::{null, null_mut};
 
 /// The unique ID of a process.
 pub type ProcessId = NonZeroU32;
@@ -49,7 +49,7 @@ impl From<&str> for Path {
 /// A slice of memory containing arbitrary data.
 ///
 /// # Safety
-/// It is up to the user to ensure that the `data` pointer is valid until the path is no longer in
+/// It is up to the user to ensure that the `data` pointer is valid until the buffer is no longer in
 /// use (i.e. the completion to the command containing the path has been received).
 /// It is additionally up to the user to make sure that the provided pointer is in fact [Send].
 #[repr(C)]
@@ -76,6 +76,42 @@ impl From<&[u8]> for Buffer {
     fn from(value: &[u8]) -> Self {
         Self {
             data: value.as_ptr(),
+            len: value.len(),
+        }
+    }
+}
+
+/// A slice of memory containing arbitrary mutable data.
+///
+/// # Safety
+/// It is up to the user to ensure that the `data` pointer is valid until the buffer is no longer in
+/// use (i.e. the completion to the command containing the path has been received).
+/// It is additionally up to the user to make sure that the provided pointer is in fact [Send], and
+/// that the Rust aliasing/sharing rules are not violated.
+#[repr(C)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BufferMut {
+    /// Pointer to the start of buffer.
+    pub data: *mut u8,
+    /// Length of the buffer in bytes.
+    pub len: usize,
+}
+unsafe impl Send for BufferMut {}
+
+impl BufferMut {
+    /// Create an empty buffer that contains no bytes.
+    pub fn empty() -> Self {
+        Self {
+            data: null_mut(),
+            len: 0,
+        }
+    }
+}
+
+impl From<&mut [u8]> for BufferMut {
+    fn from(value: &mut [u8]) -> Self {
+        Self {
+            data: value.as_mut_ptr(),
             len: value.len(),
         }
     }

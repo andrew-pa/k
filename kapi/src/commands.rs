@@ -1,6 +1,6 @@
 //! Asynchronous commands that can be submitted to the kernel from user-space via a [crate::queue::Queue].
 
-use crate::{queue::QueueId, Buffer, FileHandle, Path, ProcessId, ThreadId};
+use crate::{queue::QueueId, Buffer, BufferMut, FileHandle, Path, ProcessId, ThreadId};
 
 macro_rules! impl_into_kind {
     ($t:ident) => {
@@ -163,11 +163,10 @@ pub struct OpenFile {
 impl_into_kind!(OpenFile);
 
 /// Read data from a file into a buffer.
-/// [Completion Type][crate::completions::BytesProcessed]
+/// [Completion Type][crate::completions::Success]
 ///
 /// At most the entire buffer is filled with data from the file, starting from the offset.
-/// If the length to read extends past the end of the file, only the data up to the end will be
-/// transfered.
+/// If the length to read extends past the end of the file, an [crate::completions::ErrorCode::OutOfBounds] error will occur.
 #[repr(C)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReadFile {
@@ -177,15 +176,15 @@ pub struct ReadFile {
     pub src_offset: usize,
     /// The destination buffer to fill. This buffer *must* stay valid until the completion is
     /// received for the read to be safe.
-    pub dst_buffer: Buffer,
+    pub dst_buffer: BufferMut,
 }
 impl_into_kind!(ReadFile);
 
 /// Write data from a buffer into a file.
-/// [Completion Type][crate::completions::BytesProcessed]
+/// [Completion Type][crate::completions::Success]
 ///
 /// At most the entire buffer is written to the file, starting from the offset.
-/// If the length to write extends past the end of the file, an error will occur.
+/// If the length to write extends past the end of the file, an [crate::completions::ErrorCode::OutOfBounds] error will occur.
 #[repr(C)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WriteFile {
@@ -230,7 +229,8 @@ impl_into_kind!(CloseFile);
 #[repr(C)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeleteFile {
-    // TODO
+    /// Path to the file to delete.
+    pub path: Path,
 }
 impl_into_kind!(DeleteFile);
 
@@ -264,8 +264,8 @@ pub enum Kind {
     ReadFile(ReadFile),
     WriteFile(WriteFile),
     ResizeFile(ResizeFile),
-    DeleteFile(DeleteFile),
     CloseFile(CloseFile),
+    DeleteFile(DeleteFile),
 }
 
 /// A command that can be sent to the kernel.

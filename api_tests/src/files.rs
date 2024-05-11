@@ -1,0 +1,745 @@
+use kapi::{
+    commands::{
+        CloseFile, Command, CreateFile, DeleteFile, OpenFile, ReadFile, ResizeFile, WriteFile,
+    },
+    completions::{Completion, ErrorCode, Kind as CmplKind, OpenedFileHandle},
+    queue::Queue,
+    system_calls::yield_now,
+    Buffer, BufferMut, FileHandle, Path,
+};
+
+use crate::Testable;
+
+pub const TESTS: &[&dyn Testable] = &[
+    &open_close,
+    &create_close_delete,
+    &fail_to_create_existing,
+    &fail_to_open_not_existing,
+    &open_read_close,
+    &open_partial_read_close,
+    &create_write_close,
+    &open_read_close_created_file,
+    &open_read_past_end_close_created_file,
+    &open_write_past_end_close_created_file,
+    &delete_created_file,
+    &fail_to_delete_non_existing,
+    &fail_to_read_bad_handle,
+    &fail_to_write_bad_handle,
+    &fail_to_resize_bad_handle,
+    &fail_to_close_bad_handle,
+];
+
+fn open_close(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
+    send_qu
+        .post(Command {
+            id: 0,
+            kind: OpenFile {
+                path: Path::from("/volumes/root/bin/test_process"),
+            }
+            .into(),
+        })
+        .expect("send open file");
+
+    let mut f: Option<OpenedFileHandle> = None;
+    while f.is_none() {
+        if let Some(c) = recv_qu.poll() {
+            assert_eq!(c.response_to_id, 0);
+            match c.kind {
+                CmplKind::OpenedFileHandle(r) => f = Some(r),
+                _ => panic!("unexpected completion: {c:?}"),
+            }
+        }
+        yield_now();
+    }
+
+    let f = f.unwrap();
+    log::debug!("got file handle: {f:?}");
+    assert!(f.size > 0);
+
+    send_qu
+        .post(Command {
+            id: 1,
+            kind: CloseFile { handle: f.handle }.into(),
+        })
+        .expect("send close file");
+
+    loop {
+        if let Some(c) = recv_qu.poll() {
+            assert_eq!(c.response_to_id, 1);
+            assert_eq!(c.kind, CmplKind::Success);
+            break;
+        }
+        yield_now();
+    }
+}
+
+fn create_close_delete(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
+    let path = Path::from("/volumes/root/tmp-test-file");
+
+    send_qu
+        .post(Command {
+            id: 0,
+            kind: CreateFile {
+                path: path.clone(),
+                initial_size: 512,
+                open_if_exists: false,
+            }
+            .into(),
+        })
+        .expect("send create file");
+
+    let mut f: Option<OpenedFileHandle> = None;
+    while f.is_none() {
+        if let Some(c) = recv_qu.poll() {
+            assert_eq!(c.response_to_id, 0);
+            match c.kind {
+                CmplKind::OpenedFileHandle(r) => f = Some(r),
+                _ => panic!("unexpected completion: {c:?}"),
+            }
+        }
+        yield_now();
+    }
+
+    let f = f.unwrap();
+    log::debug!("got file handle: {f:?}");
+    assert_eq!(f.size, 512);
+
+    send_qu
+        .post(Command {
+            id: 1,
+            kind: CloseFile { handle: f.handle }.into(),
+        })
+        .expect("send close file");
+
+    loop {
+        if let Some(c) = recv_qu.poll() {
+            assert_eq!(c.response_to_id, 1);
+            assert_eq!(c.kind, CmplKind::Success);
+            break;
+        }
+        yield_now();
+    }
+
+    send_qu
+        .post(Command {
+            id: 2,
+            kind: DeleteFile { path }.into(),
+        })
+        .expect("send delete file");
+
+    loop {
+        if let Some(c) = recv_qu.poll() {
+            assert_eq!(c.response_to_id, 2);
+            assert_eq!(c.kind, CmplKind::Success);
+            break;
+        }
+        yield_now();
+    }
+}
+
+fn fail_to_create_existing(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
+    send_qu
+        .post(Command {
+            id: 0,
+            kind: CreateFile {
+                path: Path::from("/volumes/root/bin/test_process"),
+                initial_size: 512,
+                open_if_exists: false,
+            }
+            .into(),
+        })
+        .expect("send create file");
+
+    loop {
+        if let Some(c) = recv_qu.poll() {
+            assert_eq!(c.response_to_id, 0);
+            assert_eq!(c.kind, CmplKind::Err(ErrorCode::AlreadyExists));
+            break;
+        }
+        yield_now();
+    }
+}
+
+fn fail_to_open_not_existing(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
+    send_qu
+        .post(Command {
+            id: 0,
+            kind: OpenFile {
+                path: Path::from("/dne"),
+            }
+            .into(),
+        })
+        .expect("send open file");
+
+    loop {
+        if let Some(c) = recv_qu.poll() {
+            assert_eq!(c.response_to_id, 0);
+            assert_eq!(c.kind, CmplKind::Err(ErrorCode::NotFound));
+            break;
+        }
+        yield_now();
+    }
+}
+
+/// The known path of the test data file that contains [KNOWN_TEST_DATA].
+const KNOWN_TEST_DATA_PATH: &str = "/volumes/root/test-data-file";
+/// This is the output of `printf "%.1s" {1..64}` as generated by the `Makefile`.
+const KNOWN_TEST_DATA: &[u8] = b"1234567891111111111222222222233333333334444444444555555555566666";
+
+fn open_read_close(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
+    send_qu
+        .post(Command {
+            id: 0,
+            kind: OpenFile {
+                path: Path::from(KNOWN_TEST_DATA_PATH),
+            }
+            .into(),
+        })
+        .expect("send open file");
+
+    let mut f: Option<OpenedFileHandle> = None;
+    while f.is_none() {
+        if let Some(c) = recv_qu.poll() {
+            assert_eq!(c.response_to_id, 0);
+            match c.kind {
+                CmplKind::OpenedFileHandle(r) => f = Some(r),
+                _ => panic!("unexpected completion: {c:?}"),
+            }
+        }
+        yield_now();
+    }
+
+    let f = f.unwrap();
+    log::debug!("got file handle: {f:?}");
+    assert_eq!(f.size, KNOWN_TEST_DATA.len());
+
+    let mut data = [0u8; KNOWN_TEST_DATA.len()];
+    send_qu
+        .post(Command {
+            id: 1,
+            kind: ReadFile {
+                src_handle: f.handle,
+                src_offset: 0,
+                dst_buffer: BufferMut::from(&mut data[..]),
+            }
+            .into(),
+        })
+        .expect("send read file");
+
+    loop {
+        if let Some(c) = recv_qu.poll() {
+            assert_eq!(c.response_to_id, 1);
+            assert_eq!(c.kind, CmplKind::Success);
+            break;
+        }
+        yield_now();
+    }
+
+    assert_eq!(data, KNOWN_TEST_DATA);
+
+    send_qu
+        .post(Command {
+            id: 1,
+            kind: CloseFile { handle: f.handle }.into(),
+        })
+        .expect("send close file");
+
+    loop {
+        if let Some(c) = recv_qu.poll() {
+            assert_eq!(c.response_to_id, 1);
+            assert_eq!(c.kind, CmplKind::Success);
+            break;
+        }
+        yield_now();
+    }
+}
+
+fn open_partial_read_close(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
+    send_qu
+        .post(Command {
+            id: 0,
+            kind: OpenFile {
+                path: Path::from(KNOWN_TEST_DATA_PATH),
+            }
+            .into(),
+        })
+        .expect("send open file");
+
+    let mut f: Option<OpenedFileHandle> = None;
+    while f.is_none() {
+        if let Some(c) = recv_qu.poll() {
+            assert_eq!(c.response_to_id, 0);
+            match c.kind {
+                CmplKind::OpenedFileHandle(r) => f = Some(r),
+                _ => panic!("unexpected completion: {c:?}"),
+            }
+        }
+        yield_now();
+    }
+
+    let f = f.unwrap();
+    log::debug!("got file handle: {f:?}");
+    assert_eq!(f.size, KNOWN_TEST_DATA.len());
+
+    let mut data = [0u8; 2];
+
+    for offset in 0..KNOWN_TEST_DATA.len() - 2 {
+        send_qu
+            .post(Command {
+                id: 1,
+                kind: ReadFile {
+                    src_handle: f.handle,
+                    src_offset: offset,
+                    dst_buffer: BufferMut::from(&mut data[..]),
+                }
+                .into(),
+            })
+            .expect("send read file");
+
+        loop {
+            if let Some(c) = recv_qu.poll() {
+                assert_eq!(c.response_to_id, 1);
+                assert_eq!(c.kind, CmplKind::Success);
+                break;
+            }
+            yield_now();
+        }
+
+        assert_eq!(data, KNOWN_TEST_DATA[offset..offset + data.len()]);
+    }
+
+    send_qu
+        .post(Command {
+            id: 1,
+            kind: CloseFile { handle: f.handle }.into(),
+        })
+        .expect("send close file");
+
+    loop {
+        if let Some(c) = recv_qu.poll() {
+            assert_eq!(c.response_to_id, 1);
+            assert_eq!(c.kind, CmplKind::Success);
+            break;
+        }
+        yield_now();
+    }
+}
+
+const CREATED_TEST_FILE_PATH: &str = "/volumes/root/test-file";
+const CREATED_TEST_DATA: &[u8] = b"hello, world!\n";
+
+fn create_write_close(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
+    let path = Path::from(CREATED_TEST_FILE_PATH);
+
+    send_qu
+        .post(Command {
+            id: 0,
+            kind: CreateFile {
+                path: path.clone(),
+                initial_size: CREATED_TEST_DATA.len(),
+                open_if_exists: false,
+            }
+            .into(),
+        })
+        .expect("send create file");
+
+    let mut f: Option<OpenedFileHandle> = None;
+    while f.is_none() {
+        if let Some(c) = recv_qu.poll() {
+            assert_eq!(c.response_to_id, 0);
+            match c.kind {
+                CmplKind::OpenedFileHandle(r) => f = Some(r),
+                _ => panic!("unexpected completion: {c:?}"),
+            }
+        }
+        yield_now();
+    }
+
+    let f = f.unwrap();
+    log::debug!("got file handle: {f:?}");
+    assert_eq!(f.size, CREATED_TEST_DATA.len());
+
+    send_qu
+        .post(Command {
+            id: 1,
+            kind: WriteFile {
+                dst_handle: f.handle,
+                dst_offset: 0,
+                src_buffer: Buffer::from(CREATED_TEST_DATA),
+            }
+            .into(),
+        })
+        .expect("send write file");
+
+    send_qu
+        .post(Command {
+            id: 1,
+            kind: CloseFile { handle: f.handle }.into(),
+        })
+        .expect("send close file");
+
+    loop {
+        if let Some(c) = recv_qu.poll() {
+            assert_eq!(c.response_to_id, 1);
+            assert_eq!(c.kind, CmplKind::Success);
+            break;
+        }
+        yield_now();
+    }
+}
+
+fn open_read_close_created_file(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
+    send_qu
+        .post(Command {
+            id: 0,
+            kind: OpenFile {
+                path: Path::from(CREATED_TEST_FILE_PATH),
+            }
+            .into(),
+        })
+        .expect("send open file");
+
+    let mut f: Option<OpenedFileHandle> = None;
+    while f.is_none() {
+        if let Some(c) = recv_qu.poll() {
+            assert_eq!(c.response_to_id, 0);
+            match c.kind {
+                CmplKind::OpenedFileHandle(r) => f = Some(r),
+                _ => panic!("unexpected completion: {c:?}"),
+            }
+        }
+        yield_now();
+    }
+
+    let f = f.unwrap();
+    log::debug!("got file handle: {f:?}");
+    assert_eq!(f.size, CREATED_TEST_DATA.len());
+
+    let mut data = [0u8; CREATED_TEST_DATA.len()];
+    send_qu
+        .post(Command {
+            id: 1,
+            kind: ReadFile {
+                src_handle: f.handle,
+                src_offset: 0,
+                dst_buffer: BufferMut::from(&mut data[..]),
+            }
+            .into(),
+        })
+        .expect("send read file");
+
+    loop {
+        if let Some(c) = recv_qu.poll() {
+            assert_eq!(c.response_to_id, 1);
+            assert_eq!(c.kind, CmplKind::Success);
+            break;
+        }
+        yield_now();
+    }
+
+    assert_eq!(&data, CREATED_TEST_DATA);
+
+    send_qu
+        .post(Command {
+            id: 1,
+            kind: CloseFile { handle: f.handle }.into(),
+        })
+        .expect("send close file");
+
+    loop {
+        if let Some(c) = recv_qu.poll() {
+            assert_eq!(c.response_to_id, 1);
+            assert_eq!(c.kind, CmplKind::Success);
+            break;
+        }
+        yield_now();
+    }
+}
+
+fn open_read_past_end_close_created_file(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
+    send_qu
+        .post(Command {
+            id: 0,
+            kind: OpenFile {
+                path: Path::from(CREATED_TEST_FILE_PATH),
+            }
+            .into(),
+        })
+        .expect("send open file");
+
+    let mut f: Option<OpenedFileHandle> = None;
+    while f.is_none() {
+        if let Some(c) = recv_qu.poll() {
+            assert_eq!(c.response_to_id, 0);
+            match c.kind {
+                CmplKind::OpenedFileHandle(r) => f = Some(r),
+                _ => panic!("unexpected completion: {c:?}"),
+            }
+        }
+        yield_now();
+    }
+
+    let f = f.unwrap();
+    log::debug!("got file handle: {f:?}");
+    assert_eq!(f.size, CREATED_TEST_DATA.len());
+
+    let mut data = [0u8; 4];
+
+    send_qu
+        .post(Command {
+            id: 1,
+            kind: ReadFile {
+                src_handle: f.handle,
+                src_offset: CREATED_TEST_DATA.len(),
+                dst_buffer: BufferMut::from(&mut data[..]),
+            }
+            .into(),
+        })
+        .expect("send read file");
+
+    loop {
+        if let Some(c) = recv_qu.poll() {
+            assert_eq!(c.response_to_id, 1);
+            assert_eq!(c.kind, CmplKind::Err(ErrorCode::OutOfBounds));
+            break;
+        }
+        yield_now();
+    }
+
+    send_qu
+        .post(Command {
+            id: 1,
+            kind: CloseFile { handle: f.handle }.into(),
+        })
+        .expect("send close file");
+
+    loop {
+        if let Some(c) = recv_qu.poll() {
+            assert_eq!(c.response_to_id, 1);
+            assert_eq!(c.kind, CmplKind::Success);
+            break;
+        }
+        yield_now();
+    }
+}
+
+fn open_write_past_end_close_created_file(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
+    send_qu
+        .post(Command {
+            id: 0,
+            kind: OpenFile {
+                path: Path::from(CREATED_TEST_FILE_PATH),
+            }
+            .into(),
+        })
+        .expect("send open file");
+
+    let mut f: Option<OpenedFileHandle> = None;
+    while f.is_none() {
+        if let Some(c) = recv_qu.poll() {
+            assert_eq!(c.response_to_id, 0);
+            match c.kind {
+                CmplKind::OpenedFileHandle(r) => f = Some(r),
+                _ => panic!("unexpected completion: {c:?}"),
+            }
+        }
+        yield_now();
+    }
+
+    let f = f.unwrap();
+    log::debug!("got file handle: {f:?}");
+    assert_eq!(f.size, CREATED_TEST_DATA.len());
+
+    let data = [0u8; 4];
+
+    send_qu
+        .post(Command {
+            id: 1,
+            kind: WriteFile {
+                dst_handle: f.handle,
+                dst_offset: CREATED_TEST_DATA.len(),
+                src_buffer: Buffer::from(&data[..]),
+            }
+            .into(),
+        })
+        .expect("send read file");
+
+    loop {
+        if let Some(c) = recv_qu.poll() {
+            assert_eq!(c.response_to_id, 1);
+            assert_eq!(c.kind, CmplKind::Err(ErrorCode::OutOfBounds));
+            break;
+        }
+        yield_now();
+    }
+
+    send_qu
+        .post(Command {
+            id: 1,
+            kind: CloseFile { handle: f.handle }.into(),
+        })
+        .expect("send close file");
+
+    loop {
+        if let Some(c) = recv_qu.poll() {
+            assert_eq!(c.response_to_id, 1);
+            assert_eq!(c.kind, CmplKind::Success);
+            break;
+        }
+        yield_now();
+    }
+}
+
+fn delete_created_file(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
+    send_qu
+        .post(Command {
+            id: 2,
+            kind: DeleteFile {
+                path: Path::from(CREATED_TEST_FILE_PATH),
+            }
+            .into(),
+        })
+        .expect("send delete file");
+
+    loop {
+        if let Some(c) = recv_qu.poll() {
+            assert_eq!(c.response_to_id, 2);
+            assert_eq!(c.kind, CmplKind::Success);
+            break;
+        }
+        yield_now();
+    }
+
+    //make sure it is gone
+
+    send_qu
+        .post(Command {
+            id: 3,
+            kind: OpenFile {
+                path: Path::from(CREATED_TEST_FILE_PATH),
+            }
+            .into(),
+        })
+        .expect("send open file");
+
+    loop {
+        if let Some(c) = recv_qu.poll() {
+            assert_eq!(c.response_to_id, 3);
+            assert_eq!(c.kind, CmplKind::Err(ErrorCode::NotFound));
+            break;
+        }
+        yield_now();
+    }
+}
+
+fn fail_to_delete_non_existing(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
+    send_qu
+        .post(Command {
+            id: 0,
+            kind: DeleteFile {
+                path: Path::from("/dne"),
+            }
+            .into(),
+        })
+        .expect("send delete file");
+
+    loop {
+        if let Some(c) = recv_qu.poll() {
+            assert_eq!(c.response_to_id, 0);
+            assert_eq!(c.kind, CmplKind::Err(ErrorCode::NotFound));
+            break;
+        }
+        yield_now();
+    }
+}
+
+fn fail_to_read_bad_handle(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
+    let mut data = [0u8; 1];
+    send_qu
+        .post(Command {
+            id: 0,
+            kind: ReadFile {
+                src_handle: FileHandle::new(12345678).unwrap(),
+                src_offset: 0,
+                dst_buffer: BufferMut::from(&mut data[..]),
+            }
+            .into(),
+        })
+        .expect("send read file");
+
+    loop {
+        if let Some(c) = recv_qu.poll() {
+            assert_eq!(c.response_to_id, 0);
+            assert_eq!(c.kind, CmplKind::Err(ErrorCode::InvalidId));
+            break;
+        }
+        yield_now();
+    }
+}
+
+fn fail_to_write_bad_handle(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
+    let data = [0u8; 1];
+    send_qu
+        .post(Command {
+            id: 0,
+            kind: WriteFile {
+                dst_handle: FileHandle::new(12345678).unwrap(),
+                dst_offset: 0,
+                src_buffer: Buffer::from(&data[..]),
+            }
+            .into(),
+        })
+        .expect("send write file");
+
+    loop {
+        if let Some(c) = recv_qu.poll() {
+            assert_eq!(c.response_to_id, 0);
+            assert_eq!(c.kind, CmplKind::Err(ErrorCode::InvalidId));
+            break;
+        }
+        yield_now();
+    }
+}
+
+fn fail_to_resize_bad_handle(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
+    send_qu
+        .post(Command {
+            id: 0,
+            kind: ResizeFile {
+                handle: FileHandle::new(12345678).unwrap(),
+                new_size: 1000,
+            }
+            .into(),
+        })
+        .expect("send resize file");
+
+    loop {
+        if let Some(c) = recv_qu.poll() {
+            assert_eq!(c.response_to_id, 0);
+            assert_eq!(c.kind, CmplKind::Err(ErrorCode::InvalidId));
+            break;
+        }
+        yield_now();
+    }
+}
+
+fn fail_to_close_bad_handle(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
+    send_qu
+        .post(Command {
+            id: 0,
+            kind: CloseFile {
+                handle: FileHandle::new(12345678).unwrap(),
+            }
+            .into(),
+        })
+        .expect("send close file");
+
+    loop {
+        if let Some(c) = recv_qu.poll() {
+            assert_eq!(c.response_to_id, 0);
+            assert_eq!(c.kind, CmplKind::Err(ErrorCode::InvalidId));
+            break;
+        }
+        yield_now();
+    }
+}
