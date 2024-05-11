@@ -55,6 +55,27 @@ pub fn wait_for_success(recv_qu: &Queue<Completion>, id: u16) {
     }
 }
 
+macro_rules! wait_for_result_value {
+    ($recv_qu:expr, $id:expr, $res:pat => $extract:expr) => {{
+        let mut v: Option<_> = None;
+        while v.is_none() {
+            if let Some(c) = $recv_qu.poll() {
+                assert_eq!(c.response_to_id, $id);
+                match c.kind {
+                    $res => v = Some($extract),
+                    _ => panic!(
+                        "Unexpected completion for #{}: {c:?}. Expected: {}",
+                        $id,
+                        stringify!($res)
+                    ),
+                }
+            }
+            yield_now();
+        }
+        v.unwrap()
+    }};
+}
+
 pub fn test_runner(
     tests: &[&[&dyn Testable]],
     send_qu: &Queue<Command>,
@@ -91,14 +112,8 @@ fn cmd_test(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
         })
         .expect("post message to channel");
 
-    loop {
-        if let Some(c) = recv_qu.poll() {
-            assert_eq!(c.response_to_id, 0);
-            assert_eq!(c.kind, completions::Test { pid, arg: 42 }.into());
-            return;
-        }
-        yield_now();
-    }
+    let rpid = wait_for_result_value!(recv_qu, 0, CmplKind::Test(completions::Test { pid, arg: 42 }) => pid);
+    assert_eq!(pid, rpid);
 }
 
 // TODO: new test that sends lots of messages to make sure that queue wrapping works correctly

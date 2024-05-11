@@ -34,29 +34,11 @@ fn basic(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
         })
         .expect("send spawn process");
 
-    let mut pid: Option<ProcessId> = None;
-    while pid.is_none() {
-        if let Some(c) = recv_qu.poll() {
-            assert_eq!(c.response_to_id, 0);
-            match c.kind {
-                CmplKind::NewProcess(nt) => {
-                    pid = Some(nt.id);
-                }
-                _ => panic!("unexpected completion: {c:?}"),
-            }
-        }
-        yield_now();
-    }
+    let pid = wait_for_result_value!(recv_qu, 0, CmplKind::NewProcess(np) => np.id);
+    log::info!("spawned process {pid}");
 
     // wait for the process to exit
-    loop {
-        if let Some(c) = recv_qu.poll() {
-            assert_eq!(c.response_to_id, 0);
-            assert_eq!(c.kind, CmplKind::ThreadExit(ThreadExit::Normal(0)));
-            break;
-        }
-        yield_now();
-    }
+    wait_for_result_value!(recv_qu, 0, CmplKind::ThreadExit(ThreadExit::Normal(0)) => ());
 }
 
 fn basic_watch(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
@@ -72,20 +54,7 @@ fn basic_watch(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
         })
         .expect("send spawn process");
 
-    let mut pid: Option<ProcessId> = None;
-    while pid.is_none() {
-        if let Some(c) = recv_qu.poll() {
-            assert_eq!(c.response_to_id, 0);
-            match c.kind {
-                CmplKind::NewProcess(nt) => {
-                    pid = Some(nt.id);
-                }
-                _ => panic!("unexpected completion: {c:?}"),
-            }
-        }
-        yield_now();
-    }
-    let pid = pid.expect("get pid");
+    let pid = wait_for_result_value!(recv_qu, 0, CmplKind::NewProcess(np) => np.id);
 
     send_qu
         .post(Command {
@@ -200,20 +169,7 @@ fn basic_kill(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
         })
         .expect("send spawn process");
 
-    let mut pid: Option<ProcessId> = None;
-    while pid.is_none() {
-        if let Some(c) = recv_qu.poll() {
-            assert_eq!(c.response_to_id, 0);
-            match c.kind {
-                CmplKind::NewProcess(nt) => {
-                    pid = Some(nt.id);
-                }
-                _ => panic!("unexpected completion: {c:?}"),
-            }
-        }
-        yield_now();
-    }
-    let pid = pid.expect("get pid");
+    let pid = wait_for_result_value!(recv_qu, 0, CmplKind::NewProcess(np) => np.id);
 
     send_qu
         .post(Command {

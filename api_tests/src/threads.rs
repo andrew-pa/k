@@ -8,10 +8,9 @@ use kapi::{
     completions::{Completion, ErrorCode, Kind as CmplKind, ThreadExit},
     queue::Queue,
     system_calls::{exit, yield_now},
-    ThreadId,
 };
 
-use crate::Testable;
+use crate::{wait_for_error_response, Testable};
 
 pub const TESTS: &[&dyn Testable] = &[
     &basic,
@@ -47,31 +46,10 @@ fn basic(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
         })
         .expect("spawn thread");
 
-    let mut tid: Option<ThreadId> = None;
-    while tid.is_none() {
-        if let Some(c) = recv_qu.poll() {
-            assert_eq!(c.response_to_id, 0);
-            match c.kind {
-                CmplKind::NewThread(nt) => {
-                    tid = Some(nt.id);
-                }
-                _ => panic!("unexpected completion: {c:?}"),
-            }
-        }
-        yield_now();
-    }
-
-    let tid = tid.unwrap();
+    let tid = wait_for_result_value!(recv_qu, 0, CmplKind::NewThread(nt) => nt.id);
     log::debug!("created thread {tid}");
 
-    loop {
-        if let Some(c) = recv_qu.poll() {
-            assert_eq!(c.response_to_id, 0);
-            assert_eq!(c.kind, CmplKind::ThreadExit(ThreadExit::Normal(7)));
-            break;
-        }
-        yield_now();
-    }
+    wait_for_result_value!(recv_qu, 0, CmplKind::ThreadExit(ThreadExit::Normal(7)) => ());
 
     assert_eq!(data, 87654321, "check thread modified user data");
 }
@@ -102,21 +80,7 @@ fn basic_watch(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
         })
         .expect("spawn thread");
 
-    let mut tid: Option<ThreadId> = None;
-    while tid.is_none() {
-        if let Some(c) = recv_qu.poll() {
-            assert_eq!(c.response_to_id, 0);
-            match c.kind {
-                CmplKind::NewThread(nt) => {
-                    tid = Some(nt.id);
-                }
-                _ => panic!("unexpected completion: {c:?}"),
-            }
-        }
-        yield_now();
-    }
-
-    let tid = tid.unwrap();
+    let tid = wait_for_result_value!(recv_qu, 0, CmplKind::NewThread(nt) => nt.id);
     log::debug!("created thread {tid}");
 
     send_qu
@@ -161,16 +125,7 @@ fn fail_to_create_thread_with_no_stack(send_qu: &Queue<Command>, recv_qu: &Queue
         .expect("post create queue msg");
 
     // wait for the error to come back
-    loop {
-        if let Some(c) = recv_qu.poll() {
-            assert_eq!(c.response_to_id, 1);
-            match c.kind {
-                CmplKind::Err(ErrorCode::InvalidSize) => return,
-                _ => panic!("unexpected completion: {c:?}"),
-            }
-        }
-        yield_now();
-    }
+    wait_for_error_response(recv_qu, 1, ErrorCode::InvalidSize);
 }
 
 fn thread_with_bad_entry_point_page_faults(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
@@ -189,29 +144,8 @@ fn thread_with_bad_entry_point_page_faults(send_qu: &Queue<Command>, recv_qu: &Q
         })
         .expect("post create queue msg");
 
-    let mut tid: Option<ThreadId> = None;
-    while tid.is_none() {
-        if let Some(c) = recv_qu.poll() {
-            assert_eq!(c.response_to_id, 0);
-            match c.kind {
-                CmplKind::NewThread(nt) => {
-                    tid = Some(nt.id);
-                }
-                _ => panic!("unexpected completion: {c:?}"),
-            }
-        }
-        yield_now();
-    }
+    wait_for_result_value!(recv_qu, 0, CmplKind::NewThread(_) => ());
 
     // wait for the thread to page fault
-    loop {
-        if let Some(c) = recv_qu.poll() {
-            assert_eq!(c.response_to_id, 0);
-            match c.kind {
-                CmplKind::ThreadExit(ThreadExit::PageFault) => return,
-                _ => panic!("unexpected completion: {c:?}"),
-            }
-        }
-        yield_now();
-    }
+    wait_for_result_value!(recv_qu, 0, CmplKind::ThreadExit(ThreadExit::PageFault) => ());
 }

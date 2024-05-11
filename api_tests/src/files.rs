@@ -2,7 +2,7 @@ use kapi::{
     commands::{
         CloseFile, Command, CreateFile, DeleteFile, OpenFile, ReadFile, ResizeFile, WriteFile,
     },
-    completions::{Completion, ErrorCode, Kind as CmplKind, OpenedFileHandle},
+    completions::{Completion, ErrorCode, Kind as CmplKind},
     queue::Queue,
     system_calls::yield_now,
     Buffer, BufferMut, FileHandle, Path,
@@ -40,19 +40,8 @@ fn open_close(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
         })
         .expect("send open file");
 
-    let mut f: Option<OpenedFileHandle> = None;
-    while f.is_none() {
-        if let Some(c) = recv_qu.poll() {
-            assert_eq!(c.response_to_id, 0);
-            match c.kind {
-                CmplKind::OpenedFileHandle(r) => f = Some(r),
-                _ => panic!("unexpected completion: {c:?}"),
-            }
-        }
-        yield_now();
-    }
+    let f = wait_for_result_value!(recv_qu, 0, CmplKind::OpenedFileHandle(r) => r);
 
-    let f = f.unwrap();
     log::debug!("got file handle: {f:?}");
     assert!(f.size > 0);
 
@@ -81,19 +70,8 @@ fn create_close_delete(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
         })
         .expect("send create file");
 
-    let mut f: Option<OpenedFileHandle> = None;
-    while f.is_none() {
-        if let Some(c) = recv_qu.poll() {
-            assert_eq!(c.response_to_id, 0);
-            match c.kind {
-                CmplKind::OpenedFileHandle(r) => f = Some(r),
-                _ => panic!("unexpected completion: {c:?}"),
-            }
-        }
-        yield_now();
-    }
+    let f = wait_for_result_value!(recv_qu, 0, CmplKind::OpenedFileHandle(r) => r);
 
-    let f = f.unwrap();
     log::debug!("got file handle: {f:?}");
     assert_eq!(f.size, 512);
 
@@ -162,19 +140,8 @@ fn open_read_close(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
         })
         .expect("send open file");
 
-    let mut f: Option<OpenedFileHandle> = None;
-    while f.is_none() {
-        if let Some(c) = recv_qu.poll() {
-            assert_eq!(c.response_to_id, 0);
-            match c.kind {
-                CmplKind::OpenedFileHandle(r) => f = Some(r),
-                _ => panic!("unexpected completion: {c:?}"),
-            }
-        }
-        yield_now();
-    }
+    let f = wait_for_result_value!(recv_qu, 0, CmplKind::OpenedFileHandle(r) => r);
 
-    let f = f.unwrap();
     log::debug!("got file handle: {f:?}");
     assert_eq!(f.size, KNOWN_TEST_DATA.len());
 
@@ -216,19 +183,8 @@ fn open_partial_read_close(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>
         })
         .expect("send open file");
 
-    let mut f: Option<OpenedFileHandle> = None;
-    while f.is_none() {
-        if let Some(c) = recv_qu.poll() {
-            assert_eq!(c.response_to_id, 0);
-            match c.kind {
-                CmplKind::OpenedFileHandle(r) => f = Some(r),
-                _ => panic!("unexpected completion: {c:?}"),
-            }
-        }
-        yield_now();
-    }
+    let f = wait_for_result_value!(recv_qu, 0, CmplKind::OpenedFileHandle(r) => r);
 
-    let f = f.unwrap();
     log::debug!("got file handle: {f:?}");
     assert_eq!(f.size, KNOWN_TEST_DATA.len());
 
@@ -280,19 +236,8 @@ fn create_write_close(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
         })
         .expect("send create file");
 
-    let mut f: Option<OpenedFileHandle> = None;
-    while f.is_none() {
-        if let Some(c) = recv_qu.poll() {
-            assert_eq!(c.response_to_id, 0);
-            match c.kind {
-                CmplKind::OpenedFileHandle(r) => f = Some(r),
-                _ => panic!("unexpected completion: {c:?}"),
-            }
-        }
-        yield_now();
-    }
+    let f = wait_for_result_value!(recv_qu, 0, CmplKind::OpenedFileHandle(r) => r);
 
-    let f = f.unwrap();
     log::debug!("got file handle: {f:?}");
     assert_eq!(f.size, CREATED_TEST_DATA.len());
 
@@ -329,19 +274,8 @@ fn open_read_close_created_file(send_qu: &Queue<Command>, recv_qu: &Queue<Comple
         })
         .expect("send open file");
 
-    let mut f: Option<OpenedFileHandle> = None;
-    while f.is_none() {
-        if let Some(c) = recv_qu.poll() {
-            assert_eq!(c.response_to_id, 0);
-            match c.kind {
-                CmplKind::OpenedFileHandle(r) => f = Some(r),
-                _ => panic!("unexpected completion: {c:?}"),
-            }
-        }
-        yield_now();
-    }
+    let f = wait_for_result_value!(recv_qu, 0, CmplKind::OpenedFileHandle(r) => r);
 
-    let f = f.unwrap();
     log::debug!("got file handle: {f:?}");
     assert_eq!(f.size, CREATED_TEST_DATA.len());
 
@@ -383,19 +317,8 @@ fn open_read_past_end_close_created_file(send_qu: &Queue<Command>, recv_qu: &Que
         })
         .expect("send open file");
 
-    let mut f: Option<OpenedFileHandle> = None;
-    while f.is_none() {
-        if let Some(c) = recv_qu.poll() {
-            assert_eq!(c.response_to_id, 0);
-            match c.kind {
-                CmplKind::OpenedFileHandle(r) => f = Some(r),
-                _ => panic!("unexpected completion: {c:?}"),
-            }
-        }
-        yield_now();
-    }
+    let f = wait_for_result_value!(recv_qu, 0, CmplKind::OpenedFileHandle(r) => r);
 
-    let f = f.unwrap();
     log::debug!("got file handle: {f:?}");
     assert_eq!(f.size, CREATED_TEST_DATA.len());
 
@@ -436,19 +359,8 @@ fn open_write_past_end_close_created_file(send_qu: &Queue<Command>, recv_qu: &Qu
         })
         .expect("send open file");
 
-    let mut f: Option<OpenedFileHandle> = None;
-    while f.is_none() {
-        if let Some(c) = recv_qu.poll() {
-            assert_eq!(c.response_to_id, 0);
-            match c.kind {
-                CmplKind::OpenedFileHandle(r) => f = Some(r),
-                _ => panic!("unexpected completion: {c:?}"),
-            }
-        }
-        yield_now();
-    }
+    let f = wait_for_result_value!(recv_qu, 0, CmplKind::OpenedFileHandle(r) => r);
 
-    let f = f.unwrap();
     log::debug!("got file handle: {f:?}");
     assert_eq!(f.size, CREATED_TEST_DATA.len());
 
