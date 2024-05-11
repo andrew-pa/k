@@ -8,7 +8,7 @@ use kapi::{
     Buffer, BufferMut, FileHandle, Path,
 };
 
-use crate::{wait_for_error_response, Testable};
+use crate::{wait_for_error_response, wait_for_success, Testable};
 
 pub const TESTS: &[&dyn Testable] = &[
     &open_close,
@@ -63,14 +63,7 @@ fn open_close(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
         })
         .expect("send close file");
 
-    loop {
-        if let Some(c) = recv_qu.poll() {
-            assert_eq!(c.response_to_id, 1);
-            assert_eq!(c.kind, CmplKind::Success);
-            break;
-        }
-        yield_now();
-    }
+    wait_for_success(recv_qu, 1);
 }
 
 fn create_close_delete(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
@@ -111,14 +104,7 @@ fn create_close_delete(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
         })
         .expect("send close file");
 
-    loop {
-        if let Some(c) = recv_qu.poll() {
-            assert_eq!(c.response_to_id, 1);
-            assert_eq!(c.kind, CmplKind::Success);
-            break;
-        }
-        yield_now();
-    }
+    wait_for_success(recv_qu, 1);
 
     send_qu
         .post(Command {
@@ -127,14 +113,7 @@ fn create_close_delete(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
         })
         .expect("send delete file");
 
-    loop {
-        if let Some(c) = recv_qu.poll() {
-            assert_eq!(c.response_to_id, 2);
-            assert_eq!(c.kind, CmplKind::Success);
-            break;
-        }
-        yield_now();
-    }
+    wait_for_success(recv_qu, 2);
 }
 
 fn fail_to_create_existing(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
@@ -212,14 +191,7 @@ fn open_read_close(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
         })
         .expect("send read file");
 
-    loop {
-        if let Some(c) = recv_qu.poll() {
-            assert_eq!(c.response_to_id, 1);
-            assert_eq!(c.kind, CmplKind::Success);
-            break;
-        }
-        yield_now();
-    }
+    wait_for_success(recv_qu, 1);
 
     assert_eq!(data, KNOWN_TEST_DATA);
 
@@ -230,14 +202,7 @@ fn open_read_close(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
         })
         .expect("send close file");
 
-    loop {
-        if let Some(c) = recv_qu.poll() {
-            assert_eq!(c.response_to_id, 1);
-            assert_eq!(c.kind, CmplKind::Success);
-            break;
-        }
-        yield_now();
-    }
+    wait_for_success(recv_qu, 1);
 }
 
 fn open_partial_read_close(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
@@ -282,14 +247,7 @@ fn open_partial_read_close(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>
             })
             .expect("send read file");
 
-        loop {
-            if let Some(c) = recv_qu.poll() {
-                assert_eq!(c.response_to_id, 1);
-                assert_eq!(c.kind, CmplKind::Success);
-                break;
-            }
-            yield_now();
-        }
+        wait_for_success(recv_qu, 1);
 
         assert_eq!(data, KNOWN_TEST_DATA[offset..offset + data.len()]);
     }
@@ -301,14 +259,7 @@ fn open_partial_read_close(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>
         })
         .expect("send close file");
 
-    loop {
-        if let Some(c) = recv_qu.poll() {
-            assert_eq!(c.response_to_id, 1);
-            assert_eq!(c.kind, CmplKind::Success);
-            break;
-        }
-        yield_now();
-    }
+    wait_for_success(recv_qu, 1);
 }
 
 const CREATED_TEST_FILE_PATH: &str = "/volumes/root/test-file";
@@ -364,14 +315,7 @@ fn create_write_close(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
         })
         .expect("send close file");
 
-    loop {
-        if let Some(c) = recv_qu.poll() {
-            assert_eq!(c.response_to_id, 1);
-            assert_eq!(c.kind, CmplKind::Success);
-            break;
-        }
-        yield_now();
-    }
+    wait_for_success(recv_qu, 1);
 }
 
 fn open_read_close_created_file(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
@@ -414,14 +358,7 @@ fn open_read_close_created_file(send_qu: &Queue<Command>, recv_qu: &Queue<Comple
         })
         .expect("send read file");
 
-    loop {
-        if let Some(c) = recv_qu.poll() {
-            assert_eq!(c.response_to_id, 1);
-            assert_eq!(c.kind, CmplKind::Success);
-            break;
-        }
-        yield_now();
-    }
+    wait_for_success(recv_qu, 1);
 
     assert_eq!(&data, CREATED_TEST_DATA);
 
@@ -432,14 +369,7 @@ fn open_read_close_created_file(send_qu: &Queue<Command>, recv_qu: &Queue<Comple
         })
         .expect("send close file");
 
-    loop {
-        if let Some(c) = recv_qu.poll() {
-            assert_eq!(c.response_to_id, 1);
-            assert_eq!(c.kind, CmplKind::Success);
-            break;
-        }
-        yield_now();
-    }
+    wait_for_success(recv_qu, 1);
 }
 
 fn open_read_past_end_close_created_file(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
@@ -492,14 +422,7 @@ fn open_read_past_end_close_created_file(send_qu: &Queue<Command>, recv_qu: &Que
         })
         .expect("send close file");
 
-    loop {
-        if let Some(c) = recv_qu.poll() {
-            assert_eq!(c.response_to_id, 1);
-            assert_eq!(c.kind, CmplKind::Success);
-            break;
-        }
-        yield_now();
-    }
+    wait_for_success(recv_qu, 1);
 }
 
 fn open_write_past_end_close_created_file(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
@@ -552,14 +475,7 @@ fn open_write_past_end_close_created_file(send_qu: &Queue<Command>, recv_qu: &Qu
         })
         .expect("send close file");
 
-    loop {
-        if let Some(c) = recv_qu.poll() {
-            assert_eq!(c.response_to_id, 1);
-            assert_eq!(c.kind, CmplKind::Success);
-            break;
-        }
-        yield_now();
-    }
+    wait_for_success(recv_qu, 1);
 }
 
 fn delete_created_file(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
@@ -573,14 +489,7 @@ fn delete_created_file(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
         })
         .expect("send delete file");
 
-    loop {
-        if let Some(c) = recv_qu.poll() {
-            assert_eq!(c.response_to_id, 2);
-            assert_eq!(c.kind, CmplKind::Success);
-            break;
-        }
-        yield_now();
-    }
+    wait_for_success(recv_qu, 2);
 
     //make sure it is gone
 

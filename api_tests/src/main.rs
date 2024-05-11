@@ -44,6 +44,17 @@ pub fn wait_for_error_response(recv_qu: &Queue<Completion>, id: u16, code: Error
     }
 }
 
+pub fn wait_for_success(recv_qu: &Queue<Completion>, id: u16) {
+    loop {
+        if let Some(c) = recv_qu.poll() {
+            assert_eq!(c.response_to_id, id);
+            assert_eq!(c.kind, CmplKind::Success);
+            break;
+        }
+        yield_now();
+    }
+}
+
 pub fn test_runner(
     tests: &[&[&dyn Testable]],
     send_qu: &Queue<Command>,
