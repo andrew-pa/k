@@ -12,7 +12,7 @@ use core::ptr::NonNull;
 
 use kapi::{
     commands::{Command, Kind as CmdKind, Test},
-    completions::{self, Completion, ErrorCode, Kind as CplKind},
+    completions::{self, Completion, ErrorCode, Kind as CmplKind},
     queue::{Queue, FIRST_RECV_QUEUE_ID, FIRST_SEND_QUEUE_ID},
     system_calls::{current_process_id, current_thread_id, exit, yield_now, KernelLogger},
 };
@@ -30,6 +30,17 @@ where
         log::debug!("running {}...", core::any::type_name::<T>());
         self(send_qu, recv_qu);
         log::info!("{} ok", core::any::type_name::<T>());
+    }
+}
+
+pub fn wait_for_error_response(recv_qu: &Queue<Completion>, id: u16, code: ErrorCode) {
+    loop {
+        if let Some(c) = recv_qu.poll() {
+            assert_eq!(c.response_to_id, id);
+            assert_eq!(c.kind, CmplKind::Err(code));
+            break;
+        }
+        yield_now();
     }
 }
 
@@ -56,14 +67,7 @@ fn cmd_invalid(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
         })
         .expect("post message to channel");
 
-    loop {
-        if let Some(c) = recv_qu.poll() {
-            assert_eq!(c.response_to_id, 0);
-            assert_eq!(c.kind, CplKind::Err(ErrorCode::UnknownCommand));
-            return;
-        }
-        yield_now();
-    }
+    wait_for_error_response(recv_qu, 0, ErrorCode::UnknownCommand);
 }
 
 fn cmd_test(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {

@@ -8,7 +8,7 @@ use kapi::{
     Buffer, Path, ProcessId,
 };
 
-use crate::Testable;
+use crate::{wait_for_error_response, Testable};
 
 pub const TESTS: &[&dyn Testable] = &[
     &basic,
@@ -146,14 +146,7 @@ fn fail_binary_not_found(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) 
         })
         .expect("send spawn process");
 
-    loop {
-        if let Some(c) = recv_qu.poll() {
-            assert_eq!(c.response_to_id, 0);
-            assert_eq!(c.kind, CmplKind::Err(ErrorCode::NotFound));
-            break;
-        }
-        yield_now();
-    }
+    wait_for_error_response(recv_qu, 0, ErrorCode::NotFound);
 }
 
 fn fail_invalid_path_ptr(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
@@ -172,14 +165,7 @@ fn fail_invalid_path_ptr(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) 
         })
         .expect("send spawn process");
 
-    loop {
-        if let Some(c) = recv_qu.poll() {
-            assert_eq!(c.response_to_id, 0);
-            assert_eq!(c.kind, CmplKind::Err(ErrorCode::InvalidPointer));
-            break;
-        }
-        yield_now();
-    }
+    wait_for_error_response(recv_qu, 0, ErrorCode::InvalidPointer);
 }
 
 fn fail_invalid_parameter_ptr(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
@@ -198,14 +184,7 @@ fn fail_invalid_parameter_ptr(send_qu: &Queue<Command>, recv_qu: &Queue<Completi
         })
         .expect("send spawn process");
 
-    loop {
-        if let Some(c) = recv_qu.poll() {
-            assert_eq!(c.response_to_id, 0);
-            assert_eq!(c.kind, CmplKind::Err(ErrorCode::InvalidPointer));
-            break;
-        }
-        yield_now();
-    }
+    wait_for_error_response(recv_qu, 0, ErrorCode::InvalidPointer);
 }
 
 fn basic_kill(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
@@ -280,14 +259,7 @@ fn fail_to_kill_bad_id(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
         })
         .expect("send kill process");
 
-    loop {
-        if let Some(c) = recv_qu.poll() {
-            assert_eq!(c.response_to_id, 0);
-            assert_eq!(c.kind, CmplKind::Err(ErrorCode::InvalidId));
-            break;
-        }
-        yield_now();
-    }
+    wait_for_error_response(recv_qu, 0, ErrorCode::InvalidId);
 }
 
 fn basic_heap(_send_qu: &Queue<Command>, _recv_qu: &Queue<Completion>) {

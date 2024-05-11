@@ -8,7 +8,7 @@ use kapi::{
     Buffer, BufferMut, FileHandle, Path,
 };
 
-use crate::Testable;
+use crate::{wait_for_error_response, Testable};
 
 pub const TESTS: &[&dyn Testable] = &[
     &open_close,
@@ -150,14 +150,7 @@ fn fail_to_create_existing(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>
         })
         .expect("send create file");
 
-    loop {
-        if let Some(c) = recv_qu.poll() {
-            assert_eq!(c.response_to_id, 0);
-            assert_eq!(c.kind, CmplKind::Err(ErrorCode::AlreadyExists));
-            break;
-        }
-        yield_now();
-    }
+    wait_for_error_response(recv_qu, 0, ErrorCode::AlreadyExists);
 }
 
 fn fail_to_open_not_existing(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
@@ -171,14 +164,7 @@ fn fail_to_open_not_existing(send_qu: &Queue<Command>, recv_qu: &Queue<Completio
         })
         .expect("send open file");
 
-    loop {
-        if let Some(c) = recv_qu.poll() {
-            assert_eq!(c.response_to_id, 0);
-            assert_eq!(c.kind, CmplKind::Err(ErrorCode::NotFound));
-            break;
-        }
-        yield_now();
-    }
+    wait_for_error_response(recv_qu, 0, ErrorCode::NotFound);
 }
 
 /// The known path of the test data file that contains [KNOWN_TEST_DATA].
@@ -497,14 +483,7 @@ fn open_read_past_end_close_created_file(send_qu: &Queue<Command>, recv_qu: &Que
         })
         .expect("send read file");
 
-    loop {
-        if let Some(c) = recv_qu.poll() {
-            assert_eq!(c.response_to_id, 1);
-            assert_eq!(c.kind, CmplKind::Err(ErrorCode::OutOfBounds));
-            break;
-        }
-        yield_now();
-    }
+    wait_for_error_response(recv_qu, 1, ErrorCode::OutOfBounds);
 
     send_qu
         .post(Command {
@@ -564,14 +543,7 @@ fn open_write_past_end_close_created_file(send_qu: &Queue<Command>, recv_qu: &Qu
         })
         .expect("send read file");
 
-    loop {
-        if let Some(c) = recv_qu.poll() {
-            assert_eq!(c.response_to_id, 1);
-            assert_eq!(c.kind, CmplKind::Err(ErrorCode::OutOfBounds));
-            break;
-        }
-        yield_now();
-    }
+    wait_for_error_response(recv_qu, 1, ErrorCode::OutOfBounds);
 
     send_qu
         .post(Command {
@@ -622,14 +594,7 @@ fn delete_created_file(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
         })
         .expect("send open file");
 
-    loop {
-        if let Some(c) = recv_qu.poll() {
-            assert_eq!(c.response_to_id, 3);
-            assert_eq!(c.kind, CmplKind::Err(ErrorCode::NotFound));
-            break;
-        }
-        yield_now();
-    }
+    wait_for_error_response(recv_qu, 3, ErrorCode::NotFound);
 }
 
 fn fail_to_delete_non_existing(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
@@ -643,14 +608,7 @@ fn fail_to_delete_non_existing(send_qu: &Queue<Command>, recv_qu: &Queue<Complet
         })
         .expect("send delete file");
 
-    loop {
-        if let Some(c) = recv_qu.poll() {
-            assert_eq!(c.response_to_id, 0);
-            assert_eq!(c.kind, CmplKind::Err(ErrorCode::NotFound));
-            break;
-        }
-        yield_now();
-    }
+    wait_for_error_response(recv_qu, 0, ErrorCode::NotFound);
 }
 
 fn fail_to_read_bad_handle(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
@@ -667,14 +625,7 @@ fn fail_to_read_bad_handle(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>
         })
         .expect("send read file");
 
-    loop {
-        if let Some(c) = recv_qu.poll() {
-            assert_eq!(c.response_to_id, 0);
-            assert_eq!(c.kind, CmplKind::Err(ErrorCode::InvalidId));
-            break;
-        }
-        yield_now();
-    }
+    wait_for_error_response(recv_qu, 0, ErrorCode::InvalidId);
 }
 
 fn fail_to_write_bad_handle(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
@@ -691,14 +642,7 @@ fn fail_to_write_bad_handle(send_qu: &Queue<Command>, recv_qu: &Queue<Completion
         })
         .expect("send write file");
 
-    loop {
-        if let Some(c) = recv_qu.poll() {
-            assert_eq!(c.response_to_id, 0);
-            assert_eq!(c.kind, CmplKind::Err(ErrorCode::InvalidId));
-            break;
-        }
-        yield_now();
-    }
+    wait_for_error_response(recv_qu, 0, ErrorCode::InvalidId);
 }
 
 fn fail_to_resize_bad_handle(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
@@ -713,14 +657,7 @@ fn fail_to_resize_bad_handle(send_qu: &Queue<Command>, recv_qu: &Queue<Completio
         })
         .expect("send resize file");
 
-    loop {
-        if let Some(c) = recv_qu.poll() {
-            assert_eq!(c.response_to_id, 0);
-            assert_eq!(c.kind, CmplKind::Err(ErrorCode::InvalidId));
-            break;
-        }
-        yield_now();
-    }
+    wait_for_error_response(recv_qu, 0, ErrorCode::InvalidId);
 }
 
 fn fail_to_close_bad_handle(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
@@ -734,12 +671,5 @@ fn fail_to_close_bad_handle(send_qu: &Queue<Command>, recv_qu: &Queue<Completion
         })
         .expect("send close file");
 
-    loop {
-        if let Some(c) = recv_qu.poll() {
-            assert_eq!(c.response_to_id, 0);
-            assert_eq!(c.kind, CmplKind::Err(ErrorCode::InvalidId));
-            break;
-        }
-        yield_now();
-    }
+    wait_for_error_response(recv_qu, 0, ErrorCode::InvalidId);
 }
