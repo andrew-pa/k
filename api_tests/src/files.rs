@@ -23,15 +23,15 @@ pub const TESTS: &[&dyn Testable] = &[
     &open_read_close_created_file,
     &open_read_past_end_close_created_file,
     &open_write_past_end_close_created_file,
+    &resize_append_created_file,
     &resize_truncate_created_file,
     &delete_created_file,
-    &resize_append_created_file,
     &fail_to_delete_non_existing,
     &fail_to_read_bad_handle,
     &fail_to_write_bad_handle,
     &fail_to_resize_bad_handle,
     &fail_to_close_bad_handle,
-    &data_round_trip
+    &data_round_trip,
 ];
 
 fn open_close(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
@@ -396,7 +396,7 @@ fn open_write_past_end_close_created_file(send_qu: &Queue<Command>, recv_qu: &Qu
 }
 
 fn resize_truncate_created_file(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
-    let new_size = CREATED_TEST_DATA.len() / 2;
+    const NEW_SIZE: usize = CREATED_TEST_DATA.len() / 2;
 
     send_qu
         .post(Command {
@@ -418,7 +418,7 @@ fn resize_truncate_created_file(send_qu: &Queue<Command>, recv_qu: &Queue<Comple
             id: 1,
             kind: ResizeFile {
                 handle: f.handle,
-                new_size,
+                new_size: NEW_SIZE,
             }
             .into(),
         })
@@ -427,7 +427,7 @@ fn resize_truncate_created_file(send_qu: &Queue<Command>, recv_qu: &Queue<Comple
     wait_for_success(recv_qu, 1);
 
     // Validate the remaining data
-    let mut data = vec![0u8; new_size];
+    let mut data = [0u8; NEW_SIZE];
     send_qu
         .post(Command {
             id: 2,
@@ -441,7 +441,7 @@ fn resize_truncate_created_file(send_qu: &Queue<Command>, recv_qu: &Queue<Comple
         .expect("send read file");
 
     wait_for_success(recv_qu, 2);
-    assert_eq!(&data, &CREATED_TEST_DATA[..new_size]);
+    assert_eq!(&data, &CREATED_TEST_DATA[..NEW_SIZE]);
 
     // Validate that reads past the new end fail
     send_qu
@@ -449,7 +449,7 @@ fn resize_truncate_created_file(send_qu: &Queue<Command>, recv_qu: &Queue<Comple
             id: 3,
             kind: ReadFile {
                 src_handle: f.handle,
-                src_offset: new_size,
+                src_offset: NEW_SIZE,
                 dst_buffer: BufferMut::from(&mut [0u8; 1][..]),
             }
             .into(),
@@ -481,7 +481,7 @@ fn resize_truncate_created_file(send_qu: &Queue<Command>, recv_qu: &Queue<Comple
     let f = wait_for_result_value!(recv_qu, 5, CmplKind::OpenedFileHandle(r) => r);
 
     log::debug!("got file handle: {f:?}");
-    assert_eq!(f.size, new_size);
+    assert_eq!(f.size, NEW_SIZE);
 
     send_qu
         .post(Command {
@@ -503,7 +503,7 @@ fn resize_truncate_created_file(send_qu: &Queue<Command>, recv_qu: &Queue<Comple
 }
 
 fn resize_append_created_file(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
-    let new_size = CREATED_TEST_DATA.len() * 2;
+    const NEW_SIZE: usize = CREATED_TEST_DATA.len() * 2;
 
     send_qu
         .post(Command {
@@ -525,7 +525,7 @@ fn resize_append_created_file(send_qu: &Queue<Command>, recv_qu: &Queue<Completi
             id: 1,
             kind: ResizeFile {
                 handle: f.handle,
-                new_size,
+                new_size: NEW_SIZE,
             }
             .into(),
         })
@@ -534,7 +534,7 @@ fn resize_append_created_file(send_qu: &Queue<Command>, recv_qu: &Queue<Completi
     wait_for_success(recv_qu, 1);
 
     // Validate the original data
-    let mut data = vec![0u8; CREATED_TEST_DATA.len()];
+    let mut data = [0u8; CREATED_TEST_DATA.len()];
     send_qu
         .post(Command {
             id: 2,
@@ -548,10 +548,10 @@ fn resize_append_created_file(send_qu: &Queue<Command>, recv_qu: &Queue<Completi
         .expect("send read file");
 
     wait_for_success(recv_qu, 2);
-    assert_eq!(&data, &CREATED_TEST_DATA[..]);
+    assert_eq!(&data, &CREATED_TEST_DATA);
 
     // Validate that the new bytes are zero
-    let mut new_data = vec![0u8; new_size - CREATED_TEST_DATA.len()];
+    let mut new_data = [0u8; NEW_SIZE - CREATED_TEST_DATA.len()];
     send_qu
         .post(Command {
             id: 3,
@@ -590,7 +590,7 @@ fn resize_append_created_file(send_qu: &Queue<Command>, recv_qu: &Queue<Completi
     let f = wait_for_result_value!(recv_qu, 5, CmplKind::OpenedFileHandle(r) => r);
 
     log::debug!("got file handle: {f:?}");
-    assert_eq!(f.size, new_size);
+    assert_eq!(f.size, NEW_SIZE);
 
     send_qu
         .post(Command {
@@ -601,6 +601,8 @@ fn resize_append_created_file(send_qu: &Queue<Command>, recv_qu: &Queue<Completi
 
     wait_for_success(recv_qu, 6);
 }
+
+fn delete_created_file(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
     send_qu
         .post(Command {
             id: 2,
@@ -727,27 +729,33 @@ fn data_round_trip(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
 
     let data = b"hello, world!!!!";
 
-    send_qu.post(Command {
-        id: 1,
-        kind: WriteFile {
-            dst_handle: f.handle,
-            dst_offset: 0,
-            src_buffer: Buffer::from(data.as_slice())
-        }.into()
-    }).expect("send write");
+    send_qu
+        .post(Command {
+            id: 1,
+            kind: WriteFile {
+                dst_handle: f.handle,
+                dst_offset: 0,
+                src_buffer: Buffer::from(data.as_slice()),
+            }
+            .into(),
+        })
+        .expect("send write");
 
     wait_for_success(recv_qu, 1);
 
     let mut dst_data = [0u8; 16];
 
-    send_qu.post(Command {
-        id: 2,
-        kind: ReadFile {
-            src_handle: f.handle,
-            src_offset: 0,
-            dst_buffer: BufferMut::from(&mut dst_data[..])
-        }.into()
-    }).expect("send write");
+    send_qu
+        .post(Command {
+            id: 2,
+            kind: ReadFile {
+                src_handle: f.handle,
+                src_offset: 0,
+                dst_buffer: BufferMut::from(&mut dst_data[..]),
+            }
+            .into(),
+        })
+        .expect("send write");
 
     wait_for_success(recv_qu, 2);
 
