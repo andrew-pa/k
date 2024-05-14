@@ -10,6 +10,8 @@ use kapi::{
 
 use crate::{wait_for_error_response, wait_for_success, Testable};
 
+// TODO: it might be nice to run all these tests against different file systems
+
 pub const TESTS: &[&dyn Testable] = &[
     &open_close,
     &create_close_delete,
@@ -27,6 +29,7 @@ pub const TESTS: &[&dyn Testable] = &[
     &fail_to_write_bad_handle,
     &fail_to_resize_bad_handle,
     &fail_to_close_bad_handle,
+    &data_round_trip
 ];
 
 fn open_close(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
@@ -390,6 +393,40 @@ fn open_write_past_end_close_created_file(send_qu: &Queue<Command>, recv_qu: &Qu
     wait_for_success(recv_qu, 1);
 }
 
+fn resize_truncate_created_file(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
+    send_qu
+        .post(Command {
+            id: 0,
+            kind: OpenFile {
+                path: Path::from(CREATED_TEST_FILE_PATH),
+            }
+            .into(),
+        })
+        .expect("send open file");
+
+    let f = wait_for_result_value!(recv_qu, 0, CmplKind::OpenedFileHandle(r) => r);
+
+    log::debug!("got file handle: {f:?}");
+    assert_eq!(f.size, CREATED_TEST_DATA.len());
+
+    send_qu.post(Command {
+        id: 1,
+        kind: ResizeFile {
+            handle: f.handle,
+            new_size: 5
+        }.into()
+    }).expect("send resize");
+
+    send_qu
+        .post(Command {
+            id: 3,
+            kind: CloseFile { handle: f.handle }.into(),
+        })
+        .expect("send close file");
+
+    wait_for_success(recv_qu, 3);
+}
+
 fn delete_created_file(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
     send_qu
         .post(Command {
@@ -493,4 +530,71 @@ fn fail_to_close_bad_handle(send_qu: &Queue<Command>, recv_qu: &Queue<Completion
         .expect("send close file");
 
     wait_for_error_response(recv_qu, 0, ErrorCode::InvalidId);
+}
+
+fn data_round_trip(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
+    let path = Path::from("/volumes/root/tmp-test-file");
+
+    send_qu
+        .post(Command {
+            id: 0,
+            kind: CreateFile {
+                path: path.clone(),
+                initial_size: 16,
+                open_if_exists: false,
+            }
+            .into(),
+        })
+        .expect("send create file");
+
+    let f = wait_for_result_value!(recv_qu, 0, CmplKind::OpenedFileHandle(r) => r);
+
+    log::debug!("got file handle: {f:?}");
+    assert_eq!(f.size, 16);
+
+    let data = b"hello, world!!!!";
+
+    send_qu.post(Command {
+        id: 1,
+        kind: WriteFile {
+            dst_handle: f.handle,
+            dst_offset: 0,
+            src_buffer: Buffer::from(data.as_slice())
+        }.into()
+    }).expect("send write");
+
+    wait_for_success(recv_qu, 1);
+
+    let mut dst_data = [0u8; 16];
+
+    send_qu.post(Command {
+        id: 2,
+        kind: ReadFile {
+            src_handle: f.handle,
+            src_offset: 0,
+            dst_buffer: BufferMut::from(&mut dst_data[..])
+        }.into()
+    }).expect("send write");
+
+    wait_for_success(recv_qu, 2);
+
+    assert_eq!(data, &dst_data);
+
+    send_qu
+        .post(Command {
+            id: 3,
+            kind: CloseFile { handle: f.handle }.into(),
+        })
+        .expect("send close file");
+
+    wait_for_success(recv_qu, 1);
+
+    send_qu
+        .post(Command {
+            id: 4,
+            kind: DeleteFile { path }.into(),
+        })
+        .expect("send delete file");
+
+    wait_for_success(recv_qu, 2);
 }
