@@ -23,6 +23,7 @@ pub const TESTS: &[&dyn Testable] = &[
     &open_read_close_created_file,
     &open_read_past_end_close_created_file,
     &open_write_past_end_close_created_file,
+    &resize_truncate_created_file,
     &delete_created_file,
     &fail_to_delete_non_existing,
     &fail_to_read_bad_handle,
