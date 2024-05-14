@@ -409,13 +409,84 @@ fn resize_truncate_created_file(send_qu: &Queue<Command>, recv_qu: &Queue<Comple
     log::debug!("got file handle: {f:?}");
     assert_eq!(f.size, CREATED_TEST_DATA.len());
 
-    send_qu.post(Command {
-        id: 1,
-        kind: ResizeFile {
-            handle: f.handle,
-            new_size: 5
-        }.into()
-    }).expect("send resize");
+    send_qu
+        .post(Command {
+            id: 1,
+            kind: ResizeFile {
+                handle: f.handle,
+                new_size: 5,
+            }
+            .into(),
+        })
+        .expect("send resize");
+
+    wait_for_success(recv_qu, 1);
+
+    // Validate the remaining data
+    let mut data = [0u8; 5];
+    send_qu
+        .post(Command {
+            id: 2,
+            kind: ReadFile {
+                src_handle: f.handle,
+                src_offset: 0,
+                dst_buffer: BufferMut::from(&mut data[..]),
+            }
+            .into(),
+        })
+        .expect("send read file");
+
+    wait_for_success(recv_qu, 2);
+    assert_eq!(&data, &CREATED_TEST_DATA[..5]);
+
+    // Validate that reads past the new end fail
+    send_qu
+        .post(Command {
+            id: 3,
+            kind: ReadFile {
+                src_handle: f.handle,
+                src_offset: 5,
+                dst_buffer: BufferMut::from(&mut [0u8; 1][..]),
+            }
+            .into(),
+        })
+        .expect("send read file");
+
+    wait_for_error_response(recv_qu, 3, ErrorCode::OutOfBounds);
+
+    send_qu
+        .post(Command {
+            id: 4,
+            kind: CloseFile { handle: f.handle }.into(),
+        })
+        .expect("send close file");
+
+    wait_for_success(recv_qu, 4);
+
+    // Reopen the file and check the size
+    send_qu
+        .post(Command {
+            id: 5,
+            kind: OpenFile {
+                path: Path::from(CREATED_TEST_FILE_PATH),
+            }
+            .into(),
+        })
+        .expect("send open file");
+
+    let f = wait_for_result_value!(recv_qu, 5, CmplKind::OpenedFileHandle(r) => r);
+
+    log::debug!("got file handle: {f:?}");
+    assert_eq!(f.size, 5);
+
+    send_qu
+        .post(Command {
+            id: 6,
+            kind: CloseFile { handle: f.handle }.into(),
+        })
+        .expect("send close file");
+
+    wait_for_success(recv_qu, 6);
 
     send_qu
         .post(Command {
