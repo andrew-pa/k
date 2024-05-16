@@ -1,6 +1,7 @@
 //! File system drivers.
 use alloc::boxed::Box;
 use async_trait::async_trait;
+use kapi::FileUSize;
 use snafu::Snafu;
 
 use crate::{error::Error, memory::PhysicalAddress};
@@ -19,11 +20,11 @@ pub enum FsError {
     },
 }
 
-/// A File is a mappable persistent data blob
+/// A File is a persistent blob of bytes.
 #[async_trait]
-pub trait File {
+pub trait File: Send {
     /// Returns the length of the store in bytes.
-    fn len(&self) -> u64;
+    fn len(&self) -> FileUSize;
 
     fn is_empty(&self) -> bool {
         self.len() == 0
@@ -32,7 +33,7 @@ pub trait File {
     /// Read `num_pages` pages starting at `src_offset` (in bytes) from the file into `dest_address` in memory
     async fn load_pages(
         &mut self,
-        src_offset: u64,
+        src_offset: FileUSize,
         dest_address: PhysicalAddress,
         num_pages: usize,
     ) -> Result<(), Error>;
@@ -40,7 +41,7 @@ pub trait File {
     /// Write any changes from the in-memory file contents at `src_address` back to the persistent store
     async fn flush_pages(
         &mut self,
-        dest_offset: u64,
+        dest_offset: FileUSize,
         src_address: PhysicalAddress,
         num_pages: usize,
     ) -> Result<(), Error>;

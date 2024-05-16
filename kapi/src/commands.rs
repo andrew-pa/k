@@ -1,6 +1,6 @@
 //! Asynchronous commands that can be submitted to the kernel from user-space via a [crate::queue::Queue].
 
-use crate::{queue::QueueId, Buffer, BufferMut, FileHandle, Path, ProcessId, ThreadId};
+use crate::{queue::QueueId, Buffer, BufferMut, FileHandle, FileUSize, Path, ProcessId, ThreadId};
 
 macro_rules! impl_into_kind {
     ($t:ident) => {
@@ -173,7 +173,7 @@ pub struct ReadFile {
     /// The file to read from.
     pub src_handle: FileHandle,
     /// An offset in bytes from the start of the file to start reading from.
-    pub src_offset: usize,
+    pub src_offset: FileUSize,
     /// The destination buffer to fill. This buffer *must* stay valid until the completion is
     /// received for the read to be safe.
     pub dst_buffer: BufferMut,
@@ -191,7 +191,7 @@ pub struct WriteFile {
     /// The file to write to.
     pub dst_handle: FileHandle,
     /// An offset in bytes from the start of the file to start writing to.
-    pub dst_offset: usize,
+    pub dst_offset: FileUSize,
     /// The source buffer to read from. This buffer *must* stay valid until the completion is
     /// received for the write to be safe.
     pub src_buffer: Buffer,
@@ -210,7 +210,7 @@ pub struct ResizeFile {
     /// The file to resize.
     pub handle: FileHandle,
     /// The new size of the file in bytes.
-    pub new_size: usize,
+    pub new_size: FileUSize,
 }
 impl_into_kind!(ResizeFile);
 

@@ -160,11 +160,13 @@ pub async fn spawn_process(
         id: pid,
         page_tables: pt,
         threads: Default::default(),
-        next_queue_id: AtomicU16::new(FIRST_RECV_QUEUE_ID.into()), //AtomicU16::new((FIRST_RECV_QUEUE_ID.saturating_add(1)).into()),
+        next_queue_id: AtomicU16::new(FIRST_RECV_QUEUE_ID.into()),
         send_queues: Default::default(),
         recv_queues: Default::default(),
         address_space_allocator: Mutex::new(address_space_allocator),
         exit_state: Default::default(),
+        next_handle: AtomicU32::new(1),
+        open_files: Default::default(),
     });
     processes().push(proc.clone());
 

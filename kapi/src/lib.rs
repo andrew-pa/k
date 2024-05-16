@@ -12,6 +12,11 @@ pub type ThreadId = u32;
 /// The process-unique ID of an open file.
 pub type FileHandle = NonZeroU32;
 
+/// An unsigned integer suitably large for a file size or offset value.
+pub type FileUSize = u64;
+/// An signed integer suitably large for a file offset value.
+pub type FileISize = i64;
+
 pub mod commands;
 pub mod completions;
 pub mod queue;

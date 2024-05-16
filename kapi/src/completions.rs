@@ -133,7 +133,7 @@ pub struct OpenedFileHandle {
     /// The newly opened handle.
     pub handle: FileHandle,
     /// The size of the file in bytes.
-    pub size: usize,
+    pub size: u64,
 }
 impl_into_kind!(OpenedFileHandle);
 

@@ -5,7 +5,7 @@ use kapi::{
     completions::{Completion, ErrorCode, Kind as CmplKind},
     queue::Queue,
     system_calls::yield_now,
-    Buffer, BufferMut, FileHandle, Path,
+    Buffer, BufferMut, FileHandle, FileUSize, Path,
 };
 
 use crate::{wait_for_error_response, wait_for_success, Testable};
@@ -14,9 +14,10 @@ use crate::{wait_for_error_response, wait_for_success, Testable};
 
 pub const TESTS: &[&dyn Testable] = &[
     &open_close,
+    &fail_to_open_not_existing,
+    &fail_to_close_bad_handle,
     &create_close_delete,
     &fail_to_create_existing,
-    &fail_to_open_not_existing,
     &open_read_close,
     &open_partial_read_close,
     &create_write_close,
@@ -30,7 +31,6 @@ pub const TESTS: &[&dyn Testable] = &[
     &fail_to_read_bad_handle,
     &fail_to_write_bad_handle,
     &fail_to_resize_bad_handle,
-    &fail_to_close_bad_handle,
     &data_round_trip,
 ];
 
@@ -148,7 +148,7 @@ fn open_read_close(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
     let f = wait_for_result_value!(recv_qu, 0, CmplKind::OpenedFileHandle(r) => r);
 
     log::debug!("got file handle: {f:?}");
-    assert_eq!(f.size, KNOWN_TEST_DATA.len());
+    assert_eq!(f.size, KNOWN_TEST_DATA.len() as FileUSize);
 
     let mut data = [0u8; KNOWN_TEST_DATA.len()];
     send_qu
@@ -191,7 +191,7 @@ fn open_partial_read_close(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>
     let f = wait_for_result_value!(recv_qu, 0, CmplKind::OpenedFileHandle(r) => r);
 
     log::debug!("got file handle: {f:?}");
-    assert_eq!(f.size, KNOWN_TEST_DATA.len());
+    assert_eq!(f.size, KNOWN_TEST_DATA.len() as FileUSize);
 
     let mut data = [0u8; 2];
 
@@ -201,7 +201,7 @@ fn open_partial_read_close(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>
                 id: 1,
                 kind: ReadFile {
                     src_handle: f.handle,
-                    src_offset: offset,
+                    src_offset: offset as FileUSize,
                     dst_buffer: BufferMut::from(&mut data[..]),
                 }
                 .into(),
@@ -244,7 +244,7 @@ fn create_write_close(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
     let f = wait_for_result_value!(recv_qu, 0, CmplKind::OpenedFileHandle(r) => r);
 
     log::debug!("got file handle: {f:?}");
-    assert_eq!(f.size, CREATED_TEST_DATA.len());
+    assert_eq!(f.size, CREATED_TEST_DATA.len() as FileUSize);
 
     send_qu
         .post(Command {
@@ -282,7 +282,7 @@ fn open_read_close_created_file(send_qu: &Queue<Command>, recv_qu: &Queue<Comple
     let f = wait_for_result_value!(recv_qu, 0, CmplKind::OpenedFileHandle(r) => r);
 
     log::debug!("got file handle: {f:?}");
-    assert_eq!(f.size, CREATED_TEST_DATA.len());
+    assert_eq!(f.size, CREATED_TEST_DATA.len() as FileUSize);
 
     let mut data = [0u8; CREATED_TEST_DATA.len()];
     send_qu
@@ -325,7 +325,7 @@ fn open_read_past_end_close_created_file(send_qu: &Queue<Command>, recv_qu: &Que
     let f = wait_for_result_value!(recv_qu, 0, CmplKind::OpenedFileHandle(r) => r);
 
     log::debug!("got file handle: {f:?}");
-    assert_eq!(f.size, CREATED_TEST_DATA.len());
+    assert_eq!(f.size, CREATED_TEST_DATA.len() as FileUSize);
 
     let mut data = [0u8; 4];
 
@@ -334,7 +334,7 @@ fn open_read_past_end_close_created_file(send_qu: &Queue<Command>, recv_qu: &Que
             id: 1,
             kind: ReadFile {
                 src_handle: f.handle,
-                src_offset: CREATED_TEST_DATA.len(),
+                src_offset: CREATED_TEST_DATA.len() as FileUSize,
                 dst_buffer: BufferMut::from(&mut data[..]),
             }
             .into(),
@@ -367,7 +367,7 @@ fn open_write_past_end_close_created_file(send_qu: &Queue<Command>, recv_qu: &Qu
     let f = wait_for_result_value!(recv_qu, 0, CmplKind::OpenedFileHandle(r) => r);
 
     log::debug!("got file handle: {f:?}");
-    assert_eq!(f.size, CREATED_TEST_DATA.len());
+    assert_eq!(f.size, CREATED_TEST_DATA.len() as FileUSize);
 
     let data = [0u8; 4];
 
@@ -376,7 +376,7 @@ fn open_write_past_end_close_created_file(send_qu: &Queue<Command>, recv_qu: &Qu
             id: 1,
             kind: WriteFile {
                 dst_handle: f.handle,
-                dst_offset: CREATED_TEST_DATA.len(),
+                dst_offset: CREATED_TEST_DATA.len() as FileUSize,
                 src_buffer: Buffer::from(&data[..]),
             }
             .into(),
@@ -411,14 +411,14 @@ fn resize_truncate_created_file(send_qu: &Queue<Command>, recv_qu: &Queue<Comple
     let f = wait_for_result_value!(recv_qu, 0, CmplKind::OpenedFileHandle(r) => r);
 
     log::debug!("got file handle: {f:?}");
-    assert_eq!(f.size, CREATED_TEST_DATA.len());
+    assert_eq!(f.size, CREATED_TEST_DATA.len() as FileUSize);
 
     send_qu
         .post(Command {
             id: 1,
             kind: ResizeFile {
                 handle: f.handle,
-                new_size: NEW_SIZE,
+                new_size: NEW_SIZE as FileUSize,
             }
             .into(),
         })
@@ -449,7 +449,7 @@ fn resize_truncate_created_file(send_qu: &Queue<Command>, recv_qu: &Queue<Comple
             id: 3,
             kind: ReadFile {
                 src_handle: f.handle,
-                src_offset: NEW_SIZE,
+                src_offset: NEW_SIZE as FileUSize,
                 dst_buffer: BufferMut::from(&mut [0u8; 1][..]),
             }
             .into(),
@@ -481,7 +481,7 @@ fn resize_truncate_created_file(send_qu: &Queue<Command>, recv_qu: &Queue<Comple
     let f = wait_for_result_value!(recv_qu, 5, CmplKind::OpenedFileHandle(r) => r);
 
     log::debug!("got file handle: {f:?}");
-    assert_eq!(f.size, NEW_SIZE);
+    assert_eq!(f.size, NEW_SIZE as FileUSize);
 
     send_qu
         .post(Command {
@@ -518,14 +518,14 @@ fn resize_append_created_file(send_qu: &Queue<Command>, recv_qu: &Queue<Completi
     let f = wait_for_result_value!(recv_qu, 0, CmplKind::OpenedFileHandle(r) => r);
 
     log::debug!("got file handle: {f:?}");
-    assert_eq!(f.size, CREATED_TEST_DATA.len());
+    assert_eq!(f.size, CREATED_TEST_DATA.len() as FileUSize);
 
     send_qu
         .post(Command {
             id: 1,
             kind: ResizeFile {
                 handle: f.handle,
-                new_size: NEW_SIZE,
+                new_size: NEW_SIZE as FileUSize,
             }
             .into(),
         })
@@ -557,7 +557,7 @@ fn resize_append_created_file(send_qu: &Queue<Command>, recv_qu: &Queue<Completi
             id: 3,
             kind: ReadFile {
                 src_handle: f.handle,
-                src_offset: CREATED_TEST_DATA.len(),
+                src_offset: CREATED_TEST_DATA.len() as FileUSize,
                 dst_buffer: BufferMut::from(&mut new_data[..]),
             }
             .into(),
@@ -590,7 +590,7 @@ fn resize_append_created_file(send_qu: &Queue<Command>, recv_qu: &Queue<Completi
     let f = wait_for_result_value!(recv_qu, 5, CmplKind::OpenedFileHandle(r) => r);
 
     log::debug!("got file handle: {f:?}");
-    assert_eq!(f.size, NEW_SIZE);
+    assert_eq!(f.size, NEW_SIZE as FileUSize);
 
     send_qu
         .post(Command {
