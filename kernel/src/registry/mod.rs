@@ -43,11 +43,24 @@ pub enum ResourceType {
 
 /// A RegistryHandler responds to requests to open registered resources by path.
 #[async_trait]
-pub trait RegistryHandler {
+pub trait RegistryHandler: Sync {
     /// Open a [BlockStore][crate::storage::BlockStore] resource at `subpath`.
-    async fn open_block_store(&self, subpath: &Path) -> Result<Box<dyn BlockStore>, Error>;
+    async fn open_block_store(&self, subpath: &Path) -> Result<Box<dyn BlockStore>, Error> {
+        Err(Error::Registry {
+            reason: alloc::format!(
+                "subregistry for \"{subpath}\" does not support opening block stores"
+            ),
+            source: Box::new(RegistryError::Unsupported),
+        })
+    }
+
     /// Open a [File][crate::fs::File] resource at `subpath`.
-    async fn open_file(&self, subpath: &Path) -> Result<Box<dyn File>, Error>;
+    async fn open_file(&self, subpath: &Path) -> Result<Box<dyn File>, Error> {
+        Err(Error::Registry {
+            reason: alloc::format!("subregistry for \"{subpath}\" does not support opening files"),
+            source: Box::new(RegistryError::Unsupported),
+        })
+    }
 }
 
 // TODO: storing these as strings is bad as short strings might take up an unexpectedly large

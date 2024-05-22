@@ -7,6 +7,7 @@ use async_recursion::async_recursion;
 use async_trait::async_trait;
 
 use futures::{Stream, StreamExt};
+use kapi::FileUSize;
 use smallvec::SmallVec;
 use snafu::{ensure, OptionExt, ResultExt};
 
@@ -34,8 +35,30 @@ struct FatFile {
 
 #[async_trait]
 impl File for FatFile {
-    fn len(&self) -> u64 {
-        self.file_size as u64
+    fn len(&self) -> FileUSize {
+        self.file_size as FileUSize
+    }
+
+    /// Read bytes starting from `src_offset` in the file into the buffers in `destinations`.
+    /// The total length of `destinations` must fit within the file or the read will fail with an OutOfBounds error.
+    /// No IO will occur in this case.
+    async fn read<'v, 'dest>(
+        &self,
+        src_offset: FileUSize,
+        destinations: &'v [&'dest mut [u8]],
+    ) -> Result<(), Error> {
+        todo!()
+    }
+
+    /// Write bytes starting at `dst_offset` in the file from the buffers in `sources`.
+    /// The total length of `sources` must fit within the file or the write will fail with an OutOfBounds error.
+    /// No IO will occur in this case.
+    async fn write<'v, 'src>(
+        &mut self,
+        dst_offset: FileUSize,
+        sources: &'v [&'src [u8]],
+    ) -> Result<(), Error> {
+        todo!()
     }
 
     async fn load_pages(
@@ -111,15 +134,6 @@ impl File for FatFile {
         }
 
         Ok(())
-    }
-
-    async fn flush_pages(
-        &mut self,
-        _dest_offset: u64,
-        _src_address: PhysicalAddress,
-        _num_pages: usize,
-    ) -> Result<(), Error> {
-        todo!();
     }
 }
 
@@ -411,13 +425,6 @@ impl Handler {
 
 #[async_trait]
 impl RegistryHandler for Handler {
-    async fn open_block_store(&self, _subpath: &Path) -> Result<Box<dyn BlockStore>, Error> {
-        Err(Error::Registry {
-            reason: "".into(),
-            source: Box::new(RegistryError::Unsupported),
-        })
-    }
-
     async fn open_file(&self, subpath: &Path) -> Result<Box<dyn super::File>, Error> {
         log::trace!("attempting to locate {subpath} in FAT volume");
 

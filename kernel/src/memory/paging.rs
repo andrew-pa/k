@@ -654,6 +654,32 @@ impl PageTable {
     pub fn iter(&self) -> PageTableIter {
         PageTableIter::new(self)
     }
+
+    pub fn iter_canonical_raw_bytes(
+        &self,
+        start_addr: VirtualAddress,
+        size_in_bytes: usize,
+    ) -> Result<impl Iterator<Item = (*mut u8, usize)>, MemoryError> {
+        todo!()
+    }
+
+    pub unsafe fn iter_canonical_slices(
+        &self,
+        start_addr: VirtualAddress,
+        size_in_bytes: usize,
+    ) -> Result<impl Iterator<Item = &[u8]>, MemoryError> {
+        self.iter_canonical_raw_bytes(start_addr, size_in_bytes)
+            .map(|i| i.map(|(p, s)| core::slice::from_raw_parts(p, s)))
+    }
+
+    pub unsafe fn iter_canonical_slices_mut(
+        &self,
+        start_addr: VirtualAddress,
+        size_in_bytes: usize,
+    ) -> Result<impl Iterator<Item = &mut [u8]>, MemoryError> {
+        self.iter_canonical_raw_bytes(start_addr, size_in_bytes)
+            .map(|i| i.map(|(p, s)| core::slice::from_raw_parts_mut(p, s)))
+    }
 }
 
 impl Drop for PageTable {

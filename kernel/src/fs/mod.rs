@@ -26,23 +26,34 @@ pub trait File: Send {
     /// Returns the length of the store in bytes.
     fn len(&self) -> FileUSize;
 
+    /// Returns true if the file is empty.
     fn is_empty(&self) -> bool {
         self.len() == 0
     }
+
+    /// Read bytes starting from `src_offset` in the file into the buffers in `destinations`.
+    /// The total length of `destinations` must fit within the file or the read will fail with an OutOfBounds error.
+    /// No IO will occur in this case.
+    async fn read<'v, 'dest>(
+        &self,
+        src_offset: FileUSize,
+        destinations: &'v [&'dest mut [u8]],
+    ) -> Result<(), Error>;
+
+    /// Write bytes starting at `dst_offset` in the file from the buffers in `sources`.
+    /// The total length of `sources` must fit within the file or the write will fail with an OutOfBounds error.
+    /// No IO will occur in this case.
+    async fn write<'v, 'src>(
+        &mut self,
+        dst_offset: FileUSize,
+        sources: &'v [&'src [u8]],
+    ) -> Result<(), Error>;
 
     /// Read `num_pages` pages starting at `src_offset` (in bytes) from the file into `dest_address` in memory
     async fn load_pages(
         &mut self,
         src_offset: FileUSize,
         dest_address: PhysicalAddress,
-        num_pages: usize,
-    ) -> Result<(), Error>;
-
-    /// Write any changes from the in-memory file contents at `src_address` back to the persistent store
-    async fn flush_pages(
-        &mut self,
-        dest_offset: FileUSize,
-        src_address: PhysicalAddress,
         num_pages: usize,
     ) -> Result<(), Error>;
 }

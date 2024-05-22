@@ -77,17 +77,15 @@ pub async fn spawn_process(
     // load & parse binary
     let path = binary_path.as_ref();
     log::debug!("spawning process with binary file at {path}");
-    let mut f = registry().open_file(path).await?;
+    let f = registry().open_file(path).await?;
 
     let f_len = f.len() as usize;
     log::debug!("binary file size = {f_len}");
-    let src_data = PhysicalBuffer::alloc(f_len.div_ceil(PAGE_SIZE), &Default::default()).context(
-        error::MemorySnafu {
+    let mut src_data = PhysicalBuffer::alloc(f_len.div_ceil(PAGE_SIZE), &Default::default())
+        .context(error::MemorySnafu {
             reason: "allocate temporary buffer for binary",
-        },
-    )?;
-    f.load_pages(0, src_data.physical_address(), src_data.page_count())
-        .await?;
+        })?;
+    f.read(0, &[src_data.as_bytes_mut()]).await?;
 
     // parse ELF binary
     let bin: elf::ElfBytes<elf::endian::LittleEndian> =

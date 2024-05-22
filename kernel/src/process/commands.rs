@@ -6,11 +6,12 @@ use futures::FutureExt;
 use kapi::{
     commands::{self as cmds, Kind as CmdKind},
     completions::{self as cmpl, ErrorCode, Kind as CmplKind},
+    FileUSize,
 };
 use snafu::ensure;
 
 use crate::{
-    error::{self, Error, InnerSnafu, MemorySnafu, Utf8Snafu},
+    error::{self, Error, InnerSnafu, MemorySnafu, MiscSnafu, Utf8Snafu},
     process::*,
     registry::{registry, PathBuf},
 };
@@ -300,7 +301,7 @@ impl Process {
             self.next_handle
                 .fetch_add(1, core::sync::atomic::Ordering::AcqRel),
         )
-        .expect("process next_handle counter contains valid handle");
+        .expect("process next_handle counter contains valid file handle");
         let file = registry().open_file(&path).await?;
         let size = file.len();
         self.open_files.push(Arc::new(OpenFile {
@@ -318,10 +319,75 @@ impl Process {
             Ok(cmpl::Success)
         } else {
             Err(Error::Misc {
-                reason: "close on unknown handle".into(),
+                reason: "close on unknown file handle".into(),
                 code: Some(ErrorCode::InvalidId),
             })
         }
+    }
+
+    async fn read_file(self: &Arc<Process>, info: &cmds::ReadFile) -> Result<cmpl::Success, Error> {
+        let of = self
+            .open_files
+            .iter()
+            .find(|f| f.handle == info.src_handle)
+            .cloned()
+            .context(MiscSnafu {
+                reason: "read on unknown file handle",
+                code: Some(ErrorCode::InvalidId),
+            })?;
+        let file = of.file.lock().await;
+        ensure!(
+            (info.src_offset + info.dst_buffer.len as FileUSize) <= file.len(),
+            MiscSnafu {
+                reason: "read goes past the end of the file",
+                code: Some(ErrorCode::OutOfBounds)
+            }
+        );
+        let destinations = unsafe {
+            self.page_tables
+                .iter_canonical_slices_mut(info.dst_buffer.data.into(), info.dst_buffer.len)
+                .context(MemorySnafu {
+                    reason: "get kernel slices for user space buffer",
+                })?
+                .collect::<SmallVec<[&mut [u8]; 8]>>()
+        };
+        file.read(info.src_offset, &destinations)
+            .await
+            .map(|()| cmpl::Success)
+    }
+
+    async fn write_file(
+        self: &Arc<Process>,
+        info: &cmds::WriteFile,
+    ) -> Result<cmpl::Success, Error> {
+        let of = self
+            .open_files
+            .iter()
+            .find(|f| f.handle == info.dst_handle)
+            .cloned()
+            .context(MiscSnafu {
+                reason: "write on unknown file handle",
+                code: Some(ErrorCode::InvalidId),
+            })?;
+        let mut file = of.file.lock().await;
+        ensure!(
+            (info.dst_offset + info.src_buffer.len as FileUSize) <= file.len(),
+            MiscSnafu {
+                reason: "write goes past the end of the file",
+                code: Some(ErrorCode::OutOfBounds)
+            }
+        );
+        let sources = unsafe {
+            self.page_tables
+                .iter_canonical_slices(info.src_buffer.data.into(), info.src_buffer.len)
+                .context(MemorySnafu {
+                    reason: "get kernel slices for user space buffer",
+                })?
+                .collect::<SmallVec<[&[u8]; 8]>>()
+        };
+        file.write(info.dst_offset, &sources)
+            .await
+            .map(|()| cmpl::Success)
     }
 
     /// Execute a single command on the process, returning the resulting completion.
@@ -345,7 +411,9 @@ impl Process {
             CmdKind::WatchProcess(info) => self.watch_process(info).await,
             CmdKind::KillProcess(info) => kill_process(info).await,
             CmdKind::OpenFile(info) => self.open_file(info).await,
-            CmdKind::CloseFile(info) => self.close_file(info).await
+            CmdKind::CloseFile(info) => self.close_file(info).await,
+            CmdKind::ReadFile(info) => self.read_file(info).await,
+            CmdKind::WriteFile(info) => self.write_file(info).await
         };
 
         let kind = res.unwrap_or_else(|e| {

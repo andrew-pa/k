@@ -15,11 +15,11 @@ use crate::{wait_for_error_response, wait_for_success, Testable};
 pub const TESTS: &[&dyn Testable] = &[
     &open_close,
     &fail_to_open_not_existing,
+    &open_read_close,
+    &open_partial_read_close,
     &fail_to_close_bad_handle,
     &create_close_delete,
     &fail_to_create_existing,
-    &open_read_close,
-    &open_partial_read_close,
     &create_write_close,
     &open_read_close_created_file,
     &open_read_past_end_close_created_file,
@@ -31,7 +31,7 @@ pub const TESTS: &[&dyn Testable] = &[
     &fail_to_read_bad_handle,
     &fail_to_write_bad_handle,
     &fail_to_resize_bad_handle,
-    &data_round_trip,
+    &data_round_trip_without_close,
 ];
 
 fn open_close(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
@@ -707,7 +707,7 @@ fn fail_to_close_bad_handle(send_qu: &Queue<Command>, recv_qu: &Queue<Completion
     wait_for_error_response(recv_qu, 0, ErrorCode::InvalidId);
 }
 
-fn data_round_trip(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
+fn data_round_trip_without_close(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
     let path = Path::from("/volumes/root/tmp-test-file");
 
     send_qu
