@@ -50,7 +50,7 @@ pub struct BlockCache {
     chunk_size: usize,
     blocks_per_chunk: usize,
     num_chunks: usize,
-    metadata: RwLock<Vec<ChunkMetadata>>,
+    metadata: Vec<RwLock<ChunkMetadata>>,
     buffer: RwLock<PhysicalBuffer>,
     buffer_pa: PhysicalAddress,
 }
@@ -92,11 +92,9 @@ impl BlockCache {
             block_size,
             chunk_size,
             num_chunks,
-            metadata: RwLock::new(
-                core::iter::repeat_with(Default::default)
-                    .take(num_chunks)
-                    .collect(),
-            ),
+            metadata: core::iter::repeat_with(Default::default)
+                .take(num_chunks)
+                .collect(),
             buffer_pa: buffer.physical_address(),
             // TODO: in the future, the physical memory allocator should support loaning pages to
             // caches etc but for now we just allocate the entire cache upfront
@@ -158,10 +156,10 @@ impl BlockCache {
         chunk_id: u64,
         mark_dirty: bool,
     ) -> Result<(), StorageError> {
-        let md = { self.metadata.read().await[chunk_id as usize] };
+        let mut md = self.metadata[chunk_id as usize].write().await;
         if !md.occupied() || md.tag() != tag {
             // chunk is not present
-            log::trace!("loading chunk {tag}:{chunk_id}, md={md:?}");
+            log::trace!("loading chunk {tag}:{chunk_id}, md={:?}", *md);
             let mut store = self.store.lock().await;
             if md.dirty() {
                 store
@@ -178,7 +176,6 @@ impl BlockCache {
                     &[(self.chunk_phy_addr(chunk_id), self.blocks_per_chunk)],
                 )
                 .await?;
-            let md = &mut self.metadata.write().await[chunk_id as usize];
             md.set_tag(tag);
             md.set_occupied(true);
             md.set_dirty(mark_dirty);
@@ -196,7 +193,7 @@ impl BlockCache {
         future::try_join_all((0..num_chunks_inclusive).map(|i| {
             let mut tag = starting_tag;
             let mut chunk_id = starting_chunk_id + i;
-            if chunk_id > self.num_chunks as u64 {
+            if chunk_id >= self.num_chunks as u64 {
                 tag += chunk_id / self.num_chunks as u64;
                 chunk_id %= self.num_chunks as u64;
             }
@@ -221,8 +218,8 @@ impl BlockCache {
         let (starting_tag, starting_chunk_id, initial_block_offset) =
             self.decompose_address(address);
 
-        //log::trace!("copying from {starting_tag}:{starting_chunk_id}:{initial_block_offset} + {byte_offset} [{address}]");
         let num_chunks_inclusive = dest.len().div_ceil(self.chunk_size);
+        // log::trace!("copying from {starting_tag}:{starting_chunk_id}:{initial_block_offset} + {byte_offset} len={},chunk count={} [{address}]", dest.len(), num_chunks_inclusive);
         if num_chunks_inclusive > self.num_chunks {
             // if the read is larger than the entire cache
             // TODO: implement reads larger than the size of the cache by directly issuing a read
@@ -239,7 +236,18 @@ impl BlockCache {
         let offset = starting_chunk_id as usize * self.chunk_size
             + initial_block_offset as usize * self.block_size
             + byte_offset;
-        dest.copy_from_slice(&self.buffer.read().await.as_bytes()[offset..offset + dest.len()]);
+        let cache = self.buffer.read().await;
+        if offset + dest.len() > cache.len() {
+            let split = (offset + dest.len()) - cache.len();
+            log::trace!(
+                "offset = {offset}, dest.len()={}, split={split}",
+                dest.len()
+            );
+            dest[0..split].copy_from_slice(&cache.as_bytes()[offset..]);
+            dest[split..].copy_from_slice(&cache.as_bytes()[0..split]);
+        } else {
+            dest.copy_from_slice(&cache.as_bytes()[offset..offset + dest.len()]);
+        }
         Ok(())
     }
 

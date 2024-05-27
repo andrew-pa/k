@@ -105,9 +105,15 @@ impl VirtualAddress {
         let lv1_index = ((0x1ff << 30) & self.0) >> 30;
         let lv2_index = ((0x1ff << 21) & self.0) >> 21;
         let lv3_index = ((0x1ff << 12) & self.0) >> 12;
-        let page_offset = self.0 & 0xfff;
+        let page_offset = self.page_offset();
 
         (tag, lv0_index, lv1_index, lv2_index, lv3_index, page_offset)
+    }
+
+    /// Offset in bytes from the beginning of the page this address is located in.
+    #[inline]
+    pub fn page_offset(&self) -> usize {
+        self.0 & 0xfff
     }
 
     /// Reconstitute a virtual address from the page table indices and page offset.

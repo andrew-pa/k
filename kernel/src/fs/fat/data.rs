@@ -8,6 +8,8 @@ use bytemuck::{Pod, Zeroable};
 use snafu::Snafu;
 use widestring::Utf16Str;
 
+pub type ClusterIndex = u16;
+
 /// A entry in the partition table found in the MBR.
 #[repr(C, packed)]
 #[derive(Debug, Copy, Clone, Zeroable, Pod)]
@@ -199,8 +201,7 @@ impl LongDirEntry {
     }
 }
 
-pub type ClusterIndex = u16;
-
+// TODO: Since direct == cluster index 0, this is unnecessary
 #[derive(Debug)]
 pub enum DirectorySource {
     Direct(BlockAddress),

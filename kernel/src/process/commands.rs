@@ -343,7 +343,7 @@ impl Process {
                 code: Some(ErrorCode::OutOfBounds)
             }
         );
-        let destinations = unsafe {
+        let mut destinations = unsafe {
             self.page_tables
                 .iter_canonical_slices_mut(info.dst_buffer.data.into(), info.dst_buffer.len)
                 .context(MemorySnafu {
@@ -351,7 +351,7 @@ impl Process {
                 })?
                 .collect::<SmallVec<[&mut [u8]; 8]>>()
         };
-        file.read(info.src_offset, &destinations)
+        file.read(info.src_offset, &mut destinations)
             .await
             .map(|()| cmpl::Success)
     }

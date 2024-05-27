@@ -103,6 +103,9 @@ impl Error {
                 }
                 | MemoryError::Map {
                     source: memory::paging::MapError::CopyFromUnmapped { .. },
+                }
+                | MemoryError::Map {
+                    source: memory::paging::MapError::ExpectedMapping { .. },
                 } => ErrorCode::InvalidPointer,
                 _ => ErrorCode::Internal,
             },

@@ -85,7 +85,8 @@ pub async fn spawn_process(
         .context(error::MemorySnafu {
             reason: "allocate temporary buffer for binary",
         })?;
-    f.read(0, &[src_data.as_bytes_mut()]).await?;
+    f.read(0, &mut [&mut src_data.as_bytes_mut()[0..f_len]])
+        .await?;
 
     // parse ELF binary
     let bin: elf::ElfBytes<elf::endian::LittleEndian> =

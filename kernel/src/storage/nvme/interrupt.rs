@@ -38,7 +38,7 @@ impl Future for CompletionFuture {
                 Poll::Pending
             }
             Some(Waiting(_)) => {
-                log::warn!("future repolled while waiting");
+                log::warn!("future repolled while waiting cmd id = {}", self.cmd_id);
                 self.pending_completions
                     .insert_blocking(self.cmd_id, Waiting(cx.waker().clone()));
                 Poll::Pending
@@ -106,7 +106,7 @@ fn handle_interrupt(
                     w.wake_by_ref();
                     Ready(cmp)
                 },
-                Ready(old_cmp) => panic!("recieved second completion {cmp:?} for id with pending ready completion {old_cmp:?}"),
+                Ready(old_cmp) => panic!("received second completion {cmp:?} for id with pending ready completion {old_cmp:?}"),
             }
         } else {
             // log::trace!("inserting ready completion before future was ever polled");
