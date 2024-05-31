@@ -2,8 +2,7 @@
 //!
 //! There are three allocators:
 //! - Physical memory allocator (for physical pages of RAM)
-//! - Virtual memory allocator (for virtual pages of addresses that are unmapped, in the kernel
-//! address space)
+//! - Virtual memory allocator (for virtual pages of addresses that are unmapped, in the kernel address space)
 //! - The kernel heap, for Rust heap allocations in the kernel
 //!
 //! Most things that need virtual addresses assigned (like device drivers) should use the global
