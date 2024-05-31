@@ -77,16 +77,15 @@ pub async fn spawn_process(
     // load & parse binary
     let path = binary_path.as_ref();
     log::debug!("spawning process with binary file at {path}");
-    let mut f = registry().open_file(path).await?;
+    let f = registry().open_file(path).await?;
 
     let f_len = f.len() as usize;
     log::debug!("binary file size = {f_len}");
-    let src_data = PhysicalBuffer::alloc(f_len.div_ceil(PAGE_SIZE), &Default::default()).context(
-        error::MemorySnafu {
+    let mut src_data = PhysicalBuffer::alloc(f_len.div_ceil(PAGE_SIZE), &Default::default())
+        .context(error::MemorySnafu {
             reason: "allocate temporary buffer for binary",
-        },
-    )?;
-    f.load_pages(0, src_data.physical_address(), src_data.page_count())
+        })?;
+    f.read(0, &mut [&mut src_data.as_bytes_mut()[0..f_len]])
         .await?;
 
     // parse ELF binary
@@ -160,11 +159,13 @@ pub async fn spawn_process(
         id: pid,
         page_tables: pt,
         threads: Default::default(),
-        next_queue_id: AtomicU16::new(FIRST_RECV_QUEUE_ID.into()), //AtomicU16::new((FIRST_RECV_QUEUE_ID.saturating_add(1)).into()),
+        next_queue_id: AtomicU16::new(FIRST_RECV_QUEUE_ID.into()),
         send_queues: Default::default(),
         recv_queues: Default::default(),
         address_space_allocator: Mutex::new(address_space_allocator),
         exit_state: Default::default(),
+        next_handle: AtomicU32::new(1),
+        open_files: Default::default(),
     });
     processes().push(proc.clone());
 

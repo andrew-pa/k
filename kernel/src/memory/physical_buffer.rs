@@ -90,6 +90,19 @@ impl PhysicalBuffer {
     pub fn as_bytes_mut(&mut self) -> &mut [u8] {
         unsafe { core::slice::from_raw_parts_mut(self.vir_addr.as_ptr::<u8>(), self.len()) }
     }
+
+    /// Unsafely create a mutable reference to the bytes in the buffer even if the buffer is
+    /// shared or otherwise held by a immutable reference.
+    ///
+    /// # Safety
+    /// This is only safe if the caller has some way to make sure that mutating the buffer while
+    /// shared is safe (i.e. a lock)
+    // Clippy is justfied in complaining about this function, but at least this way it is obvious
+    // when it happens instead of the caller doing it themselves.
+    #[allow(clippy::mut_from_ref)]
+    pub unsafe fn as_bytes_mut_force_unsafe(&self) -> &mut [u8] {
+        core::slice::from_raw_parts_mut(self.vir_addr.as_ptr::<u8>(), self.len())
+    }
 }
 
 impl Drop for PhysicalBuffer {

@@ -6,17 +6,37 @@ use futures::FutureExt;
 use kapi::{
     commands::{self as cmds, Kind as CmdKind},
     completions::{self as cmpl, ErrorCode, Kind as CmplKind},
-    PATH_MAX_LEN,
+    FileUSize,
 };
 use snafu::ensure;
 
 use crate::{
-    error::{self, Error, InnerSnafu, MemorySnafu},
+    error::{self, Error, InnerSnafu, MemorySnafu, MiscSnafu, Utf8Snafu},
     process::*,
-    registry::Path,
+    registry::{registry, PathBuf},
 };
 
 use self::memory::paging::kernel_table;
+
+macro_rules! command_dispatch {
+    {
+        $kind:expr,
+        $(
+            $cmd:pat => $res:expr
+        ),*
+    } => {
+        match $kind {
+            $($cmd => $res.map(Into::into),)*
+            kind => Err(Error::Misc {
+                reason: alloc::format!(
+                            "received unknown command: {:?}",
+                            core::mem::discriminant(kind)
+                        ),
+                code: Some(ErrorCode::UnknownCommand),
+            }),
+        }
+    };
+}
 
 /// Implementation of user-space commands.
 impl Process {
@@ -193,6 +213,19 @@ impl Process {
         Ok(thread.exit_code().await)
     }
 
+    /// Read a path from user-space into the kernel.
+    fn read_user_path(&self, path: &kapi::Path) -> Result<PathBuf, Error> {
+        let mut path_buf = alloc::vec![0; path.len];
+        self.page_tables
+            .mapped_copy_from(path.text.into(), &mut path_buf)
+            .context(error::MemorySnafu {
+                reason: "invalid path slice",
+            })?;
+        PathBuf::from_bytes(path_buf).with_context(|_| Utf8Snafu {
+            reason: alloc::format!("user path: {:?}", path),
+        })
+    }
+
     async fn spawn_child(
         self: &Arc<Process>,
         info: &cmds::SpawnProcess,
@@ -200,17 +233,7 @@ impl Process {
         recv_qu: Weak<UserQueue<Completion>>,
     ) -> Result<cmpl::NewProcess, Error> {
         // convert info.binary_path into a kernel Path
-        let mut path_buf = [0u8; PATH_MAX_LEN];
-        self.page_tables
-            .mapped_copy_from(
-                info.binary_path.text.into(),
-                &mut path_buf[0..info.binary_path.len],
-            )
-            .context(error::MemorySnafu {
-                reason: "invalid path slice",
-            })?;
-        let binary_path = Path::from_bytes(&path_buf[0..info.binary_path.len])
-            .context(error::Utf8Snafu { reason: "path" })?;
+        let binary_path = self.read_user_path(&info.binary_path)?;
 
         let params_buf = (info.parameters.len > 0)
             .then(|| {
@@ -269,43 +292,128 @@ impl Process {
         Ok(proc.exit_code().await)
     }
 
+    async fn open_file(
+        self: &Arc<Process>,
+        info: &cmds::OpenFile,
+    ) -> Result<cmpl::OpenedFileHandle, Error> {
+        let path = self.read_user_path(&info.path)?;
+        let handle = FileHandle::new(
+            self.next_handle
+                .fetch_add(1, core::sync::atomic::Ordering::AcqRel),
+        )
+        .expect("process next_handle counter contains valid file handle");
+        let file = registry().open_file(&path).await?;
+        let size = file.len();
+        self.open_files.push(Arc::new(OpenFile {
+            handle,
+            file: crate::tasks::locks::Mutex::new(file),
+        }));
+        Ok(cmpl::OpenedFileHandle { handle, size })
+    }
+
+    async fn close_file(
+        self: &Arc<Process>,
+        info: &cmds::CloseFile,
+    ) -> Result<cmpl::Success, Error> {
+        if self.open_files.remove(|f| f.handle == info.handle) {
+            Ok(cmpl::Success)
+        } else {
+            Err(Error::Misc {
+                reason: "close on unknown file handle".into(),
+                code: Some(ErrorCode::InvalidId),
+            })
+        }
+    }
+
+    async fn read_file(self: &Arc<Process>, info: &cmds::ReadFile) -> Result<cmpl::Success, Error> {
+        let of = self
+            .open_files
+            .iter()
+            .find(|f| f.handle == info.src_handle)
+            .cloned()
+            .context(MiscSnafu {
+                reason: "read on unknown file handle",
+                code: Some(ErrorCode::InvalidId),
+            })?;
+        let file = of.file.lock().await;
+        ensure!(
+            (info.src_offset + info.dst_buffer.len as FileUSize) <= file.len(),
+            MiscSnafu {
+                reason: "read goes past the end of the file",
+                code: Some(ErrorCode::OutOfBounds)
+            }
+        );
+        let mut destinations = unsafe {
+            self.page_tables
+                .iter_canonical_slices_mut(info.dst_buffer.data.into(), info.dst_buffer.len)
+                .context(MemorySnafu {
+                    reason: "get kernel slices for user space buffer",
+                })?
+                .collect::<SmallVec<[&mut [u8]; 8]>>()
+        };
+        file.read(info.src_offset, &mut destinations)
+            .await
+            .map(|()| cmpl::Success)
+    }
+
+    async fn write_file(
+        self: &Arc<Process>,
+        info: &cmds::WriteFile,
+    ) -> Result<cmpl::Success, Error> {
+        let of = self
+            .open_files
+            .iter()
+            .find(|f| f.handle == info.dst_handle)
+            .cloned()
+            .context(MiscSnafu {
+                reason: "write on unknown file handle",
+                code: Some(ErrorCode::InvalidId),
+            })?;
+        let mut file = of.file.lock().await;
+        ensure!(
+            (info.dst_offset + info.src_buffer.len as FileUSize) <= file.len(),
+            MiscSnafu {
+                reason: "write goes past the end of the file",
+                code: Some(ErrorCode::OutOfBounds)
+            }
+        );
+        let sources = unsafe {
+            self.page_tables
+                .iter_canonical_slices(info.src_buffer.data.into(), info.src_buffer.len)
+                .context(MemorySnafu {
+                    reason: "get kernel slices for user space buffer",
+                })?
+                .collect::<SmallVec<[&[u8]; 8]>>()
+        };
+        file.write(info.dst_offset, &sources)
+            .await
+            .map(|()| cmpl::Success)
+    }
+
     /// Execute a single command on the process, returning the resulting completion.
     pub async fn dispatch_command(
         self: &Arc<Process>,
         cmd: Command,
         recv_qu: Weak<UserQueue<Completion>>,
     ) -> Completion {
-        let res = match &cmd.kind {
+        let res = command_dispatch! {
+            &cmd.kind,
             CmdKind::Test(cmds::Test { arg }) => Ok(cmpl::Test {
                 arg: *arg,
                 pid: self.id,
-            }
-            .into()),
-            CmdKind::CreateCompletionQueue(info) => {
-                self.create_completion_queue(info).await.map(Into::into)
-            }
-            CmdKind::CreateSubmissionQueue(info) => {
-                self.create_submission_queue(info).await.map(Into::into)
-            }
-            CmdKind::DestroyQueue(info) => self.destroy_queue(info).map(Into::into),
-            CmdKind::SpawnThread(info) => self
-                .spawn_thread(info, cmd.id, recv_qu)
-                .await
-                .map(Into::into),
-            CmdKind::WatchThread(info) => self.watch_thread(info).await.map(Into::into),
-            CmdKind::SpawnProcess(info) => self
-                .spawn_child(info, cmd.id, recv_qu)
-                .await
-                .map(Into::into),
-            CmdKind::WatchProcess(info) => self.watch_process(info).await.map(Into::into),
-            CmdKind::KillProcess(info) => kill_process(info).await.map(Into::into),
-            kind => Err(Error::Misc {
-                reason: alloc::format!(
-                    "received unknown command: {:?}",
-                    core::mem::discriminant(kind)
-                ),
-                code: Some(ErrorCode::UnknownCommand),
             }),
+            CmdKind::CreateCompletionQueue(info) => self.create_completion_queue(info).await,
+            CmdKind::CreateSubmissionQueue(info) => self.create_submission_queue(info).await,
+            CmdKind::DestroyQueue(info) => self.destroy_queue(info),
+            CmdKind::SpawnThread(info) => self.spawn_thread(info, cmd.id, recv_qu).await,
+            CmdKind::WatchThread(info) => self.watch_thread(info).await,
+            CmdKind::SpawnProcess(info) => self.spawn_child(info, cmd.id, recv_qu).await,
+            CmdKind::WatchProcess(info) => self.watch_process(info).await,
+            CmdKind::KillProcess(info) => kill_process(info).await,
+            CmdKind::OpenFile(info) => self.open_file(info).await,
+            CmdKind::CloseFile(info) => self.close_file(info).await,
+            CmdKind::ReadFile(info) => self.read_file(info).await,
+            CmdKind::WriteFile(info) => self.write_file(info).await
         };
 
         let kind = res.unwrap_or_else(|e| {

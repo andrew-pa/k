@@ -3,6 +3,7 @@
 use core::{cell::OnceCell, ops::Range, ptr::NonNull, sync::atomic::AtomicBool};
 
 use bitfield::bitfield;
+use itertools::Itertools;
 use smallvec::SmallVec;
 use snafu::{ensure, OptionExt, ResultExt, Snafu};
 use spin::Mutex;
@@ -183,6 +184,11 @@ pub enum MapError {
         virt_start: VirtualAddress,
     },
     InvalidTag,
+    #[snafu(display("Mapping expected at {address}: {reason}"))]
+    ExpectedMapping {
+        reason: &'static str,
+        address: VirtualAddress,
+    },
     #[snafu(display("Copy from unmapped region. last valid address={last_valid:?}, {remaining_bytes} bytes remaining in copy"))]
     CopyFromUnmapped {
         last_valid: Option<VirtualAddress>,
@@ -579,7 +585,7 @@ impl PageTable {
             return InvalidTagSnafu.fail().context(MapSnafu);
         }
 
-        let mut i = PageTableIter::starting_at(self, [i0, i1, i2, i3]);
+        let mut i = PageTableIter::starting_at_unchecked(self, [i0, i1, i2, i3]);
 
         let first = i
             .next()
@@ -654,6 +660,88 @@ impl PageTable {
     pub fn iter(&self) -> PageTableIter {
         PageTableIter::new(self)
     }
+
+    /// Iterate over "raw slices" of a continuous virtual range in the table, translated to canonical addreses.
+    pub fn iter_canonical_raw_bytes(
+        &self,
+        start_addr: VirtualAddress,
+        size_in_bytes: usize,
+    ) -> Result<impl Iterator<Item = (*mut u8, usize)> + '_, MemoryError> {
+        // TODO: once we have this, we don't really need `mapped_copy_from` to be a seperate implementation
+        let end_addr = start_addr.add(size_in_bytes);
+        // the start of the next page after the end of the range
+        let end_page = VirtualAddress((end_addr.0 + PAGE_SIZE) & !(PAGE_SIZE - 1));
+        let mut bytes_so_far = 0;
+        // TODO: combine continuous slices to minimize the total number of slices returned.
+        // TODO: use itertools::coalesce
+        PageTableIter::starting_from_address(self, start_addr).map(|i| {
+            i.take_while(move |r| r.base_virt_addr < end_page)
+                .map(move |r| {
+                    let region_len = r.page_count * PAGE_SIZE;
+                    let (offset, len) = if bytes_so_far == 0 {
+                        (
+                            start_addr.page_offset(),
+                            (region_len - start_addr.page_offset()).min(size_in_bytes),
+                        )
+                    } else {
+                        (0, region_len.min(size_in_bytes - bytes_so_far))
+                    };
+                    bytes_so_far += len;
+                    unsafe {
+                        (
+                            r.base_phys_addr
+                                .to_virtual_canonical()
+                                .add(offset)
+                                .as_ptr::<u8>(),
+                            len,
+                        )
+                    }
+                })
+                .coalesce(|previous, current| {
+                    if unsafe { previous.0.add(previous.1) } == current.0 {
+                        Ok((previous.0, previous.1 + current.1))
+                    } else {
+                        Err((previous, current))
+                    }
+                })
+        })
+    }
+
+    /// Iterate over slices into memory of a continuous virtual range in the table.
+    /// It is possible that the iterator does not extend to the entire length `size_in_bytes` but
+    /// in fact stops before then because less than `size_in_bytes` memory is mapped at that
+    /// address!
+    ///
+    /// # Safety
+    /// The caller must ensure that the pointers/lengths that would be returned from
+    /// [Self::iter_canonical_raw_bytes] are valid slices, or in other words that the memory that
+    /// these pages map really is memory you can access as a byte slice.
+    pub unsafe fn iter_canonical_slices(
+        &self,
+        start_addr: VirtualAddress,
+        size_in_bytes: usize,
+    ) -> Result<impl Iterator<Item = &[u8]>, MemoryError> {
+        self.iter_canonical_raw_bytes(start_addr, size_in_bytes)
+            .map(|i| i.map(|(p, s)| core::slice::from_raw_parts(p, s)))
+    }
+
+    /// Iterate over mutable slices into memory of a continuous virtual range in the table.
+    /// It is possible that the iterator does not extend to the entire length `size_in_bytes` but
+    /// in fact stops before then because less than `size_in_bytes` memory is mapped at that
+    /// address!
+    ///
+    /// # Safety
+    /// The caller must ensure that the pointers/lengths that would be returned from
+    /// [Self::iter_canonical_raw_bytes] are valid slices, or in other words that the memory that
+    /// these pages map really is memory you can access as a byte slice.
+    pub unsafe fn iter_canonical_slices_mut(
+        &self,
+        start_addr: VirtualAddress,
+        size_in_bytes: usize,
+    ) -> Result<impl Iterator<Item = &mut [u8]>, MemoryError> {
+        self.iter_canonical_raw_bytes(start_addr, size_in_bytes)
+            .map(|i| i.map(|(p, s)| core::slice::from_raw_parts_mut(p, s)))
+    }
 }
 
 impl Drop for PageTable {
@@ -695,10 +783,43 @@ pub struct PageTableIter<'a> {
 
 impl<'a> PageTableIter<'a> {
     fn new(pt: &'a PageTable) -> Self {
-        Self::starting_at(pt, [0, 0, 0, 0])
+        Self::starting_at_unchecked(pt, [0, 0, 0, 0])
     }
 
-    fn starting_at(pt: &'a PageTable, indices: [usize; 4]) -> Self {
+    /// Starts an iterator at the mapping for some virtual address. If the first valid mapped
+    /// region discovered does not map the input address, an error is returned. There is no
+    /// guarantee that the subsequent mapped ranges will be continuous.
+    fn starting_from_address(pt: &'a PageTable, addr: VirtualAddress) -> Result<Self, MemoryError> {
+        let (tag, i0, i1, i2, i3, po) = addr.to_parts();
+
+        if !matches!((pt.high_addresses, tag), (true, 0xffff) | (false, 0x0)) {
+            return InvalidTagSnafu.fail().context(MapSnafu);
+        }
+
+        let mut i = PageTableIter::starting_at_unchecked(pt, [i0, i1, i2, i3]);
+        i.move_to_next_valid_map_entry();
+
+        let first = i
+            .current_entry()
+            .context(ExpectedMappingSnafu {
+                reason: "starting mapped region iterator at address",
+                address: addr,
+            })
+            .context(MapSnafu)?;
+
+        if i.current_va_from_stack().add(po) != addr {
+            Err(MemoryError::Map {
+                source: MapError::ExpectedMapping {
+                    reason: "starting_from_address: first region mapped after address does not map address",
+                    address: addr
+                }
+            })
+        } else {
+            Ok(i)
+        }
+    }
+
+    fn starting_at_unchecked(pt: &'a PageTable, indices: [usize; 4]) -> Self {
         let interrupt_guard = InterruptGuard::disable_interrupts_until_drop();
         let table_lock_guard = pt.level0_table.lock();
         let mut s = PageTableIter {

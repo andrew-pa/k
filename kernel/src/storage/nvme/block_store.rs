@@ -41,7 +41,7 @@ impl BlockStore for NamespaceBlockStore {
                 }
                 .build()
             })?;
-        log::trace!("read blocks {source_addr}[..{total_num_blocks}] -> {destination_addrs:?}");
+        log::trace!("read blocks {source_addr}[0..{total_num_blocks}] -> {destination_addrs:?}");
         let cmp = self.io_cq.wait_for_completion(
             self.io_sq.begin()
                 .expect("NVMe submission queue full. TODO: we should be able to await for a new spot in the queue rather than panic")

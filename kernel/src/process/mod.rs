@@ -12,7 +12,7 @@ use crate::{
     },
     tasks::locks::Mutex,
 };
-use alloc::sync::Arc;
+use alloc::{boxed::Box, sync::Arc};
 
 use bitfield::Bit;
 use core::{
@@ -24,6 +24,7 @@ use kapi::{
     commands::Command,
     completions::Completion,
     queue::{Queue, QueueId},
+    FileHandle,
 };
 use smallvec::SmallVec;
 use snafu::{OptionExt, ResultExt};
@@ -117,6 +118,11 @@ impl<T> core::fmt::Debug for UserQueue<T> {
 crate::assert_send!(kapi::commands::Command);
 crate::assert_send!(kapi::completions::Completion);
 
+pub struct OpenFile {
+    handle: FileHandle,
+    file: Mutex<Box<dyn crate::fs::File>>,
+}
+
 /// A user-space process.
 ///
 /// A process is a collection of threads that share the same address space and system resources.
@@ -126,10 +132,12 @@ pub struct Process {
     pub id: ProcessId,
     /// The threads running in this process.
     pub threads: Mutex<SmallVec<[Arc<Thread>; 2]>>,
+
     /// Page tables for this process.
     page_tables: PageTable,
     /// Allocator for the virtual address space of the process.
     address_space_allocator: Mutex<VirtualAddressAllocator>,
+
     /// The next free queue ID.
     next_queue_id: AtomicU16,
     /// The send (user space to kernel) queues associated with this process, and their associated
@@ -140,9 +148,15 @@ pub struct Process {
     // TODO: these queues don't need to be owned, because the process implicitly owns
     // all the mapped memory in its page tables by default.
     recv_queues: ConcurrentLinkedList<Arc<UserQueue<Completion>>>,
+
     /// The exit state for the whole process, which will be the same as the *last* thread to exit
     /// in the process.
     exit_state: Arc<ExitState>,
+
+    /// The next free file handle value.
+    next_handle: AtomicU32,
+    /// The files currently opened by this process.
+    open_files: ConcurrentLinkedList<Arc<OpenFile>>,
 }
 
 crate::assert_sync!(Process);

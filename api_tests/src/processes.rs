@@ -8,7 +8,7 @@ use kapi::{
     Buffer, Path, ProcessId,
 };
 
-use crate::Testable;
+use crate::{wait_for_error_response, Testable};
 
 pub const TESTS: &[&dyn Testable] = &[
     &basic,
@@ -34,29 +34,11 @@ fn basic(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
         })
         .expect("send spawn process");
 
-    let mut pid: Option<ProcessId> = None;
-    while pid.is_none() {
-        if let Some(c) = recv_qu.poll() {
-            assert_eq!(c.response_to_id, 0);
-            match c.kind {
-                CmplKind::NewProcess(nt) => {
-                    pid = Some(nt.id);
-                }
-                _ => panic!("unexpected completion: {c:?}"),
-            }
-        }
-        yield_now();
-    }
+    let pid = wait_for_result_value!(recv_qu, 0, CmplKind::NewProcess(np) => np.id);
+    log::info!("spawned process {pid}");
 
     // wait for the process to exit
-    loop {
-        if let Some(c) = recv_qu.poll() {
-            assert_eq!(c.response_to_id, 0);
-            assert_eq!(c.kind, CmplKind::ThreadExit(ThreadExit::Normal(0)));
-            break;
-        }
-        yield_now();
-    }
+    wait_for_result_value!(recv_qu, 0, CmplKind::ThreadExit(ThreadExit::Normal(0)) => ());
 }
 
 fn basic_watch(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
@@ -72,20 +54,7 @@ fn basic_watch(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
         })
         .expect("send spawn process");
 
-    let mut pid: Option<ProcessId> = None;
-    while pid.is_none() {
-        if let Some(c) = recv_qu.poll() {
-            assert_eq!(c.response_to_id, 0);
-            match c.kind {
-                CmplKind::NewProcess(nt) => {
-                    pid = Some(nt.id);
-                }
-                _ => panic!("unexpected completion: {c:?}"),
-            }
-        }
-        yield_now();
-    }
-    let pid = pid.expect("get pid");
+    let pid = wait_for_result_value!(recv_qu, 0, CmplKind::NewProcess(np) => np.id);
 
     send_qu
         .post(Command {
@@ -146,14 +115,7 @@ fn fail_binary_not_found(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) 
         })
         .expect("send spawn process");
 
-    loop {
-        if let Some(c) = recv_qu.poll() {
-            assert_eq!(c.response_to_id, 0);
-            assert_eq!(c.kind, CmplKind::Err(ErrorCode::NotFound));
-            break;
-        }
-        yield_now();
-    }
+    wait_for_error_response(recv_qu, 0, ErrorCode::NotFound);
 }
 
 fn fail_invalid_path_ptr(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
@@ -172,14 +134,7 @@ fn fail_invalid_path_ptr(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) 
         })
         .expect("send spawn process");
 
-    loop {
-        if let Some(c) = recv_qu.poll() {
-            assert_eq!(c.response_to_id, 0);
-            assert_eq!(c.kind, CmplKind::Err(ErrorCode::InvalidPointer));
-            break;
-        }
-        yield_now();
-    }
+    wait_for_error_response(recv_qu, 0, ErrorCode::InvalidPointer);
 }
 
 fn fail_invalid_parameter_ptr(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
@@ -198,14 +153,7 @@ fn fail_invalid_parameter_ptr(send_qu: &Queue<Command>, recv_qu: &Queue<Completi
         })
         .expect("send spawn process");
 
-    loop {
-        if let Some(c) = recv_qu.poll() {
-            assert_eq!(c.response_to_id, 0);
-            assert_eq!(c.kind, CmplKind::Err(ErrorCode::InvalidPointer));
-            break;
-        }
-        yield_now();
-    }
+    wait_for_error_response(recv_qu, 0, ErrorCode::InvalidPointer);
 }
 
 fn basic_kill(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
@@ -221,20 +169,7 @@ fn basic_kill(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
         })
         .expect("send spawn process");
 
-    let mut pid: Option<ProcessId> = None;
-    while pid.is_none() {
-        if let Some(c) = recv_qu.poll() {
-            assert_eq!(c.response_to_id, 0);
-            match c.kind {
-                CmplKind::NewProcess(nt) => {
-                    pid = Some(nt.id);
-                }
-                _ => panic!("unexpected completion: {c:?}"),
-            }
-        }
-        yield_now();
-    }
-    let pid = pid.expect("get pid");
+    let pid = wait_for_result_value!(recv_qu, 0, CmplKind::NewProcess(np) => np.id);
 
     send_qu
         .post(Command {
@@ -280,14 +215,7 @@ fn fail_to_kill_bad_id(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
         })
         .expect("send kill process");
 
-    loop {
-        if let Some(c) = recv_qu.poll() {
-            assert_eq!(c.response_to_id, 0);
-            assert_eq!(c.kind, CmplKind::Err(ErrorCode::InvalidId));
-            break;
-        }
-        yield_now();
-    }
+    wait_for_error_response(recv_qu, 0, ErrorCode::InvalidId);
 }
 
 fn basic_heap(_send_qu: &Queue<Command>, _recv_qu: &Queue<Completion>) {

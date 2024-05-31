@@ -39,7 +39,10 @@ $(BUILD_DIR)/bin/init: build-rust $(TARGET_DIR)/init
 	mkdir -p $(BUILD_DIR)/bin
 	cp $(TARGET_DIR)/init $(BUILD_DIR)/bin/init
 
-$(BUILD_DIR)/bin/api_tests: build-rust $(TARGET_DIR)/api_tests
+$(BUILD_DIR)/test-data-file:
+	printf "%.1s" {1..64} > $(BUILD_DIR)/test-data-file
+
+$(BUILD_DIR)/bin/api_tests: build-rust $(TARGET_DIR)/api_tests $(BUILD_DIR)/test-data-file
 	mkdir -p $(BUILD_DIR)/bin
 	cp $(TARGET_DIR)/api_tests $(BUILD_DIR)/bin/api_tests
 

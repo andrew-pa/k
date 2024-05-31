@@ -1,6 +1,6 @@
 //! Asynchronous commands that can be submitted to the kernel from user-space via a [crate::queue::Queue].
 
-use crate::{queue::QueueId, Buffer, Path, ProcessId, ThreadId};
+use crate::{queue::QueueId, Buffer, BufferMut, FileHandle, FileUSize, Path, ProcessId, ThreadId};
 
 macro_rules! impl_into_kind {
     ($t:ident) => {
@@ -135,6 +135,105 @@ pub struct KillProcess {
 }
 impl_into_kind!(KillProcess);
 
+/// Create a new file in some file system.
+/// [Completion Type][crate::completions::OpenedFileHandle]
+///
+/// If the file already exists, it may have a different size than `initial_size`.
+/// The correct, current file size will always be returned in the completion.
+#[repr(C)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreateFile {
+    /// The path that the file will be created under.
+    pub path: Path,
+    /// The initial size of the file in bytes.
+    pub initial_size: usize,
+    /// If true, the file will be opened if it already exists. If false, an error will be returned if the file exists.
+    pub open_if_exists: bool,
+}
+impl_into_kind!(CreateFile);
+
+/// Open a file that already exists on some file system.
+/// [Completion Type][crate::completions::OpenedFileHandle]
+#[repr(C)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenFile {
+    /// The path to the file to open.
+    pub path: Path,
+}
+impl_into_kind!(OpenFile);
+
+/// Read data from a file into a buffer.
+/// [Completion Type][crate::completions::Success]
+///
+/// At most the entire buffer is filled with data from the file, starting from the offset.
+/// If the length to read extends past the end of the file, an [crate::completions::ErrorCode::OutOfBounds] error will occur.
+#[repr(C)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReadFile {
+    /// The file to read from.
+    pub src_handle: FileHandle,
+    /// An offset in bytes from the start of the file to start reading from.
+    pub src_offset: FileUSize,
+    /// The destination buffer to fill. This buffer *must* stay valid until the completion is
+    /// received for the read to be safe.
+    pub dst_buffer: BufferMut,
+}
+impl_into_kind!(ReadFile);
+
+/// Write data from a buffer into a file.
+/// [Completion Type][crate::completions::Success]
+///
+/// At most the entire buffer is written to the file, starting from the offset.
+/// If the length to write extends past the end of the file, an [crate::completions::ErrorCode::OutOfBounds] error will occur.
+#[repr(C)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WriteFile {
+    /// The file to write to.
+    pub dst_handle: FileHandle,
+    /// An offset in bytes from the start of the file to start writing to.
+    pub dst_offset: FileUSize,
+    /// The source buffer to read from. This buffer *must* stay valid until the completion is
+    /// received for the write to be safe.
+    pub src_buffer: Buffer,
+}
+impl_into_kind!(WriteFile);
+
+/// Resize a file.
+/// [Completion Type][crate::completions::Success]
+///
+/// If the new size is smaller than the current size, the file will be truncated and
+/// the data discarded. If the new size is larger than the current, the file will have that many
+/// zeros appended to the end.
+#[repr(C)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResizeFile {
+    /// The file to resize.
+    pub handle: FileHandle,
+    /// The new size of the file in bytes.
+    pub new_size: FileUSize,
+}
+impl_into_kind!(ResizeFile);
+
+/// Close a file handle.
+/// [Completion Type][crate::completions::Success]
+#[repr(C)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CloseFile {
+    /// The file handle to close.
+    pub handle: FileHandle,
+}
+impl_into_kind!(CloseFile);
+
+/// Delete a file.
+/// [Completion Type][crate::completions::Success]
+#[repr(C)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeleteFile {
+    /// Path to the file to delete.
+    pub path: Path,
+}
+impl_into_kind!(DeleteFile);
+
 /// Type of command and any required parameters.
 ///
 /// Each command is further documented on the inner parameter struct.
@@ -159,6 +258,14 @@ pub enum Kind {
     SpawnProcess(SpawnProcess),
     WatchProcess(WatchProcess),
     KillProcess(KillProcess),
+
+    CreateFile(CreateFile),
+    OpenFile(OpenFile),
+    ReadFile(ReadFile),
+    WriteFile(WriteFile),
+    ResizeFile(ResizeFile),
+    CloseFile(CloseFile),
+    DeleteFile(DeleteFile),
 }
 
 /// A command that can be sent to the kernel.

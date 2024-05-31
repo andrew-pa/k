@@ -1,20 +1,20 @@
 //! Support for the FAT filesystem for QEMU
 //! Currently this only supports FAT16.
 // See <qemu-src>/block/vvfat.c
-
 use alloc::{boxed::Box, sync::Arc, vec::Vec};
 use async_recursion::async_recursion;
 use async_trait::async_trait;
 
-use futures::{Stream, StreamExt};
+use bytemuck::bytes_of_mut;
+use futures::{Stream, StreamExt, TryStream, TryStreamExt};
+use kapi::FileUSize;
 use smallvec::SmallVec;
 use snafu::{ensure, OptionExt, ResultExt};
 
 use crate::{
     error::{self, Error},
     fs::BadMetadataSnafu,
-    memory::{PhysicalAddress, PAGE_SIZE},
-    registry::{self, registry_mut, Path, RegistryError, RegistryHandler},
+    registry::{self, registry_mut, Path, RegistryHandler},
     storage::{block_cache::BlockCache, BlockAddress, BlockStore},
 };
 
@@ -23,105 +23,7 @@ use super::{File, FsError};
 mod data;
 use data::*;
 
-const CACHE_SIZE: usize = 256 /* pages */;
-
-struct FatFile {
-    cache: Arc<BlockCache>,
-    params: VolumeParams,
-    start_cluster_number: u16,
-    file_size: u32,
-}
-
-#[async_trait]
-impl File for FatFile {
-    fn len(&self) -> u64 {
-        self.file_size as u64
-    }
-
-    async fn load_pages(
-        &mut self,
-        src_offset: u64,
-        dest_address: PhysicalAddress,
-        num_pages: usize,
-    ) -> Result<(), Error> {
-        // assume: src_offset is page aligned and chunks go evenly into pages, so we never start in the middle of a chunk
-        if src_offset > self.file_size as u64 {
-            return Err(Error::FileSystem {
-                reason: "load out of bounds".into(),
-                source: Box::new(FsError::OutOfBounds {
-                    value: src_offset as usize,
-                    bound: self.file_size as usize,
-                    message: "load_pages: source offset beyond end of file",
-                }),
-            });
-        }
-
-        let mut cur_cluster_num = self.start_cluster_number;
-        let mut cur_offset = 0;
-        let end_offset = (src_offset + (num_pages * PAGE_SIZE) as u64).min(self.file_size as u64);
-
-        // move to the start of the range to load
-        while cur_offset < src_offset {
-            self.cache
-                .copy_bytes(
-                    self.params.fat_start,
-                    (cur_cluster_num * 2) as usize,
-                    bytemuck::bytes_of_mut(&mut cur_cluster_num),
-                )
-                .await
-                .context(error::StorageSnafu {
-                    reason: "read FAT table",
-                })?;
-            cur_offset += self.params.bytes_per_cluster();
-            // TODO: possible to get the end-of-file cluster number here
-        }
-
-        // copy clusters until full
-        while cur_offset < end_offset {
-            // read the cluster into memory
-            // TODO: we need to make sure we don't copy past the end of the destination buffer!!
-            self.cache
-                .underlying_store()
-                .lock()
-                .await
-                .read_blocks(
-                    self.params.sector_for_cluster(cur_cluster_num),
-                    &[(
-                        dest_address.offset((cur_offset - src_offset) as isize),
-                        self.params.sectors_per_cluster as usize,
-                    )],
-                )
-                .await
-                .context(error::StorageSnafu {
-                    reason: "read data",
-                })?;
-
-            // move to next cluster
-            self.cache
-                .copy_bytes(
-                    self.params.fat_start,
-                    (cur_cluster_num * 2) as usize,
-                    bytemuck::bytes_of_mut(&mut cur_cluster_num),
-                )
-                .await
-                .context(error::StorageSnafu {
-                    reason: "read FAT table for next cluster",
-                })?;
-            cur_offset += self.params.bytes_per_cluster();
-        }
-
-        Ok(())
-    }
-
-    async fn flush_pages(
-        &mut self,
-        _dest_offset: u64,
-        _src_address: PhysicalAddress,
-        _num_pages: usize,
-    ) -> Result<(), Error> {
-        todo!();
-    }
-}
+const CACHE_SIZE: usize = 512 /* pages */;
 
 #[derive(Debug, Clone)]
 struct VolumeParams {
@@ -152,7 +54,7 @@ impl VolumeParams {
         }
     }
 
-    const fn sector_for_cluster(&self, cluster_num: u16) -> BlockAddress {
+    const fn sector_for_cluster(&self, cluster_num: ClusterIndex) -> BlockAddress {
         BlockAddress(self.clusters_start.0 + cluster_num as u64 * self.sectors_per_cluster)
     }
 
@@ -161,13 +63,13 @@ impl VolumeParams {
     }
 }
 
-struct Handler {
-    cache: Arc<BlockCache>,
+struct FatFs {
+    cache: BlockCache,
     params: VolumeParams,
 }
 
-impl Handler {
-    async fn new(block_store: Box<dyn BlockStore>) -> Result<Handler, Error> {
+impl FatFs {
+    async fn new(block_store: Box<dyn BlockStore>) -> Result<FatFs, Error> {
         let cache = BlockCache::new(block_store, CACHE_SIZE)?;
 
         // read the relevant part of the MBR, starting at byte 446
@@ -228,29 +130,30 @@ impl Handler {
             reason: "validate boot sector",
         })?;
 
-        let hh = Handler {
-            cache: Arc::new(cache),
+        let hh = FatFs {
+            cache,
             params: VolumeParams::compute_from_bootsector(partition_addr, bootsector),
         };
         log::debug!("volume parameters = {:?}", hh.params);
 
-        hh.dir_entry_stream(DirectorySource::Direct(hh.params.root_directory_start))
-            .for_each(|e| async move {
-                match e {
-                    Ok(e) => {
-                        let c = e.cluster_num_lo;
-                        let sz = e.file_size;
-                        log::debug!(
-                            "{:?} {} : {} @ {c:x} + {sz}",
-                            e.attributes,
-                            unsafe { core::str::from_utf8_unchecked(&e.short_name) },
-                            e.long_name().unwrap(),
-                        )
-                    }
-                    Err(e) => log::error!("failed to read root directory entry: {e}"),
+        // debug log the root directory
+        /*hh.dir_entry_stream(DirectorySource::Direct(hh.params.root_directory_start))
+        .for_each(|e| async move {
+            match e {
+                Ok(e) => {
+                    let c = e.cluster_num_lo;
+                    let sz = e.file_size;
+                    log::debug!(
+                        "{:?} {} : {} @ {c:x} + {sz}",
+                        e.attributes,
+                        unsafe { core::str::from_utf8_unchecked(&e.short_name) },
+                        e.long_name().unwrap(),
+                    )
                 }
-            })
-            .await;
+                Err(e) => log::error!("failed to read root directory entry: {e}"),
+            }
+        })
+        .await;*/
 
         /* TODO:
          * - traverse directories to locate a file
@@ -261,20 +164,113 @@ impl Handler {
 
         Ok(hh)
     }
-}
 
-fn compute_block_addr(source: &DirectorySource, params: &VolumeParams) -> BlockAddress {
-    match source {
-        DirectorySource::Direct(a) => *a,
-        DirectorySource::Clusters(i) => params.sector_for_cluster(*i),
+    /// Create a mapping <cluster index> -> (<buffer index>, <buffer offset>) from a vector
+    /// descriptor iterator (<buffer index>, <buffer length>) and the number of clusters total.
+    /// The mapping maps clusters to the *first* buffer they would affect.
+    fn cluster_to_buffer_vector_map(
+        &self,
+        mut buffer_vector: impl Iterator<Item = (usize, usize)>,
+        start_offset: usize,
+        num_clusters: usize,
+    ) -> Vec<(usize, usize)> {
+        let mut map = Vec::with_capacity(num_clusters);
+        let (mut current_buffer_index, mut current_buffer_length) =
+            buffer_vector.next().expect("buffer vector is non-empty");
+        let mut current_offset = 0;
+        let cluster_size = self.params.bytes_per_cluster() as usize;
+        for cluster in 0..num_clusters {
+            map.push((current_buffer_index, current_offset));
+            // log::trace!("{cluster} => {current_buffer_index} + {current_offset}");
+            let mut src_offset = if cluster == 0 { start_offset } else { 0 };
+            loop {
+                let src_remaining = cluster_size - src_offset;
+                let dst_remaining = current_buffer_length - current_offset;
+                let len = src_remaining.min(dst_remaining);
+                current_offset += len;
+                if current_offset == current_buffer_length {
+                    current_offset = 0;
+                    match buffer_vector.next() {
+                        Some(d) => (current_buffer_index, current_buffer_length) = d,
+                        None => break,
+                    }
+                }
+                src_offset += len;
+                if src_offset == cluster_size {
+                    // we're finished with this cluster, move to the next one
+                    break;
+                }
+            }
+        }
+        map
     }
-}
 
-impl Handler {
+    /// Determine if the cluster number is a special value representing the end of the chain.
+    fn cluster_number_is_end(&self, cluster_number: ClusterIndex) -> bool {
+        // TODO: this only works for FAT16.
+        cluster_number >= 0xfff8
+    }
+
+    /// Create a stream of block addresses locating the start of each cluster in a cluster chain
+    /// found in the FAT, and the relative cluster index from the start of the chain.
+    fn cluster_address_stream(
+        &self,
+        start_cluster_number: ClusterIndex,
+    ) -> impl TryStream<Ok = (BlockAddress, usize), Error = Error> + '_ {
+        futures::stream::try_unfold(
+            (start_cluster_number, 0),
+            move |(current_cluster_number, current_cluster_index)| async move {
+                if self.cluster_number_is_end(current_cluster_number) {
+                    Ok(None)
+                } else {
+                    let current_cluster_address =
+                        self.params.sector_for_cluster(current_cluster_number);
+                    let mut next_cluster_number = ClusterIndex::MAX;
+                    self.cache
+                        .copy_bytes(
+                            self.params.fat_start,
+                            (current_cluster_number * 2) as usize,
+                            bytes_of_mut(&mut next_cluster_number),
+                        )
+                        .await
+                        .context(error::StorageSnafu {
+                            reason: "read FAT table for next cluster",
+                        })?;
+                    Ok(Some((
+                        (current_cluster_address, current_cluster_index),
+                        (next_cluster_number, current_cluster_index + 1),
+                    )))
+                }
+            },
+        )
+    }
+
+    // fn dir_entry_stream2(&self, start_cluster_number: u16) -> impl TryStream<Ok = LongDirEntry, Error = Error> + '_ {
+    //     self.cluster_address_stream(start_cluster_number)
+    //         .and_then(|block_addr| async move {
+    //             let mut block = Vec::with_capacity(self.params.bytes_per_cluster() as usize);
+    //             block.resize(self.params.bytes_per_cluster() as usize, 0);
+    //             self.cache.copy_bytes(block_addr, 0, &mut block)
+    //                 .await
+    //                 .context(error::StorageSnafu {
+    //                     reason: "read directory block"
+    //                 })?;
+    //             todo!()
+    //         })
+    //         .try_flatten()
+    // }
+
     fn dir_entry_stream(
         &self,
         source: DirectorySource,
     ) -> impl Stream<Item = Result<LongDirEntry, Error>> + '_ {
+        fn compute_block_addr(source: &DirectorySource, params: &VolumeParams) -> BlockAddress {
+            match source {
+                DirectorySource::Direct(a) => *a,
+                DirectorySource::Clusters(i) => params.sector_for_cluster(*i),
+            }
+        }
+
         // max # of bytes in offset before wrapping and moving to the next segment
         let size_of_segment = match source {
             DirectorySource::Direct(_) => self.cache.block_size(),
@@ -409,21 +405,171 @@ impl Handler {
     }
 }
 
+struct FatFile {
+    fs: Arc<FatFs>,
+    start_cluster_number: ClusterIndex,
+    file_size: u32,
+}
+
+impl FatFile {
+    /// Returns a stream of (cluster index from beginning of file, address of starting block in cluster)
+    /// over the range of clusters in start..end also relative to the start of the file
+    fn cluster_slice_stream(
+        &self,
+        start_cluster: usize,
+        end_cluster: usize,
+    ) -> impl TryStream<Ok = (BlockAddress, usize), Error = Error> + '_ {
+        self.fs
+            .cluster_address_stream(self.start_cluster_number)
+            .try_skip_while(move |(_, i)| futures::future::ok(*i < start_cluster))
+            .try_take_while(move |(_, i)| futures::future::ok(*i < end_cluster))
+    }
+}
+
 #[async_trait]
-impl RegistryHandler for Handler {
-    async fn open_block_store(&self, _subpath: &Path) -> Result<Box<dyn BlockStore>, Error> {
-        Err(Error::Registry {
-            reason: "".into(),
-            source: Box::new(RegistryError::Unsupported),
-        })
+impl File for FatFile {
+    fn len(&self) -> FileUSize {
+        self.file_size as FileUSize
     }
 
+    /// Read bytes starting from `src_offset` in the file into the buffers in `destinations`.
+    /// The total length of `destinations` must fit within the file or the read will fail with an OutOfBounds error.
+    /// No IO will occur in this case.
+    async fn read<'v, 'dest>(
+        &self,
+        src_offset: FileUSize,
+        destinations: &'v mut [&'dest mut [u8]],
+    ) -> Result<(), Error> {
+        /// This is basically a &[&mut [u8]] slice, except you can get a mutable reference to any interior slice.
+        /// This is safe because we are only going to interact with only one interior slice at a time,
+        /// but we have to look sharable to be able to move into the async closure.
+        /// Since we construct this from a &mut rather than a &, we know that we have exclusive
+        /// access to the slice pointers, so it shouldn't be too big of a deal.
+        /// This is obviously only safe to use inside this function where we know exactly what will
+        /// happen to it.
+        #[derive(Copy, Clone)]
+        struct ReadDestSlice<'dst> {
+            ptr: *const &'dst mut [u8],
+            len: usize,
+        }
+
+        impl<'dst> From<&mut [&'dst mut [u8]]> for ReadDestSlice<'dst> {
+            fn from(value: &mut [&'dst mut [u8]]) -> Self {
+                Self {
+                    ptr: value.as_ptr(),
+                    len: value.len(),
+                }
+            }
+        }
+
+        impl<'dst> ReadDestSlice<'dst> {
+            fn get(&self, index: usize) -> &'dst mut [u8] {
+                assert!(index < self.len);
+                unsafe { self.ptr.add(index).read() }
+            }
+        }
+
+        unsafe impl Send for ReadDestSlice<'_> {}
+
+        let total_read_size: FileUSize = destinations.iter().map(|s| s.len() as FileUSize).sum();
+
+        if (src_offset + total_read_size) > self.len() {
+            return Err(Error::FileSystem {
+                reason: "read is out of bounds".into(),
+                source: Box::new(FsError::OutOfBounds {
+                    value: src_offset + total_read_size,
+                    bound: self.len(),
+                    message: "read",
+                }),
+            });
+        }
+
+        // compute the range of clusters we need to read
+        let start_cluster = src_offset.div_floor(self.fs.params.bytes_per_sector) as usize;
+        let start_offset = (src_offset % self.fs.params.bytes_per_sector) as usize;
+        let cluster_size = self.fs.params.bytes_per_cluster() as usize;
+        let num_clusters = (total_read_size as usize).div_ceil(cluster_size);
+        let end_cluster = start_cluster + num_clusters;
+
+        log::trace!("read: start_cluster={start_cluster}, start_offset={start_offset}, end_cluster={end_cluster}");
+
+        let cluster_map = &self.fs.cluster_to_buffer_vector_map(
+            destinations.iter().map(|s| s.len()).enumerate(),
+            start_offset,
+            num_clusters,
+        );
+
+        let dsts = ReadDestSlice::from(destinations);
+
+        self.cluster_slice_stream(start_cluster, end_cluster)
+            .try_for_each(move |(cluster_addr, cluster_index)| async move {
+                let (mut current_dst, mut current_dst_offset) = cluster_map[cluster_index];
+                let mut src_offset = if cluster_index == 0 {
+                    start_offset
+                } else {
+                    0
+                };
+                loop {
+                    let dst_buf = dsts.get(current_dst);
+                    let src_remaining = cluster_size - src_offset;
+                    let dst_remaining = dst_buf.len() - current_dst_offset;
+                    let len = src_remaining.min(dst_remaining);
+                    log::trace!("copy bytes from ({cluster_index}){cluster_addr}+{src_offset} to {current_dst}.{current_dst_offset} ({len} bytes)");
+                    self.fs
+                        .cache
+                        .copy_bytes(
+                            cluster_addr,
+                            src_offset,
+                            &mut dst_buf[current_dst_offset..current_dst_offset + len],
+                        )
+                        .await
+                        .context(error::StorageSnafu {
+                            reason: "copy bytes from file",
+                        })?;
+                    current_dst_offset += len;
+                    if current_dst_offset == dst_buf.len() {
+                        current_dst_offset = 0;
+                        current_dst += 1;
+                        if current_dst >= dsts.len {
+                            // we're done reading the file, this was the last cluster
+                            break Ok(());
+                        }
+                    }
+                    src_offset += len;
+                    if src_offset == cluster_size {
+                        // we're finished with this cluster, move to the next one
+                        break Ok(());
+                    }
+                }
+            })
+            .await
+    }
+
+    /// Write bytes starting at `dst_offset` in the file from the buffers in `sources`.
+    /// The total length of `sources` must fit within the file or the write will fail with an OutOfBounds error.
+    /// No IO will occur in this case.
+    async fn write<'v, 'src>(
+        &mut self,
+        _dst_offset: FileUSize,
+        _sources: &'v [&'src [u8]],
+    ) -> Result<(), Error> {
+        todo!()
+    }
+}
+
+struct Handler {
+    fs: Arc<FatFs>,
+}
+
+#[async_trait]
+impl RegistryHandler for Handler {
     async fn open_file(&self, subpath: &Path) -> Result<Box<dyn super::File>, Error> {
         log::trace!("attempting to locate {subpath} in FAT volume");
 
         let entry = self
+            .fs
             .find_entry_for_path(
-                DirectorySource::Direct(self.params.root_directory_start),
+                DirectorySource::Direct(self.fs.params.root_directory_start),
                 subpath.components(),
             )
             .await?
@@ -435,8 +581,7 @@ impl RegistryHandler for Handler {
         log::debug!("found entry {entry:?} for path {subpath}");
 
         Ok(Box::new(FatFile {
-            cache: self.cache.clone(),
-            params: self.params.clone(),
+            fs: self.fs.clone(),
             start_cluster_number: entry.cluster_num_lo,
             file_size: entry.file_size,
         }))
@@ -446,7 +591,12 @@ impl RegistryHandler for Handler {
 /// Mount a FAT filesystem present on `block_store` under `root_path` in the registry.
 pub async fn mount(root_path: &Path, block_store: Box<dyn BlockStore>) -> Result<(), Error> {
     registry_mut()
-        .register(root_path, Box::new(Handler::new(block_store).await?))
+        .register(
+            root_path,
+            Box::new(Handler {
+                fs: Arc::new(FatFs::new(block_store).await?),
+            }),
+        )
         .context(error::RegistrySnafu {
             reason: "register FAT filesystem",
         })

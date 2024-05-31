@@ -57,7 +57,7 @@ struct Executor {
 impl Default for Executor {
     fn default() -> Self {
         Self {
-            ready_queue: Arc::new(ArrayQueue::new(128)),
+            ready_queue: Arc::new(ArrayQueue::new(1024)),
             new_task_queue: Rc::new(ArrayQueue::new(32)),
             next_task_id: Arc::new(AtomicU32::new(1)),
         }

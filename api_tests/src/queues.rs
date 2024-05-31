@@ -5,7 +5,7 @@ use kapi::{
     system_calls::yield_now,
 };
 
-use crate::Testable;
+use crate::{wait_for_error_response, Testable};
 
 pub const TESTS: &[&dyn Testable] = &[
     &basic_create_destroy,
@@ -22,21 +22,9 @@ fn basic_create_destroy(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
         })
         .expect("post create cmpl queue msg");
 
-    let mut cmpl_qu: Option<Queue<Completion>> = None;
-    while cmpl_qu.is_none() {
-        if let Some(c) = recv_qu.poll() {
-            assert_eq!(c.response_to_id, 0);
-            match c.kind {
-                CmplKind::NewQueue(nq) => unsafe {
-                    cmpl_qu = Some(Queue::from_completion(&nq, 16));
-                },
-                _ => panic!("unexpected completion: {c:?}"),
-            }
-        }
-        yield_now();
-    }
-
-    let cmpl_qu = cmpl_qu.expect("got completion queue");
+    let cmpl_qu = wait_for_result_value!(recv_qu, 0, CmplKind::NewQueue(nq) => unsafe {
+        Queue::from_completion(&nq, 16)
+    });
 
     // create a submission queue and associate it with our completion queue
     send_qu
@@ -50,21 +38,9 @@ fn basic_create_destroy(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
         })
         .expect("post create subm queue msg");
 
-    let mut sub_qu: Option<Queue<Command>> = None;
-    while sub_qu.is_none() {
-        if let Some(c) = recv_qu.poll() {
-            assert_eq!(c.response_to_id, 1);
-            match c.kind {
-                CmplKind::NewQueue(nq) => unsafe {
-                    sub_qu = Some(Queue::from_completion(&nq, 16));
-                },
-                _ => panic!("unexpected completion: {c:?}"),
-            }
-        }
-        yield_now();
-    }
-
-    let sub_qu = sub_qu.expect("got submission queue");
+    let sub_qu = wait_for_result_value!(recv_qu, 1, CmplKind::NewQueue(nq) => unsafe {
+        Queue::from_completion(&nq, 16)
+    });
 
     // try sending a test command on the new queues
     crate::cmd_test(&sub_qu, &cmpl_qu);
@@ -116,20 +92,10 @@ fn fail_to_create_submission_queue_with_bad_completion_id(
         .expect("post create subm queue msg");
 
     // wait for the error to come back
-    loop {
-        if let Some(c) = recv_qu.poll() {
-            assert_eq!(c.response_to_id, 1);
-            match c.kind {
-                CmplKind::Err(ErrorCode::InvalidId) => return,
-                _ => panic!("unexpected completion: {c:?}"),
-            }
-        }
-        yield_now();
-    }
+    wait_for_error_response(recv_qu, 1, ErrorCode::InvalidId);
 }
 
 fn fail_to_create_queue_with_zero_size(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
-    // create a submission queue and try to associate it with an invalid completion queue ID
     send_qu
         .post(Command {
             id: 1,
@@ -138,14 +104,5 @@ fn fail_to_create_queue_with_zero_size(send_qu: &Queue<Command>, recv_qu: &Queue
         .expect("post create queue msg");
 
     // wait for the error to come back
-    loop {
-        if let Some(c) = recv_qu.poll() {
-            assert_eq!(c.response_to_id, 1);
-            match c.kind {
-                CmplKind::Err(ErrorCode::InvalidSize) => return,
-                _ => panic!("unexpected completion: {c:?}"),
-            }
-        }
-        yield_now();
-    }
+    wait_for_error_response(recv_qu, 1, ErrorCode::InvalidSize);
 }

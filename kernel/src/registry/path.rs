@@ -174,6 +174,14 @@ pub struct PathBuf {
     s: String,
 }
 
+impl PathBuf {
+    pub fn from_bytes(b: alloc::vec::Vec<u8>) -> Result<Self, core::str::Utf8Error> {
+        Ok(PathBuf {
+            s: String::from_utf8(b).map_err(|e| e.utf8_error())?,
+        })
+    }
+}
+
 impl<S: AsRef<str>> From<S> for PathBuf {
     fn from(value: S) -> Self {
         PathBuf {
@@ -199,6 +207,12 @@ impl Deref for PathBuf {
 
     fn deref(&self) -> &Self::Target {
         self.borrow()
+    }
+}
+
+impl AsRef<Path> for PathBuf {
+    fn as_ref(&self) -> &Path {
+        Path::new(&self.s)
     }
 }
 

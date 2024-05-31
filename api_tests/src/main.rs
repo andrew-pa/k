@@ -12,7 +12,7 @@ use core::ptr::NonNull;
 
 use kapi::{
     commands::{Command, Kind as CmdKind, Test},
-    completions::{self, Completion, ErrorCode, Kind as CplKind},
+    completions::{self, Completion, ErrorCode, Kind as CmplKind},
     queue::{Queue, FIRST_RECV_QUEUE_ID, FIRST_SEND_QUEUE_ID},
     system_calls::{current_process_id, current_thread_id, exit, yield_now, KernelLogger},
 };
@@ -31,6 +31,49 @@ where
         self(send_qu, recv_qu);
         log::info!("{} ok", core::any::type_name::<T>());
     }
+}
+
+pub fn wait_for_error_response(recv_qu: &Queue<Completion>, id: u16, code: ErrorCode) {
+    loop {
+        if let Some(c) = recv_qu.poll() {
+            assert_eq!(c.response_to_id, id);
+            assert_eq!(c.kind, CmplKind::Err(code));
+            break;
+        }
+        yield_now();
+    }
+}
+
+pub fn wait_for_success(recv_qu: &Queue<Completion>, id: u16) {
+    loop {
+        if let Some(c) = recv_qu.poll() {
+            assert_eq!(c.response_to_id, id);
+            assert_eq!(c.kind, CmplKind::Success);
+            break;
+        }
+        yield_now();
+    }
+}
+
+macro_rules! wait_for_result_value {
+    ($recv_qu:expr, $id:expr, $res:pat => $extract:expr) => {{
+        let mut v: Option<_> = None;
+        while v.is_none() {
+            if let Some(c) = $recv_qu.poll() {
+                assert_eq!(c.response_to_id, $id);
+                match c.kind {
+                    $res => v = Some($extract),
+                    _ => panic!(
+                        "Unexpected completion for #{}: {c:?}. Expected: {}",
+                        $id,
+                        stringify!($res)
+                    ),
+                }
+            }
+            yield_now();
+        }
+        v.unwrap()
+    }};
 }
 
 pub fn test_runner(
@@ -56,14 +99,7 @@ fn cmd_invalid(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
         })
         .expect("post message to channel");
 
-    loop {
-        if let Some(c) = recv_qu.poll() {
-            assert_eq!(c.response_to_id, 0);
-            assert_eq!(c.kind, CplKind::Err(ErrorCode::UnknownCommand));
-            return;
-        }
-        yield_now();
-    }
+    wait_for_error_response(recv_qu, 0, ErrorCode::UnknownCommand);
 }
 
 fn cmd_test(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
@@ -76,18 +112,13 @@ fn cmd_test(send_qu: &Queue<Command>, recv_qu: &Queue<Completion>) {
         })
         .expect("post message to channel");
 
-    loop {
-        if let Some(c) = recv_qu.poll() {
-            assert_eq!(c.response_to_id, 0);
-            assert_eq!(c.kind, completions::Test { pid, arg: 42 }.into());
-            return;
-        }
-        yield_now();
-    }
+    let rpid = wait_for_result_value!(recv_qu, 0, CmplKind::Test(completions::Test { pid, arg: 42 }) => pid);
+    assert_eq!(pid, rpid);
 }
 
 // TODO: new test that sends lots of messages to make sure that queue wrapping works correctly
 
+mod files;
 mod processes;
 mod queues;
 mod threads;
@@ -129,6 +160,7 @@ pub extern "C" fn _start(
             queues::TESTS,
             threads::TESTS,
             processes::TESTS,
+            files::TESTS,
         ],
         &send_qu,
         &recv_qu,

@@ -282,6 +282,12 @@ impl<T> RwLock<T> {
     }
 }
 
+impl<T: Default> Default for RwLock<T> {
+    fn default() -> Self {
+        Self::new(Default::default())
+    }
+}
+
 impl<T: ?Sized> RwLock<T> {
     /// Lock for reading (shared but exclusive with writing). If the data is unavailable, this yields until it becomes available.
     pub async fn read(&self) -> RwLockReadGuard<T> {

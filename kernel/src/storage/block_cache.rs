@@ -1,7 +1,7 @@
 use super::*;
 use crate::error;
 use crate::memory::{PhysicalBuffer, PAGE_SIZE};
-use crate::tasks::locks::{Mutex, RwLock};
+use crate::tasks::locks::Mutex;
 use alloc::vec::Vec;
 
 use bitfield::{bitfield, BitRange};
@@ -50,8 +50,9 @@ pub struct BlockCache {
     chunk_size: usize,
     blocks_per_chunk: usize,
     num_chunks: usize,
-    metadata: RwLock<Vec<ChunkMetadata>>,
-    buffer: RwLock<PhysicalBuffer>,
+    metadata: Vec<Mutex<ChunkMetadata>>,
+    /// The actual buffer used for caching. This is synchronized per-chunk via the `metadata` locks.
+    buffer: PhysicalBuffer,
     buffer_pa: PhysicalAddress,
 }
 
@@ -92,15 +93,13 @@ impl BlockCache {
             block_size,
             chunk_size,
             num_chunks,
-            metadata: RwLock::new(
-                core::iter::repeat_with(Default::default)
-                    .take(num_chunks)
-                    .collect(),
-            ),
+            metadata: core::iter::repeat_with(Default::default)
+                .take(num_chunks)
+                .collect(),
             buffer_pa: buffer.physical_address(),
             // TODO: in the future, the physical memory allocator should support loaning pages to
             // caches etc but for now we just allocate the entire cache upfront
-            buffer: RwLock::new(buffer),
+            buffer,
         })
     }
 
@@ -152,16 +151,28 @@ impl BlockCache {
             .offset((chunk_id * self.chunk_size as u64) as isize)
     }
 
-    async fn load_chunk(
+    /// Update a single cache chunk to ensure that it holds data from a block at `compose_address(tag, chunk_id)` and copy some memory while the chunk is locked.
+    ///
+    /// The chunk in the cache for `chunk_id` will be replaced with the contents of the block at
+    /// `compose_address(tag, chunk_id)`.
+    /// If the chunk is dirty, it will be written to storage before being replaced.
+    /// The chunk metadata is written to record the new tag, occupation and dirtiness if it has changed.
+    /// Bytes from the `src` will be copied to the `dst` (both buffers must have the same length),
+    /// regardless if any IO has taken place. The bytes are copied while the lock on the chunk is
+    /// held, so it is guarenteed that the memory for the chunk in the cache buffer will contain
+    /// the bytes of the block referred to by `compose_address(tag, chunk_id)`.
+    async fn update_single_chunk(
         &self,
         tag: u64,
         chunk_id: u64,
         mark_dirty: bool,
+        src: &[u8],
+        dst: &mut [u8],
     ) -> Result<(), StorageError> {
-        let md = { self.metadata.read().await[chunk_id as usize] };
+        let mut md = self.metadata[chunk_id as usize].lock().await;
         if !md.occupied() || md.tag() != tag {
             // chunk is not present
-            log::trace!("loading chunk {tag}:{chunk_id}, md={md:?}");
+            log::trace!("loading chunk {tag}:{chunk_id}, md={:?}", *md);
             let mut store = self.store.lock().await;
             if md.dirty() {
                 store
@@ -171,37 +182,62 @@ impl BlockCache {
                     )
                     .await?;
             }
-            // because the cache has 1 page = 1 chunk, it only ever accesses one page at a time
             store
                 .read_blocks(
                     self.compose_address(tag, chunk_id),
                     &[(self.chunk_phy_addr(chunk_id), self.blocks_per_chunk)],
                 )
                 .await?;
-            let md = &mut self.metadata.write().await[chunk_id as usize];
             md.set_tag(tag);
             md.set_occupied(true);
             md.set_dirty(mark_dirty);
         }
+        // do the actual copy - it's important to make sure the metadata stays locked for this so
+        // that another thread doesn't decide to repurpose this chunk while we are copying.
+        dst.copy_from_slice(src);
         Ok(())
     }
 
-    async fn load_chunks(
+    /// Process `num_chunks_inclusive` chunks in the cache starting at `(starting_tag, starting_chunk_id)` in parallel using [Self::process_single_chunk].
+    /// If `num_chunks_inclusive` is greater than [Self::num_chunks], then the tag will wrap.
+    ///
+    /// The `src` and `dst` will be divided into chunks of [Self::chunk_size] bytes.
+    /// To work correctly, they must be chunk-aligned if they are slices into the cache buffer.
+    /// An offset `initial_offset` can be applied to the first chunk to account for skipping some number of blocks/bytes. For reads, this will be the `src` buffer, and for writes it will be the `dst` buffer.
+    async fn process_chunks(
         &self,
-        starting_tag: u64,
-        starting_chunk_id: u64,
+        (starting_tag, starting_chunk_id): (u64, u64),
         num_chunks_inclusive: u64,
-        mark_dirty: bool,
+        is_write: bool,
+        src: &[u8],
+        dst: &mut [u8],
+        initial_offset: usize,
     ) -> Result<(), StorageError> {
-        future::try_join_all((0..num_chunks_inclusive).map(|i| {
-            let mut tag = starting_tag;
-            let mut chunk_id = starting_chunk_id + i;
-            if chunk_id > self.num_chunks as u64 {
-                tag += chunk_id / self.num_chunks as u64;
-                chunk_id %= self.num_chunks as u64;
-            }
-            self.load_chunk(tag, chunk_id, mark_dirty)
-        }))
+        future::try_join_all(
+            (0..num_chunks_inclusive)
+                .zip(src.chunks(self.chunk_size))
+                .zip(dst.chunks_mut(self.chunk_size))
+                .map(|((i, src), dst)| {
+                    let mut tag = starting_tag;
+                    let mut chunk_id = starting_chunk_id + i;
+                    if chunk_id >= self.num_chunks as u64 {
+                        tag += chunk_id / self.num_chunks as u64;
+                        chunk_id %= self.num_chunks as u64;
+                    }
+                    let len = if is_write { src.len() } else { dst.len() };
+                    let src = if !is_write && i == 0 {
+                        &src[initial_offset..(initial_offset + len)]
+                    } else {
+                        &src[0..len]
+                    };
+                    let dst = if is_write && i == 0 {
+                        &mut dst[initial_offset..(initial_offset + len)]
+                    } else {
+                        &mut dst[0..len]
+                    };
+                    self.update_single_chunk(tag, chunk_id, is_write, src, dst)
+                }),
+        )
         .await
         .map(|_| ()) //throw away the silly vector of units TODO: can we not collect the units?
     }
@@ -211,35 +247,40 @@ impl BlockCache {
         &self,
         mut address: BlockAddress,
         mut byte_offset: usize,
-        dest: &mut [u8],
+        dst: &mut [u8],
     ) -> Result<(), StorageError> {
         if byte_offset >= self.block_size() {
             address.0 += (byte_offset / self.block_size()) as u64;
             byte_offset %= self.block_size();
         }
 
-        let (starting_tag, starting_chunk_id, initial_block_offset) =
-            self.decompose_address(address);
+        let (mut tag, mut chunk_id, mut block_offset) = self.decompose_address(address);
 
-        //log::trace!("copying from {starting_tag}:{starting_chunk_id}:{initial_block_offset} + {byte_offset} [{address}]");
-        let num_chunks_inclusive = dest.len().div_ceil(self.chunk_size);
-        if num_chunks_inclusive > self.num_chunks {
-            // if the read is larger than the entire cache
-            // TODO: implement reads larger than the size of the cache by directly issuing a read
-            // that writes to the destination buffer
-            todo!("implement large reads");
+        let mut num_chunks_inclusive = dst.len().div_ceil(self.chunk_size);
+        // log::trace!("copying from {starting_tag}:{starting_chunk_id}:{initial_block_offset} + {byte_offset} len={},chunk count={} [{address}]", dest.len(), num_chunks_inclusive);
+        while num_chunks_inclusive > 0 {
+            // we can process in a single call at most the number of chunks between where we start in the cache buffer and the end of the buffer
+            let batch_num_chunks = num_chunks_inclusive.min(self.num_chunks - chunk_id as usize);
+
+            self.process_chunks(
+                (tag, chunk_id),
+                batch_num_chunks as u64,
+                false,
+                &self.buffer.as_bytes()[chunk_id as usize * self.chunk_size..],
+                dst,
+                block_offset as usize * self.block_size + byte_offset,
+            )
+            .await?;
+
+            num_chunks_inclusive -= batch_num_chunks;
+            chunk_id += batch_num_chunks as u64;
+            if chunk_id >= self.num_chunks as u64 {
+                tag += chunk_id / self.num_chunks as u64;
+                chunk_id %= self.num_chunks as u64;
+            }
+            block_offset = 0;
         }
-        self.load_chunks(
-            starting_tag,
-            starting_chunk_id,
-            num_chunks_inclusive as u64,
-            false,
-        )
-        .await?;
-        let offset = starting_chunk_id as usize * self.chunk_size
-            + initial_block_offset as usize * self.block_size
-            + byte_offset;
-        dest.copy_from_slice(&self.buffer.read().await.as_bytes()[offset..offset + dest.len()]);
+
         Ok(())
     }
 
@@ -255,38 +296,39 @@ impl BlockCache {
             byte_offset %= self.block_size();
         }
 
-        let (starting_tag, starting_chunk_id, initial_block_offset) =
-            self.decompose_address(address);
-        log::trace!("writing to {starting_tag}:{starting_chunk_id}:{initial_block_offset}");
-        let num_chunks_inclusive = src.len().div_ceil(self.chunk_size);
-        if num_chunks_inclusive > self.num_chunks {
-            // if the write is larger than the entire cache
-            // TODO: implement writes larger than the size of the cache by writing the ends using
-            // the cache (to take care of offsets) and then issuing a big direct write for the rest
-            todo!("implement large writes");
-        }
-        self.load_chunks(
-            starting_tag,
-            starting_chunk_id,
-            num_chunks_inclusive as u64,
-            true,
-        )
-        .await?;
-        let offset = starting_chunk_id as usize * self.chunk_size
-            + initial_block_offset as usize * self.block_size
-            + byte_offset;
-        self.buffer.write().await.as_bytes_mut()[offset..offset + src.len()].copy_from_slice(src);
-        Ok(())
-    }
+        let (mut tag, mut chunk_id, mut block_offset) = self.decompose_address(address);
 
-    /// Update bytes in the cache in a certain range. All blocks in the range will be loaded into the cache if they are unloaded.
-    pub async fn update_bytes(
-        &self,
-        _address: BlockAddress,
-        _size_in_bytes: usize,
-        _f: impl FnOnce(&mut [u8]),
-    ) {
-        todo!()
+        let mut num_chunks_inclusive = src.len().div_ceil(self.chunk_size);
+        // log::trace!("copying from {starting_tag}:{starting_chunk_id}:{initial_block_offset} + {byte_offset} len={},chunk count={} [{address}]", dest.len(), num_chunks_inclusive);
+        while num_chunks_inclusive > 0 {
+            // we can process in a single call at most the number of chunks between where we start in the cache buffer and the end of the buffer
+            let batch_num_chunks = num_chunks_inclusive.min(self.num_chunks - chunk_id as usize);
+
+            let dst = unsafe {
+                // SAFETY: we use the chunk locks to synchronize shared access to the cache buffer, so this is fine.
+                &mut self.buffer.as_bytes_mut_force_unsafe()[chunk_id as usize * self.chunk_size..]
+            };
+
+            self.process_chunks(
+                (tag, chunk_id),
+                batch_num_chunks as u64,
+                true,
+                src,
+                dst,
+                block_offset as usize * self.block_size + byte_offset,
+            )
+            .await?;
+
+            num_chunks_inclusive -= batch_num_chunks;
+            chunk_id += batch_num_chunks as u64;
+            if chunk_id >= self.num_chunks as u64 {
+                tag += chunk_id / self.num_chunks as u64;
+                chunk_id %= self.num_chunks as u64;
+            }
+            block_offset = 0;
+        }
+
+        Ok(())
     }
 }
 
@@ -461,7 +503,7 @@ mod test {
         let c = BlockCache::new(bs, 1).unwrap();
         let mut buf = [0; 8];
         buf.copy_from_slice(b"testtest");
-        block_on(c.write_bytes(BlockAddress(7), 0, &buf));
+        block_on(c.write_bytes(BlockAddress(7), 0, &buf)).unwrap();
         assert_eq!(rc.swap(0, Ordering::Acquire), PAGE_SIZE / 8);
         assert_eq!(wc.load(Ordering::Acquire), 0); // no writes yet
         buf.fill(0);
@@ -478,7 +520,7 @@ mod test {
         let c = BlockCache::new(bs, 1).unwrap();
         let mut buf = [0; 8];
         buf.copy_from_slice(b"testtest");
-        block_on(c.write_bytes(BlockAddress(7), 0, &buf));
+        block_on(c.write_bytes(BlockAddress(7), 0, &buf)).unwrap();
         assert_eq!(rc.swap(0, Ordering::Acquire), PAGE_SIZE / 8);
         assert_eq!(wc.load(Ordering::Acquire), 0); // no writes yet
         buf.fill(0);

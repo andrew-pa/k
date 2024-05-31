@@ -1,7 +1,7 @@
 //! Asynchronous results that can be received in user-space from the kernel via a [crate::queue::Queue].
 use bytemuck::Contiguous;
 
-use crate::{queue::QueueId, ProcessId, ThreadId};
+use crate::{queue::QueueId, FileHandle, ProcessId, ThreadId};
 
 macro_rules! impl_into_kind {
     ($t:ident) => {
@@ -26,8 +26,6 @@ pub enum ErrorCode {
 
     /// The system has run out of memory.
     OutOfMemory,
-    /// The resource referenced could not be found.
-    NotFound,
     /// An argument was out of bounds.
     OutOfBounds,
     /// The kernel has run out of free IDs for a resource.
@@ -39,7 +37,7 @@ pub enum ErrorCode {
     /// The underlying device returned an error.
     Device,
 
-    /// An ID was provided that was not known to the kernel.
+    /// An ID (or handle) was provided that was not known to the kernel.
     InvalidId,
     /// A size was provided that is invalid for the operation.
     InvalidSize,
@@ -48,6 +46,10 @@ pub enum ErrorCode {
     /// A string was provided that was not valid UTF-8.
     InvalidUtf8,
 
+    /// The resource referenced could not be found.
+    NotFound,
+    /// The requsted creation cannot occur because the object already exists.
+    AlreadyExists,
     /// The object was still in use when its destruction was requested.
     InUse,
 
@@ -124,6 +126,17 @@ pub struct NewProcess {
 }
 impl_into_kind!(NewProcess);
 
+/// Response to a [crate::commands::CreateFile] command.
+#[repr(C)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenedFileHandle {
+    /// The newly opened handle.
+    pub handle: FileHandle,
+    /// The size of the file in bytes.
+    pub size: u64,
+}
+impl_into_kind!(OpenedFileHandle);
+
 /// Type of completion and any resulting values returned by the command.
 #[repr(u16)]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -134,13 +147,14 @@ pub enum Kind {
     Invalid = 0,
     /// General success result for commands that don't return any values.
     Success = 1,
+    /// The command failed to complete successfully.
+    Err(ErrorCode),
     Test(Test),
     NewQueue(NewQueue),
     NewThread(NewThread),
     ThreadExit(ThreadExit),
     NewProcess(NewProcess),
-    /// The command failed to complete successfully.
-    Err(ErrorCode),
+    OpenedFileHandle(OpenedFileHandle),
 }
 
 /// A completion/event that can be receved from the kernel.
